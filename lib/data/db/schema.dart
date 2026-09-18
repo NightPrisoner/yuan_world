@@ -13,7 +13,19 @@
 library;
 
 /// 当前 schema 版本。每次改表结构都要 +1，并在 [kMigrations] 里补一段。
-const int kSchemaVersion = 7;
+const int kSchemaVersion = 8;
+
+/// v8：按文件名规则排序用的键。
+///
+/// SQLite 的 `ORDER BY title` 按码点比，和资源管理器看到的顺序不同
+/// （最明显的是「笔记10」会排到「笔记2」前面）。这里存一份排好序的键，
+/// 让标题排序对齐 Windows 的文件名规则。
+///
+/// 键由 `windowsSortKey()` 生成，**纯函数**，改规则时重新回填即可。
+const List<String> kSortKeyStatements = <String>[
+  "ALTER TABLE notes ADD COLUMN sort_key TEXT NOT NULL DEFAULT ''",
+  'CREATE INDEX idx_notes_sort_key ON notes(sort_key)',
+];
 
 /// v7：回收站。
 ///
@@ -221,6 +233,8 @@ const List<String> kCreateStatements = <String>[
     -- 非空 = 在回收站里（软删除，数据还在）
     deleted_at   INTEGER,
     sort_index   INTEGER NOT NULL DEFAULT 0,
+    -- 按文件名规则生成的排序键（见 windowsSortKey）
+    sort_key     TEXT    NOT NULL DEFAULT '',
     -- 封面图（相对于图片根目录的路径）
     cover_image  TEXT
   )
@@ -232,6 +246,7 @@ const List<String> kCreateStatements = <String>[
   'CREATE INDEX idx_notes_pinned     ON notes(is_pinned DESC, sort_index ASC)',
   'CREATE INDEX idx_notes_hidden     ON notes(is_hidden)',
   'CREATE INDEX idx_notes_deleted    ON notes(deleted_at)',
+  'CREATE INDEX idx_notes_sort_key   ON notes(sort_key)',
   'CREATE INDEX idx_collections_parent ON collections(parent_id)',
   'CREATE INDEX idx_collections_hidden ON collections(is_hidden)',
   'CREATE INDEX idx_collections_pinned ON collections(is_pinned DESC, sort_order ASC)',
@@ -349,4 +364,6 @@ const Map<int, List<String>> kMigrations = <int, List<String>>{
   6: kCollectionPinStatements,
   // v6 → v7：回收站（软删除）
   7: kTrashStatements,
+  // v7 → v8：标题排序键（对齐 Windows 文件名规则）
+  8: kSortKeyStatements,
 };

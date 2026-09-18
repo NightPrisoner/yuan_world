@@ -3,6 +3,7 @@ library;
 
 import 'package:sqlite3/sqlite3.dart';
 
+import '../../core/utils/filename_sort.dart';
 import '../../core/utils/text_stats.dart';
 import '../db/app_database.dart';
 import '../models.dart';
@@ -20,7 +21,8 @@ enum SortField {
   // 表现出来就是"菜单勾上了，列表纹丝不动"。
   updated('最后编辑', 'n.updated_at'),
   created('创建日期', 'n.created_at'),
-  title('名称', 'n.title'),
+  // 名称排序走预生成的键，对齐 Windows 文件名规则（数字按数值、忽略大小写）
+  title('名称', 'n.sort_key'),
   charCount('字数', 'n.char_count');
 
   const SortField(this.label, this.column);
@@ -384,8 +386,8 @@ class NoteRepository {
     final uts = (updatedAt ?? createdAt ?? now).millisecondsSinceEpoch;
     final stmt = _d.prepare(
       'INSERT INTO notes (title, content, excerpt, author, source_url, collection_id, '
-      'published_at, created_at, updated_at, char_count, word_count, image_count, cover_image) '
-      'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      'published_at, created_at, updated_at, char_count, word_count, image_count, cover_image, sort_key) '
+      'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     );
     stmt.execute([
       title,
@@ -402,6 +404,8 @@ class NoteRepository {
       imageCount,
       // 没显式给头图就用正文第一张图兜底
       coverImage ?? firstImageOf(content),
+      // 排序键：插入时就算好，之后改标题会跟着更新
+      windowsSortKey(title),
     ]);
     stmt.close();
     final id = _d.lastInsertRowId;
@@ -431,7 +435,11 @@ class NoteRepository {
       args.add(v);
     }
 
-    if (title != null) set('title', title);
+    if (title != null) {
+      set('title', title);
+      // 排序键跟着标题走，否则改了标题排序还是旧的
+      set('sort_key', windowsSortKey(title));
+    }
     if (content != null) set('content', content);
     if (excerpt != null) set('excerpt', excerpt);
     if (clearCollection) {
@@ -1118,8 +1126,25 @@ class NoteRepository {
     return n;
   }
 
-  /// 给「有图片但没有头图」的笔记补上头图。
+  /// 给存量笔记补排序键。
   ///
+  /// v8 只是加了列（默认空串），老数据得回填一次 ——
+  /// 否则按名称排序时所有笔记的键都是空串，顺序完全乱掉。
+  int backfillSortKeys() {
+    final rows = _d.select(
+      "SELECT id, title FROM notes WHERE sort_key = ''",
+    );
+    if (rows.isEmpty) return 0;
+    for (final r in rows) {
+      _d.execute(
+        'UPDATE notes SET sort_key = ? WHERE id = ?',
+        <Object?>[windowsSortKey((r['title'] as String?) ?? ''), r['id']],
+      );
+    }
+    return rows.length;
+  }
+
+  /// 给「有图片但没有头图」的笔记补上头图。  ///
   /// 头图的默认值就是正文里的第一张图。导入时已经会设，这里负责
   /// **存量数据**：老库里的笔记没有这个字段，启动时补一次。
   /// 返回补齐的篇数。

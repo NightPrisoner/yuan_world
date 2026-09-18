@@ -431,7 +431,12 @@ class _StatsPageState extends State<StatsPage> {
     // 不指定起点的话，每个文件夹会各自从"自己第一条笔记"开始补零，
     // 于是各条线的横轴刻度对不上 —— 叠在一起看就是错位的、
     // 像断掉一样。统一用一个起点（用户选的区间，或全库最早的日期）。
-    final commonFrom = _query.from ?? stats.dataSpan().first;
+    // **默认区间跟着所选内容走**：一个只有 2014 年笔记的文件夹，
+    // 时间线就该是 2014 那一段；一律补到今天的话会拖出一条空长尾。
+    // dataSpan 传 _query（已带 collectionIds），拿到的是这些文件夹的并集跨度。
+    final span = stats.dataSpan(query: _query);
+    final commonFrom = _query.from ?? span.first;
+    final commonTo = _query.to ?? span.last;
 
     final out = <TrendSeries>[];
     for (var i = 0; i < _collectionIds.length; i++) {
@@ -443,6 +448,8 @@ class _StatsPageState extends State<StatsPage> {
           clearCollection: true,
           from: commonFrom,
           clearFrom: commonFrom == null,
+          to: commonTo,
+          clearTo: commonTo == null,
         ),
       );
       out.add(
@@ -503,7 +510,12 @@ class _StatsPageState extends State<StatsPage> {
     // fl_chart 是按**下标**画点的 —— 各条线桶数不同、起点不同时，
     // 同一个下标对应的是不同月份，整条线会水平错位，
     // 叠在一起就是"对不上"。tooltip 也只列出下标上有点的那些序列。
-    final commonFrom = _query.from ?? stats.dataSpan().first;
+    // **默认区间跟着所选内容走**：一个只有 2014 年笔记的文件夹，
+    // 时间线就该是 2014 那一段；一律补到今天的话会拖出一条空长尾。
+    // dataSpan 传 _query（已带 collectionIds），拿到的是这些文件夹的并集跨度。
+    final span = stats.dataSpan(query: _query);
+    final commonFrom = _query.from ?? span.first;
+    final commonTo = _query.to ?? span.last;
     final out = <TrendSeries>[];
     for (var i = 0; i < _collectionIds.length; i++) {
       final id = _collectionIds[i];
@@ -518,6 +530,8 @@ class _StatsPageState extends State<StatsPage> {
               clearCollection: true,
               from: commonFrom,
               clearFrom: commonFrom == null,
+              to: commonTo,
+              clearTo: commonTo == null,
             ),
             granularity: _granularity,
           ),

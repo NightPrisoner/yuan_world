@@ -96,6 +96,13 @@ class AppState extends ChangeNotifier {
       repo.setSetting('times.aligned', '1');
     }
 
+    // v8 加的排序键列默认是空串，老数据要回填一次 ——
+    // 否则按名称排序时所有笔记的键都是空串，顺序完全乱掉。
+    if (repo.getSetting('sortkey.backfilled') != '1') {
+      repo.backfillSortKeys();
+      repo.setSetting('sortkey.backfilled', '1');
+    }
+
     // 回收站的自动清理：过期内容在启动时清掉。
     // 只在启动跑一次，不在运行中定时跑 —— 用户正用着的时候
     // 东西突然消失会很吓人。

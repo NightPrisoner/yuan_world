@@ -76,7 +76,7 @@ void main() {
       expect(pts, isEmpty);
     });
 
-    test('停更之后到今天的桶也要补出来（显示成 0）', () {
+    test('默认区间止于最后一条数据，不会拖到今天', () {
       final col = repo.createCollection('甲')!;
       addAt('最后一篇', DateTime(2024, 6, 1), collectionId: col);
 
@@ -88,13 +88,33 @@ void main() {
         granularity: StatsGranularity.month,
       );
 
-      // 2024-06 之后到"现在"之间的桶必须存在且为 0，
-      // 否则线画到停更那个月就断了
+      // 只在 2024 年有笔记，时间线就该止于 2024。
+      // 一路补到今天的话，一个早已停更的文集会拖出一条什么都没有的空长尾。
+      expect(pts.first.bucket, '2024-01');
+      expect(pts.last.bucket, '2024-06');
+      expect(pts.length, 6);
+    });
+
+    test('显式给了结束时间就补满（多序列共用同一条轴靠的是它）', () {
+      final col = repo.createCollection('甲')!;
+      addAt('最后一篇', DateTime(2024, 6, 1), collectionId: col);
+
+      final pts = stats.trend(
+        query: StatsQuery(
+          collectionIds: <int>[col],
+          from: DateTime(2024, 1, 1),
+          to: DateTime(2024, 12, 31),
+        ),
+        granularity: StatsGranularity.month,
+      );
+
+      // 这正是"某文集 2024 有、2025 没有，但和别的文集一起对比时，
+      // 2025 那段也要显示成贴着 0 的直线"的实现方式：
+      // 由调用方给出**所有序列的公共区间**，每条线都补满它。
+      expect(pts.length, 12);
       final after = pts.where((p) => p.bucket.compareTo('2024-06') > 0);
-      expect(after, isNotEmpty, reason: '停更之后要一直补到今天');
+      expect(after, isNotEmpty);
       expect(after.every((p) => p.notes == 0), isTrue);
-      // String 没有 `<` 运算符，得用 compareTo
-      expect(pts.last.bucket.compareTo('2024-06') > 0, isTrue);
     });
   });
 
@@ -110,11 +130,14 @@ void main() {
       // c 只有很久以后的数据
       addAt('c1', DateTime(2026, 5, 1), collectionId: c);
 
+      // **from 和 to 都要给**：只给起点的话，每条线各自止于自己的
+      // 最后一条笔记，长度还是会不一样 —— 页面正是靠传满两端来对齐的。
       final from = DateTime(2023, 1, 1);
+      final to = DateTime(2026, 12, 31);
       final lengths = <int>[
         for (final id in <int>[a, b, c])
           stats.trend(
-            query: StatsQuery(collectionIds: <int>[id], from: from),
+            query: StatsQuery(collectionIds: <int>[id], from: from, to: to),
             granularity: StatsGranularity.month,
           ).length,
       ];
@@ -149,12 +172,13 @@ void main() {
       addAt('b1', DateTime(2025, 3, 1), collectionId: b);
 
       final from = DateTime(2023, 1, 1);
+      final to = DateTime(2026, 12, 31);
       final ca = stats.cumulative(
-        query: StatsQuery(collectionIds: <int>[a], from: from),
+        query: StatsQuery(collectionIds: <int>[a], from: from, to: to),
         granularity: StatsGranularity.month,
       );
       final cb = stats.cumulative(
-        query: StatsQuery(collectionIds: <int>[b], from: from),
+        query: StatsQuery(collectionIds: <int>[b], from: from, to: to),
         granularity: StatsGranularity.month,
       );
 

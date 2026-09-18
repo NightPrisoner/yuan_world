@@ -338,13 +338,14 @@ class StatsRepository {
       );
     }
 
-    return _padBuckets(raw, granularity, query.from);
+    return _padBuckets(raw, granularity, query.from, query.to);
   }
 
   List<TrendPoint> _padBuckets(
     Map<String, TrendPoint> raw,
     StatsGranularity granularity,
     DateTime? since,
+    DateTime? until,
   ) {
     // **范围内一条数据都没有时也要补齐**。
     //
@@ -357,7 +358,9 @@ class StatsRepository {
 
     final keys = _bucketKeysBetween(
       since ?? _parseBucketKey(raw.keys.first, granularity),
-      DateTime.now(),
+      // 终点跟着**数据**走，而不是 DateTime.now()。
+      // 一律补到今天的话，2014 年就停更的文集会拖出十几年空线。
+      until ?? _parseBucketKey(raw.keys.last, granularity),
       granularity,
     );
 
@@ -765,10 +768,14 @@ class StatsRepository {
   }
 
   /// 哪些年份/月份有数据，用于自定义日期选择器给出可点的范围。
-  ({DateTime? first, DateTime? last}) dataSpan() {
+  ///
+  /// 传 [query] 就只看那部分笔记 —— 图表的**默认时间范围**要跟着
+  /// 所选内容走：一个只有 2014 年笔记的文件夹，时间线就该是 2014 那一段，
+  /// 而不是一路延伸到今天、拖出一条什么都没有的长尾巴。
+  ({DateTime? first, DateTime? last}) dataSpan({StatsQuery? query}) {
     final r = _d.select('''
       SELECT MIN(${_ts('n')}) AS a, MAX(${_ts('n')}) AS b
-      FROM notes n WHERE ${_where(StatsQuery.empty, alias: 'n')}
+      FROM notes n WHERE ${_where(query ?? StatsQuery.empty, alias: 'n')}
     ''').first;
     DateTime? dt(Object? v) =>
         v == null ? null : DateTime.fromMillisecondsSinceEpoch(v as int);
