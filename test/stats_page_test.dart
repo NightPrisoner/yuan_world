@@ -144,7 +144,11 @@ void main() {
         home: Scaffold(
           body: Padding(
             padding: const EdgeInsets.all(20),
-            child: DensityHeatmap(data: <String, int>{key: 5}),
+            child: DensityHeatmap(
+              data: <String, int>{key: 5},
+              from: today.subtract(const Duration(days: 120)),
+              to: today,
+            ),
           ),
         ),
       ),

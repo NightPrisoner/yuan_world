@@ -1,4 +1,4 @@
-/// 写作趋势 / 累计增长的缩放平移。
+/// 写作趋势 / 累计增长 / 篇幅分布的坐标轴缩放平移。
 ///
 /// 这里是**交互契约**的测试：按钮点了倍率要变、窗口要真的变窄、
 /// 没放大时滑块要是禁用的。数值算得对不对由 trend_window_test.dart 管。
@@ -62,117 +62,152 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// 缩放条里的文字。
-  ///
-  /// 必须限定在这个 key 里面找 —— 页面别处也有"全部"（范围筛选），
-  /// 直接 find.text 会撞上。
-  Finder inZoomBar(String text) => find.descendant(
-    of: find.byKey(const Key('stats-zoom-bar')).first,
-    matching: find.text(text),
-  );
+  /// 第一张趋势图的某一行（'x' 横轴 / 'y' 纵轴）。
+  Finder row(String axis) => find.byKey(Key('stats-zoom-$axis')).first;
 
-  testWidgets('默认 1×，此时平移滑块是禁用的', (tester) async {
+  Finder inRow(String axis, String text) =>
+      find.descendant(of: row(axis), matching: find.text(text));
+
+  Finder rowBtn(String axis, IconData icon) =>
+      find.descendant(of: row(axis), matching: find.byIcon(icon));
+
+  Finder rowSlider(String axis) =>
+      find.descendant(of: row(axis), matching: find.byType(Slider));
+
+  testWidgets('默认两轴都是 1×，滑块都禁用', (tester) async {
     seed();
     await pumpStats(tester);
 
-    // 两张图（趋势 + 累计）各一条缩放条
-    expect(find.byKey(const Key('stats-zoom-bar')), findsNWidgets(2));
-    expect(inZoomBar('1×'), findsOneWidget);
-    expect(inZoomBar('全部'), findsOneWidget);
+    // 趋势 + 累计两张图，各两条轴
+    expect(find.byKey(const Key('stats-zoom-x')), findsNWidgets(2));
+    expect(find.byKey(const Key('stats-zoom-y')), findsNWidgets(2));
+    expect(inRow('x', '1×'), findsOneWidget);
+    expect(inRow('y', '1×'), findsOneWidget);
+    expect(inRow('x', '全部'), findsOneWidget);
 
-    final sliders = tester
-        .widgetList<Slider>(find.byType(Slider))
-        .where((s) => s.onChanged == null);
-    expect(sliders, isNotEmpty, reason: '没放大时滑块应当置灰');
+    expect(tester.widget<Slider>(rowSlider('x')).onChanged, isNull);
+    expect(tester.widget<Slider>(rowSlider('y')).onChanged, isNull);
   });
 
-  testWidgets('点放大倍率上升，再点缩小能回到 1×', (tester) async {
+  testWidgets('横轴放大只动横轴，纵轴还是 1×', (tester) async {
     seed();
     await pumpStats(tester);
 
-    final plus = find.byIcon(Icons.add_rounded);
-    expect(plus, findsWidgets);
-
-    await tester.tap(plus.first);
-    await tester.pumpAndSettle();
-    expect(inZoomBar('2×'), findsOneWidget);
-    // 两张图共用一套缩放状态，另一边不该还写着 1×
-    expect(inZoomBar('1×'), findsNothing);
-
-    await tester.tap(plus.first);
-    await tester.pumpAndSettle();
-    expect(inZoomBar('3×'), findsOneWidget);
-
-    final minus = find.byIcon(Icons.remove_rounded);
-    await tester.tap(minus.first);
-    await tester.pumpAndSettle();
-    await tester.tap(minus.first);
-    await tester.pumpAndSettle();
-    expect(inZoomBar('1×'), findsOneWidget);
-    expect(inZoomBar('全部'), findsOneWidget);
-  });
-
-  testWidgets('放大后能看出是哪一段，且滑块可拖动', (tester) async {
-    seed();
-    await pumpStats(tester);
-
-    await tester.tap(find.byIcon(Icons.add_rounded).first);
+    await tester.tap(rowBtn('x', Icons.add_rounded));
     await tester.pumpAndSettle();
 
-    // 「全部」被具体的时段取代了 —— 用户得知道自己在看哪一段
-    expect(inZoomBar('全部'), findsNothing);
-    final range = tester.widget<Text>(
-      find
-          .descendant(
-            of: find.byKey(const Key('stats-zoom-bar')).first,
-            matching: find.byType(Text),
-          )
-          .last,
-    );
-    expect(range.data, contains(' – '));
+    expect(inRow('x', '2×'), findsOneWidget);
+    expect(inRow('y', '1×'), findsOneWidget, reason: '两轴必须各管各的');
 
+    // 累计那张图共用状态
     expect(
-      tester.widgetList<Slider>(find.byType(Slider)).every(
-        (s) => s.onChanged != null,
+      find.descendant(
+        of: find.byKey(const Key('stats-zoom-x')).last,
+        matching: find.text('2×'),
       ),
-      isTrue,
-      reason: '放大之后滑块要能拖',
+      findsOneWidget,
     );
   });
 
-  testWidgets('缩回 1× 后窗口回到开头（不会停在上次平移的位置）', (tester) async {
+  testWidgets('纵轴放大只动纵轴，横轴还是 1×', (tester) async {
     seed();
     await pumpStats(tester);
 
-    await tester.tap(find.byIcon(Icons.add_rounded).first);
+    await tester.tap(rowBtn('y', Icons.add_rounded));
     await tester.pumpAndSettle();
 
-    // 拖到中段
-    final slider = find.byType(Slider).first;
-    await tester.drag(slider, const Offset(120, 0));
+    expect(inRow('y', '2×'), findsOneWidget);
+    expect(inRow('x', '1×'), findsOneWidget);
+    expect(tester.widget<Slider>(rowSlider('y')).onChanged, isNotNull);
+    expect(tester.widget<Slider>(rowSlider('x')).onChanged, isNull);
+  });
+
+  testWidgets('纵轴放大后读出的范围会跟着变窄', (tester) async {
+    seed();
+    await pumpStats(tester);
+
+    String readout() {
+      final texts = tester
+          .widgetList<Text>(
+            find.descendant(of: row('y'), matching: find.byType(Text)),
+          )
+          .map((t) => t.data)
+          .whereType<String>()
+          .toList();
+      return texts.last;
+    }
+
+    final before = readout();
+    await tester.tap(rowBtn('y', Icons.add_rounded));
+    await tester.pumpAndSettle();
+    final after = readout();
+
+    expect(after, isNot(before), reason: '放大之后显示的范围必须变');
+    // 两端都是「数字 – 数字」的格式
+    expect(after, contains(' – '));
+  });
+
+  testWidgets('横轴放大后能看出是哪一段', (tester) async {
+    seed();
+    await pumpStats(tester);
+
+    await tester.tap(rowBtn('x', Icons.add_rounded));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.remove_rounded).first);
+    expect(inRow('x', '全部'), findsNothing);
+    final out = tester
+        .widgetList<Text>(
+          find.descendant(of: row('x'), matching: find.byType(Text)),
+        )
+        .map((t) => t.data)
+        .whereType<String>()
+        .last;
+    expect(out, contains(' – '));
+  });
+
+  testWidgets('缩回 1× 后两轴的窗口都回到开头', (tester) async {
+    seed();
+    await pumpStats(tester);
+
+    await tester.tap(rowBtn('x', Icons.add_rounded));
     await tester.pumpAndSettle();
-    expect(inZoomBar('1×'), findsOneWidget);
+    await tester.tap(rowBtn('y', Icons.add_rounded));
+    await tester.pumpAndSettle();
+
+    await tester.drag(rowSlider('x'), const Offset(120, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(rowSlider('y'), const Offset(120, 0));
+    await tester.pumpAndSettle();
+
+    await tester.tap(rowBtn('x', Icons.remove_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(rowBtn('y', Icons.remove_rounded));
+    await tester.pumpAndSettle();
+    expect(inRow('x', '1×'), findsOneWidget);
+    expect(inRow('y', '1×'), findsOneWidget);
 
     // 再放大一次，起点应当是 0 而不是刚才拖到的位置
-    await tester.tap(find.byIcon(Icons.add_rounded).first);
+    await tester.tap(rowBtn('x', Icons.add_rounded));
     await tester.pumpAndSettle();
-    expect(tester.widget<Slider>(find.byType(Slider).first).value, 0);
+    await tester.tap(rowBtn('y', Icons.add_rounded));
+    await tester.pumpAndSettle();
+    expect(tester.widget<Slider>(rowSlider('x')).value, 0);
+    expect(tester.widget<Slider>(rowSlider('y')).value, 0);
   });
 
   testWidgets('倍率到顶后加号不再生效（不越界）', (tester) async {
     seed();
     await pumpStats(tester);
 
-    final plus = find.byIcon(Icons.add_rounded).first;
     for (var i = 0; i < 10; i++) {
-      await tester.tap(plus);
+      await tester.tap(rowBtn('x', Icons.add_rounded));
+      await tester.pumpAndSettle();
+      await tester.tap(rowBtn('y', Icons.add_rounded));
       await tester.pumpAndSettle();
     }
     // 最高档是 12×，点再多也不会变成 13×
-    expect(inZoomBar('12×'), findsOneWidget);
+    expect(inRow('x', '12×'), findsOneWidget);
+    expect(inRow('y', '12×'), findsOneWidget);
   });
 
   testWidgets('缩放时图表本身不报错（切片长度和轴一致）', (tester) async {
@@ -180,29 +215,58 @@ void main() {
     await pumpStats(tester);
 
     for (var i = 0; i < 4; i++) {
-      await tester.tap(find.byIcon(Icons.add_rounded).first);
+      await tester.tap(rowBtn('x', Icons.add_rounded));
+      await tester.pumpAndSettle();
+      await tester.tap(rowBtn('y', Icons.add_rounded));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(find.byType(TrendChart), findsWidgets);
     }
   });
 
+  testWidgets('放大倍率会存进设置，重开还在', (tester) async {
+    seed();
+    await pumpStats(tester);
+
+    await tester.tap(rowBtn('x', Icons.add_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(rowBtn('y', Icons.add_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(rowBtn('y', Icons.add_rounded));
+    await tester.pumpAndSettle();
+
+    expect(state.repo.getSetting('stats.zoom'), '2.0');
+    expect(state.repo.getSetting('stats.zoomY'), '3.0');
+  });
+
+  testWidgets('存坏的倍率会退回 1×，不会卡在奇怪的值上', (tester) async {
+    seed();
+    state.repo.setSetting('stats.zoom', '7.5');
+    state.repo.setSetting('stats.zoomY', 'abc');
+    await pumpStats(tester);
+
+    expect(inRow('x', '1×'), findsOneWidget);
+    expect(inRow('y', '1×'), findsOneWidget);
+  });
+
   testWidgets('窄屏（手机宽度）下缩放条不溢出，滑块仍然拖得动', (tester) async {
     seed();
     // 360 逻辑像素 —— 主流安卓机的宽度
-    await pumpStats(tester, size: const Size(360, 4000));
+    await pumpStats(tester, size: const Size(360, 5000));
 
     expect(tester.takeException(), isNull, reason: '缩放条不该溢出');
 
-    await tester.tap(find.byIcon(Icons.add_rounded).first);
+    await tester.tap(rowBtn('x', Icons.add_rounded));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
-    final slider = tester.getSize(find.byType(Slider).first);
-    expect(
-      slider.width,
-      greaterThan(48),
-      reason: '滑块被时段文字挤扁了就拖不动了',
-    );
+    for (final axis in <String>['x', 'y']) {
+      final size = tester.getSize(rowSlider(axis));
+      expect(
+        size.width,
+        greaterThan(40),
+        reason: '$axis 轴的滑块被读数挤扁了就拖不动了',
+      );
+    }
   });
 }

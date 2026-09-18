@@ -204,6 +204,23 @@ class _StatsPageState extends State<StatsPage> {
       _showDots = flag('stats.showDots');
       _smooth = flag('stats.smooth');
       _showGrid = flag('stats.showGrid');
+      // 倍率记着，平移位置不记（下次打开回到开头更符合预期）
+      _zoom = _storedZoom(repo, 'stats.zoom');
+      _zoomY = _storedZoom(repo, 'stats.zoomY');
+      _lenScale = byName(
+        LengthScale.values,
+        repo.getSetting('stats.lenScale'),
+        _lenScale,
+      );
+      // **不能用 flag()**：它的语义是"不等于 '0' 就是真"，也就是没存过时为真。
+      // 那几个开关默认本来就是开的所以没事，但这个默认要关
+      // （篇幅分布默认看篇数，不是占比）。
+      _lenPercent = repo.getSetting('stats.lenPercent') == '1';
+      _heatWindow = byName(
+        HeatWindow.values,
+        repo.getSetting('stats.heatWindow'),
+        _heatWindow,
+      );
       final raw = repo.getSetting('stats.hidden');
       if (raw != null && raw.isNotEmpty) {
         try {
@@ -255,6 +272,11 @@ class _StatsPageState extends State<StatsPage> {
     repo.setSetting('stats.from', _from?.toIso8601String() ?? '');
     repo.setSetting('stats.to', _to?.toIso8601String() ?? '');
     repo.setSetting('stats.order', jsonEncode(_orderedIds()));
+    repo.setSetting('stats.zoom', '$_zoom');
+    repo.setSetting('stats.zoomY', '$_zoomY');
+    repo.setSetting('stats.heatWindow', _heatWindow.name);
+    repo.setSetting('stats.lenScale', _lenScale.name);
+    repo.setSetting('stats.lenPercent', _lenPercent ? '1' : '0');
     repo.setSetting('stats.cumMetric', _cumMetric.name);
     repo.setSetting('stats.cumStyle', _cumStyle.name);
     repo.setSetting('stats.fromZero', _fromZero ? '1' : '0');
@@ -312,17 +334,22 @@ class _StatsPageState extends State<StatsPage> {
     _cumulativeSeriesCache = null;
 
     setState(() {
-      _overview = state.repo.overview(hiddenOnly: state.privacyMode);
+      // 概览也走 _query：勾了文件夹就只算这几个
+      _overview = stats.overview(query: q);
       // 磁盘扫描比较慢（要遍历整个图片目录），只在加载时做一次
       _mediaStats = _scanMedia();
       _dbBytes = _dbBytesOf(state.db);
       _trend = stats.trend(query: q, granularity: _granularity);
       _cumulative = stats.cumulative(query: q, granularity: _granularity);
       _share = stats.collectionShare(query: q);
-      _density = stats.dailyDensity(query: q);
+      // 热力图的窗口是它自己那一档定的，所以取数**不带时间范围** ——
+      // 不然选了'最近三个月'之后再看'去年'，整张图会全是空格子
+      _density = stats.dailyDensity(
+        query: q.copyWith(clearFrom: true, clearTo: true),
+      );
       _hourly = stats.hourlyDistribution(query: q);
       _weekday = stats.weekdayDistribution(query: q);
-      _lengths = stats.lengthDistribution(query: q);
+      _lengths = stats.lengthDistribution(query: q, scale: _lenScale);
       _top = stats.topByLength(query: q, limit: 10);
       _tags = stats.tagFrequency(query: q);
       _keywords = stats.keywords(query: q, limit: 26);
@@ -344,10 +371,14 @@ class _StatsPageState extends State<StatsPage> {
       _trend = stats.trend(query: q, granularity: _granularity);
       _cumulative = stats.cumulative(query: q, granularity: _granularity);
       _share = stats.collectionShare(query: q);
-      _density = stats.dailyDensity(query: q);
+      // 热力图的窗口是它自己那一档定的，所以取数**不带时间范围** ——
+      // 不然选了'最近三个月'之后再看'去年'，整张图会全是空格子
+      _density = stats.dailyDensity(
+        query: q.copyWith(clearFrom: true, clearTo: true),
+      );
       _hourly = stats.hourlyDistribution(query: q);
       _weekday = stats.weekdayDistribution(query: q);
-      _lengths = stats.lengthDistribution(query: q);
+      _lengths = stats.lengthDistribution(query: q, scale: _lenScale);
       _top = stats.topByLength(query: q, limit: 10);
       _tags = stats.tagFrequency(query: q);
       _keywords = stats.keywords(query: q, limit: 26);
@@ -698,8 +729,6 @@ class _StatsPageState extends State<StatsPage> {
   /// 这里要给的是"存储里到底有多少东西"，以磁盘为准最实在。
   Widget _storageCard(AppColors c) {
     final media = _mediaStats;
-    final notes = _overview?.noteCount ?? 0;
-    final chars = _overview?.totalChars ?? 0;
 
     Widget row(String label, String value, {Color? accent}) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 7),
@@ -731,14 +760,14 @@ class _StatsPageState extends State<StatsPage> {
             child: Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Text(
-                '全部存在本机，不上传任何服务器',
+                // 磁盘上的东西没法按文件夹切分，所以这一张**永远是整库口径**。
+                // 以前这里也列"笔记/总字数"，那两行会跟着筛选变，
+                // 和下面的磁盘数字不是一回事 —— 索性去掉，概览里已经有了。
+                '全部存在本机，不上传任何服务器 · 以下为整库占用',
                 style: AppText.caption1.copyWith(color: c.tertiaryLabel),
               ),
             ),
           ),
-          row('笔记', '$notes 篇'),
-          row('总字数', '$chars 字'),
-          Divider(height: 1, color: c.separator),
           row('图片', '${media.images} 张'),
           row('视频', '${media.videos} 个'),
           row('媒体占用', _fmtBytes(media.bytes)),
@@ -1372,6 +1401,30 @@ class _StatsPageState extends State<StatsPage> {
   bool _smooth = true;
   bool _showGrid = true;
 
+  /// 热力图自己的时间窗口。
+  ///
+  /// **不跟页面的时间范围联动**：页面范围一变整页都跟着动，
+  /// 而"我就想单看去年"是个很具体的需求，两个旋钮拧同一件事只会打架。
+  /// 所以热力图的数据按文件夹/隐私空间取，窗口由它自己这一档决定。
+  HeatWindow _heatWindow = HeatWindow.y1;
+
+  /// 篇幅分布自己的几个旋钮：分档粗细、Y 轴单位、Y 轴缩放。
+  /// 和趋势那套分开 —— 两张图的纵轴量纲完全不同，
+  /// 共用一套倍率的话调了这张那张也跟着变，很莫名。
+  LengthScale _lenScale = LengthScale.normal;
+  bool _lenPercent = false;
+  double _lenZoomY = 1;
+  double _lenViewYStart = 0;
+
+  void _stepLenZoomY(int dir) {
+    final next = _stepIn(_zoomLevels, _lenZoomY, dir);
+    if (_zoomLevels[next] == _lenZoomY) return;
+    setState(() {
+      _lenZoomY = _zoomLevels[next];
+      if (_lenZoomY <= 1) _lenViewYStart = 0;
+    });
+  }
+
   /// 累计增长的指标与样式。以前写死成"字数 + 面积"。
   TrendMetric _cumMetric = TrendMetric.chars;
   TrendStyle _cumStyle = TrendStyle.area;
@@ -1384,14 +1437,38 @@ class _StatsPageState extends State<StatsPage> {
   /// 平移是个临时动作，下次打开回到开头比停在上次那个位置更符合预期。
   double _viewStart = 0;
 
+  /// Y 轴放大倍数 + 起点。和 X 轴各管各的：
+  /// 横着看某几个月、同时竖着看某个字数段，是很常见的组合。
+  double _zoomY = 1;
+  double _viewYStart = 0;
+
+  int _stepIn(List<double> levels, double cur, int dir) =>
+      (math.max(0, levels.indexOf(cur)) + dir).clamp(0, levels.length - 1);
+
+  /// 读回上次的缩放倍率。存坏了、或者不在档位里（比如档位改过），
+  /// 就老实退回 1× —— 别让一个设置项把图表卡在一个奇怪的倍率上。
+  static double _storedZoom(NoteRepository repo, String key) {
+    final v = double.tryParse(repo.getSetting(key) ?? '');
+    return (v != null && _zoomLevels.contains(v)) ? v : 1;
+  }
+
   void _stepZoom(int dir) {
-    final cur = math.max(0, _zoomLevels.indexOf(_zoom));
-    final next = (cur + dir).clamp(0, _zoomLevels.length - 1);
-    if (next == cur) return;
+    final next = _stepIn(_zoomLevels, _zoom, dir);
+    if (_zoomLevels[next] == _zoom) return;
     setState(() {
       _zoom = _zoomLevels[next];
       // 回到 1× 时窗口本来就是全量，不清掉的话下次放大位置会很怪
       if (_zoom <= 1) _viewStart = 0;
+    });
+    _persist();
+  }
+
+  void _stepZoomY(int dir) {
+    final next = _stepIn(_zoomLevels, _zoomY, dir);
+    if (_zoomLevels[next] == _zoomY) return;
+    setState(() {
+      _zoomY = _zoomLevels[next];
+      if (_zoomY <= 1) _viewYStart = 0;
     });
     _persist();
   }
@@ -1421,71 +1498,140 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
-  /// 图表下方的缩放条：档位按钮 + 平移滑块 + 当前可视时段。
+  /// 图表下方的坐标轴控制条：横轴一行、纵轴一行。
   ///
   /// 放在图下面而不是塞进右上角的菜单里 —— 缩放是个要**反复拖**的操作，
   /// 藏进菜单会让它变成没人发现的功能。
-  Widget _zoomBar(AppColors c, List<TrendPoint> axis) {
-    final zoomed = _zoom > 1;
+  /// 两行都摊开而不是做成"X/Y 切换"：切换式的界面里，
+  /// 用户永远不知道没显示的那一半被藏在哪。
+  Widget _zoomBar(
+    AppColors c,
+    List<TrendPoint> axis, {
+    required List<TrendSeries> series,
+    required TrendMetric metric,
+  }) {
     final first = axis.isEmpty ? null : axis.first.label;
     final last = axis.isEmpty ? null : axis.last.label;
+    final xText = _zoom <= 1
+        ? '全部'
+        : (first != null && last != null ? '$first – $last' : '—');
+
+    final y = trendYRange(
+      values: <double>[
+        for (final p in axis) p.valueOf(metric).toDouble(),
+        for (final s in series)
+          for (final p in s.points) p.valueOf(metric).toDouble(),
+      ],
+      fromZero: _fromZero,
+      zoomY: _zoomY,
+      viewYStart: _viewYStart,
+    );
+
     return Padding(
       // 页面上别处也有"全部"字样（范围筛选），测试要能精确定位到这一条
       key: const Key('stats-zoom-bar'),
       padding: const EdgeInsets.only(top: 2),
-      child: Row(
+      child: Column(
         children: <Widget>[
-          _zoomBtn(c, Icons.remove_rounded, zoomed, () => _stepZoom(-1), '缩小'),
-          SizedBox(
-            width: 40,
-            child: Text(
-              '${_zoom.toInt()}×',
-              textAlign: TextAlign.center,
-              style: AppText.caption1.copyWith(
-                color: zoomed ? c.tint : c.tertiaryLabel,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          _zoomBtn(
+          _zoomRow(
             c,
-            Icons.add_rounded,
-            _zoom < _zoomLevels.last,
+            '横轴',
+            _zoom,
+            _viewStart,
+            () => _stepZoom(-1),
             () => _stepZoom(1),
-            '放大',
+            (v) => setState(() => _viewStart = v),
+            xText,
+            'x',
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 3,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 13),
-              ),
-              child: Slider(
-                value: _viewStart.clamp(0.0, 1.0),
-                // 没放大时整段就是全部，滑它没有意义 —— 置灰而不是隐藏，
-                // 免得用户以为"这个图不能滑动"
-                onChanged: zoomed ? (v) => setState(() => _viewStart = v) : null,
-              ),
-            ),
-          ),
-          const SizedBox(width: 4),
-          // 窄屏上时段文字会很长（"2024年3月 – 2026年1月"），
-          // 不夹住的话滑块会被挤成几像素宽，根本拖不动
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 130),
-            child: Text(
-              !zoomed
-                  ? '全部'
-                  : (first != null && last != null ? '$first – $last' : '—'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppText.caption2.copyWith(color: c.tertiaryLabel),
-            ),
+          _zoomRow(
+            c,
+            '纵轴',
+            _zoomY,
+            _viewYStart,
+            () => _stepZoomY(-1),
+            () => _stepZoomY(1),
+            (v) => setState(() => _viewYStart = v),
+            '${fmtNum(y.lo)} – ${fmtNum(y.hi)}',
+            'y',
           ),
         ],
       ),
+    );
+  }
+
+  Widget _zoomRow(
+    AppColors c,
+    String name,
+    double zoom,
+    double viewStart,
+    VoidCallback zoomOut,
+    VoidCallback zoomIn,
+    ValueChanged<double> onPan,
+    String readout,
+    String keyName,
+  ) {
+    final zoomed = zoom > 1;
+    return Row(
+      // 一行横轴一行纵轴，测试要能分清是哪一行
+      key: Key('stats-zoom-$keyName'),
+      children: <Widget>[
+        SizedBox(
+          width: 28,
+          child: Text(
+            name,
+            style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+          ),
+        ),
+        _zoomBtn(c, Icons.remove_rounded, zoomed, zoomOut, '$name缩小'),
+        SizedBox(
+          width: 34,
+          child: Text(
+            '${zoom.toInt()}×',
+            textAlign: TextAlign.center,
+            style: AppText.caption1.copyWith(
+              color: zoomed ? c.tint : c.tertiaryLabel,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        _zoomBtn(
+          c,
+          Icons.add_rounded,
+          zoom < _zoomLevels.last,
+          zoomIn,
+          '$name放大',
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 13),
+            ),
+            child: Slider(
+              value: viewStart.clamp(0.0, 1.0),
+              // 没放大时整段就是全部，滑它没有意义 —— 置灰而不是隐藏，
+              // 免得用户以为"这个图不能滑动"
+              onChanged: zoomed ? onPan : null,
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        // 窄屏上时段文字会很长（"2024年3月 – 2026年1月"），
+        // 不夹住的话滑块会被挤成几像素宽，根本拖不动
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 112),
+          child: Text(
+            readout,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.right,
+            style: AppText.caption2.copyWith(color: c.tertiaryLabel),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1639,9 +1785,11 @@ class _StatsPageState extends State<StatsPage> {
                     showDots: _showDots,
                     smooth: _smooth,
                     showGrid: _showGrid,
+                    zoomY: _zoomY,
+                    viewYStart: _viewYStart,
                   ),
                 ),
-                _zoomBar(c, win.axis),
+                _zoomBar(c, win.axis, series: win.series, metric: _metric),
               ],
             ),
     );
@@ -1744,9 +1892,11 @@ class _StatsPageState extends State<StatsPage> {
               showDots: _showDots,
               smooth: _smooth,
               showGrid: _showGrid,
+              zoomY: _zoomY,
+              viewYStart: _viewYStart,
             ),
           ),
-          _zoomBar(c, win.axis),
+          _zoomBar(c, win.axis, series: win.series, metric: _cumMetric),
         ],
       ),
     );
@@ -1778,13 +1928,26 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   Widget _heatmapCard(AppColors c) {
+    final win = _heatWindow.resolve(DateTime.now());
+    String d(DateTime t) => '${t.year}.${t.month}';
     return _Card(
       title: '发布热力图',
+      controls: <Widget>[
+        _MiniSelect<HeatWindow>(
+          value: _heatWindow,
+          options: HeatWindow.values,
+          labelOf: (v) => v.label,
+          onChanged: (v) {
+            setState(() => _heatWindow = v);
+            _persist();
+          },
+        ),
+      ],
       trailing: Text(
-        '近一年',
+        '${d(win.from)} – ${d(win.to)}',
         style: AppText.caption1.copyWith(color: c.tertiaryLabel),
       ),
-      child: DensityHeatmap(data: _density),
+      child: DensityHeatmap(data: _density, from: win.from, to: win.to),
     );
   }
 
@@ -1826,13 +1989,75 @@ class _StatsPageState extends State<StatsPage> {
 
   Widget _lengthCard(AppColors c) {
     final total = _lengths.fold<int>(0, (s, b) => s + b.count);
+    final y = trendYRange(
+      values: <double>[
+        for (final b in _lengths)
+          _lenPercent
+              ? (total == 0 ? 0 : b.count / total * 100)
+              : b.count.toDouble(),
+      ],
+      fromZero: true,
+      zoomY: _lenZoomY,
+      viewYStart: _lenViewYStart,
+    );
     return _Card(
       title: '篇幅分布',
+      controls: <Widget>[
+        // X 轴：换分档。日记和长文集共用一套档位，必然有一半是空的
+        _MiniSelect<LengthScale>(
+          value: _lenScale,
+          options: LengthScale.values,
+          labelOf: (v) => '${v.label}分档',
+          onChanged: (v) {
+            setState(() => _lenScale = v);
+            _persist();
+            _reload();
+          },
+        ),
+        // Y 轴：篇数 / 占比
+        _ChartStyleButton<bool>(
+          value: _lenPercent,
+          options: const <bool>[false, true],
+          labelOf: (v) => v ? '占比' : '篇数',
+          iconOf: (v) => v ? Icons.percent_rounded : Icons.tag_rounded,
+          onChanged: (v) {
+            setState(() => _lenPercent = v);
+            _persist();
+          },
+        ),
+      ],
       trailing: Text(
         '$total 篇',
         style: AppText.caption1.copyWith(color: c.tertiaryLabel),
       ),
-      child: LengthHistogram(buckets: _lengths),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LengthHistogram(
+            buckets: _lengths,
+            zoomY: _lenZoomY,
+            viewYStart: _lenViewYStart,
+            asPercent: _lenPercent,
+          ),
+          Padding(
+            key: const Key('stats-length-zoom-bar'),
+            padding: const EdgeInsets.only(top: 2),
+            child: _zoomRow(
+              c,
+              '纵轴',
+              _lenZoomY,
+              _lenViewYStart,
+              () => _stepLenZoomY(-1),
+              () => _stepLenZoomY(1),
+              (v) => setState(() => _lenViewYStart = v),
+              _lenPercent
+                  ? '${y.lo.toStringAsFixed(1)}% – ${y.hi.toStringAsFixed(1)}%'
+                  : '${fmtNum(y.lo)} – ${fmtNum(y.hi)}',
+              'len-y',
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2302,28 +2527,60 @@ class _CollectionPicker extends StatefulWidget {
 class _CollectionPickerState extends State<_CollectionPicker> {
   late final Set<int> _picked = <int>{...widget.selected};
 
+  /// 收起来的父节点。
+  ///
+  /// 文集一多（导入一堆文集之后很常见），全摊开会变成一条几十行的长列表，
+  /// 想勾的那个要滚半天 —— 和外面左栏一样能收起来才找得到。
+  final Set<int> _collapsed = <int>{};
+
   /// 把扁平列表还原成"深度优先"的顺序，附带层级。
   ///
   /// `allCollections()` 给的是按置顶/序号排的**扁平**列表，
   /// 直接铺出来会和左栏的树对不上 —— 统计里勾选的位置和外面的位置
   /// 不一致，用户要来回找。这里按父子关系重新走一遍。
-  List<(Collection, int)> get _tree {
+  ///
+  /// 收起来的节点**不往下走**，所以返回的就是当前该显示的那几行。
+  List<({Collection col, int depth, bool hasKids, int pickedBelow})>
+  get _tree {
     final byParent = <int?, List<Collection>>{};
     for (final c in widget.collections) {
       (byParent[c.parentId] ??= <Collection>[]).add(c);
     }
-    final out = <(Collection, int)>[];
+    final out = <({Collection col, int depth, bool hasKids, int pickedBelow})>[];
     void walk(int? parentId, int depth) {
       // 深度兜底：数据万一成环也不能把列表渲染卡死
       if (depth > 8) return;
       for (final c in byParent[parentId] ?? const <Collection>[]) {
-        out.add((c, depth));
-        walk(c.id, depth + 1);
+        final kids = byParent[c.id] ?? const <Collection>[];
+        out.add((
+          col: c,
+          depth: depth,
+          hasKids: kids.isNotEmpty,
+          pickedBelow: _countPickedBelow(c.id, byParent),
+        ));
+        if (kids.isNotEmpty && !_collapsed.contains(c.id)) walk(c.id, depth + 1);
       }
     }
 
     walk(null, 0);
     return out;
+  }
+
+  /// 这个节点下面（不含自己）勾了几个。
+  ///
+  /// 收起来之后底下勾着什么是看不见的，不提示的话用户会以为白勾了。
+  int _countPickedBelow(int id, Map<int?, List<Collection>> byParent) {
+    var n = 0;
+    void walk(int pid, int depth) {
+      if (depth > 8) return;
+      for (final c in byParent[pid] ?? const <Collection>[]) {
+        if (_picked.contains(c.id)) n++;
+        walk(c.id, depth + 1);
+      }
+    }
+
+    walk(id, 0);
+    return n;
   }
 
   @override
@@ -2398,7 +2655,9 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                         shrinkWrap: true,
                         itemCount: tree.length,
                         itemBuilder: (context, i) {
-                          final (col, depth) = tree[i];
+                          final node = tree[i];
+                          final col = node.col;
+                          final collapsed = _collapsed.contains(col.id);
                           final on = _picked.contains(col.id);
                           return Pressable(
                             onTap: () => setState(() {
@@ -2413,9 +2672,33 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                                 6,
                                 0,
                                 6,
-                              ).add(EdgeInsets.only(left: depth * 16)),
+                              ).add(EdgeInsets.only(left: node.depth * 16)),
                               child: Row(
                                 children: [
+                                  // 展开/收起的三角。没有子文件夹时留同样的空位，
+                                  // 否则同级之间会错开一格
+                                  SizedBox(
+                                    width: 20,
+                                    child: node.hasKids
+                                        ? Pressable(
+                                            onTap: () => setState(() {
+                                              if (!_collapsed.remove(col.id)) {
+                                                _collapsed.add(col.id);
+                                              }
+                                            }),
+                                            scale: 0.85,
+                                            haptic: false,
+                                            child: Icon(
+                                              collapsed
+                                                  ? Icons
+                                                        .chevron_right_rounded
+                                                  : Icons.expand_more_rounded,
+                                              size: 18,
+                                              color: c.tertiaryLabel,
+                                            ),
+                                          )
+                                        : null,
+                                  ),
                                   Icon(
                                     on
                                         ? Icons.check_box_rounded
@@ -2425,7 +2708,7 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                                   ),
                                   const SizedBox(width: 10),
                                   Icon(
-                                    depth > 0
+                                    node.depth > 0
                                         ? Icons.subdirectory_arrow_right_rounded
                                         : Icons.folder_rounded,
                                     size: 16,
@@ -2441,6 +2724,14 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                                           .copyWith(color: c.label),
                                     ),
                                   ),
+                                  // 收起来时底下还勾着什么，得说出来
+                                  if (collapsed && node.pickedBelow > 0)
+                                    Text(
+                                      '含 ${node.pickedBelow} 个已选',
+                                      style: AppText.caption2.copyWith(
+                                        color: c.tint,
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),

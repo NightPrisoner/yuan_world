@@ -13,6 +13,7 @@ library;
 import 'package:sqlite3/sqlite3.dart';
 
 import '../db/app_database.dart';
+import 'note_repository.dart' show Overview;
 
 /// 聚合粒度。
 enum StatsGranularity {
@@ -189,6 +190,44 @@ class LengthBucket {
   final int count;
   final int min;
   final int max;
+}
+
+/// 篇幅分档的粗细。
+///
+/// 默认那套分档对"几千字一篇"的语料合适，但对每天几百字的日记来说，
+/// 前四档全挤在 0 上、最后一档一根冲天柱 —— 分档得能换。
+enum LengthScale {
+  coarse('粗', <(String, int, int)>[
+    ('< 2000', 0, 2000),
+    ('2000–1万', 2000, 10000),
+    ('1万–3万', 10000, 30000),
+    ('≥ 3万', 30000, 1 << 30),
+  ]),
+  normal('标准', <(String, int, int)>[
+    ('< 500 字', 0, 500),
+    ('500–2000', 500, 2000),
+    ('2000–5000', 2000, 5000),
+    ('5000–1万', 5000, 10000),
+    ('1万–2万', 10000, 20000),
+    ('≥ 2万', 20000, 1 << 30),
+  ]),
+  fine('细', <(String, int, int)>[
+    ('< 300', 0, 300),
+    ('300–800', 300, 800),
+    ('800–1500', 800, 1500),
+    ('1500–3000', 1500, 3000),
+    ('3000–6000', 3000, 6000),
+    ('6000–1万', 6000, 10000),
+    ('1万–2万', 10000, 20000),
+    ('2万–5万', 20000, 50000),
+    ('≥ 5万', 50000, 1 << 30),
+  ]);
+
+  const LengthScale(this.label, this.bands);
+  final String label;
+
+  /// (标签, 下限含, 上限不含)
+  final List<(String, int, int)> bands;
 }
 
 class StreakInfo {
@@ -503,24 +542,23 @@ class StatsRepository {
         .toList();
   }
 
-  List<LengthBucket> lengthDistribution({StatsQuery query = StatsQuery.empty}) {
-    const bands = <(String, int, int)>[
-      ('< 500 字', 1, 500),
-      ('500–2000', 500, 2000),
-      ('2000–5000', 2000, 5000),
-      ('5000–1万', 5000, 10000),
-      ('1万–2万', 10000, 20000),
-      ('≥ 2万', 20000, 1 << 30),
-    ];
-
+  List<LengthBucket> lengthDistribution({
+    StatsQuery query = StatsQuery.empty,
+    LengthScale scale = LengthScale.normal,
+  }) {
     final rows = _d
         .select('SELECT n.char_count FROM notes n WHERE ${_where(query, alias: 'n')}')
         .map((r) => (r['char_count'] as int?) ?? 0)
         .toList();
 
     return <LengthBucket>[
-      for (final (label, min, max) in bands)
-        LengthBucket(label, rows.where((c) => c >= min && c < max).length, min, max),
+      for (final (label, min, max) in scale.bands)
+        LengthBucket(
+          label,
+          rows.where((c) => c >= min && c < max).length,
+          min,
+          max,
+        ),
     ];
   }
 
@@ -652,6 +690,76 @@ class StatsRepository {
   ///
   /// 只比较**顶层**文件夹，并把子文件夹的数据累加进去 ——
   /// 否则一个用来分组的父文件夹永远是 0，对比毫无意义。
+  /// 概览。**跟着筛选走** ——
+  ///
+  /// 以前这里读的是全库总数：勾了两个文件夹、时间范围换成"近一年"，
+  /// 概览还写着 76 篇 / 全部字数，和下面每一张卡片都对不上。
+  /// 一个页面里两套口径，用户只会得出"筛选坏了"这一个结论。
+  ///
+  /// 文集数和标签数也按同一口径收窄：选了文件夹就数选中的那几个（含子文件夹），
+  /// 标签只数这些笔记真正用到的。
+  Overview overview({StatsQuery query = StatsQuery.empty}) {
+    final r = _d.select('''
+      SELECT COUNT(*) AS note_count,
+             IFNULL(SUM(n.char_count), 0) AS total_chars,
+             IFNULL(SUM(n.word_count), 0) AS total_words,
+             IFNULL(SUM(n.image_count), 0) AS image_count,
+             IFNULL(SUM(CASE WHEN n.is_favorite = 1 THEN 1 ELSE 0 END), 0) AS favorite_count,
+             MIN(${_ts('n')}) AS first_at,
+             MAX(${_ts('n')}) AS last_at
+      FROM notes n WHERE ${_where(query, alias: 'n')}
+    ''').first;
+
+    final hideFlag = query.hiddenOnly ? 1 : 0;
+
+    // 文集数：选了文件夹就数这几个（含后代），否则数库里所有可见文集
+    var collectionCount = 0;
+    if (query.collectionIds.isNotEmpty) {
+      final all = <int>{};
+      for (final id in query.collectionIds) {
+        all.add(id);
+        if (query.includeDescendants) all.addAll(_descendants(id));
+      }
+      collectionCount =
+          _d.select(
+                'SELECT COUNT(*) AS c FROM collections '
+                'WHERE id IN (${all.join(',')}) AND is_hidden = $hideFlag '
+                'AND deleted_at IS NULL',
+              ).first['c']
+              as int;
+    } else {
+      collectionCount =
+          _d.select(
+                'SELECT COUNT(*) AS c FROM collections '
+                'WHERE is_hidden = $hideFlag AND deleted_at IS NULL',
+              ).first['c']
+              as int;
+    }
+
+    final tagCount =
+        _d.select('''
+          SELECT COUNT(DISTINCT nt.tag_id) AS c
+          FROM note_tags nt JOIN notes n ON n.id = nt.note_id
+          WHERE ${_where(query, alias: 'n')}
+        ''').first['c']
+            as int;
+
+    DateTime? dt(Object? v) =>
+        v == null ? null : DateTime.fromMillisecondsSinceEpoch(v as int);
+
+    return Overview(
+      noteCount: r['note_count'] as int,
+      totalChars: r['total_chars'] as int,
+      totalWords: r['total_words'] as int,
+      imageCount: r['image_count'] as int,
+      collectionCount: collectionCount,
+      tagCount: tagCount,
+      favoriteCount: r['favorite_count'] as int,
+      firstAt: dt(r['first_at']),
+      lastAt: dt(r['last_at']),
+    );
+  }
+
   List<CollectionComparison> compareCollections({StatsQuery query = StatsQuery.empty}) {
     final hideFlag = query.hiddenOnly ? 1 : 0;
 
