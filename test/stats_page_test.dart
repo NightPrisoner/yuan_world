@@ -125,10 +125,13 @@ void main() {
     expect(find.text('深夜'), findsWidgets);
   });
 
-  testWidgets('热力图格子必须有实际尺寸', (tester) async {
-    // 这条挡的是一个真实 bug：格子是没有子节点的 DecoratedBox，
-    // 落在 Column 的松宽度约束里会缩成 0 宽 —— 整张热力图一片空白，
-    // 而且不报任何错。必须锁住宽度。
+  testWidgets('热力图格子必须有实际尺寸，而且**不为每格建 widget**', (tester) async {
+    // 这条挡的是两个真实 bug：
+    //   1. 格子一度是没有子节点的 DecoratedBox，落在 Column 的松宽度约束里
+    //      会缩成 0 宽 —— 整张热力图一片空白，而且不报任何错。
+    //   2. 后来每格挂了一个 Tooltip：时间范围放开之后一屏七百多格
+    //      ≈ 三千个 widget，滚到它卡一下、页面上任何一次 setState 也卡。
+    //      现在整张图是一个 CustomPaint。
     final today = DateTime.now();
     final key = '${today.year}-'
         '${today.month.toString().padLeft(2, '0')}-'
@@ -146,7 +149,8 @@ void main() {
             padding: const EdgeInsets.all(20),
             child: DensityHeatmap(
               data: <String, int>{key: 5},
-              from: today.subtract(const Duration(days: 120)),
+              // 两年的窗口 —— 以前这里会建出七百多个 Tooltip
+              from: today.subtract(const Duration(days: 730)),
               to: today,
             ),
           ),
@@ -155,11 +159,60 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final cells = find.byType(Tooltip);
-    expect(cells, findsWidgets);
-    final size = tester.getSize(cells.first);
-    expect(size.width, greaterThan(4), reason: '格子宽度不能是 0');
-    expect(size.height, greaterThan(4), reason: '格子高度不能是 0');
+    // 没有 per-cell 的 Tooltip 了
+    expect(find.byType(Tooltip), findsNothing);
+
+    final paint = find.byType(CustomPaint);
+    expect(paint, findsWidgets);
+    final size = tester.getSize(paint.last);
+    expect(size.width, greaterThan(100), reason: '网格宽度不能塌成 0');
+    expect(size.height, greaterThan(4), reason: '网格高度不能塌成 0');
+
+    // 整张图的 widget 数量**不随窗口长度增长**。
+    // 这比钉一个具体数字结实：真正要防的是"每格一个 widget"，
+    // 那种写法下两个月的窗口和两年的窗口差着几十倍。
+    final widgetCount = find
+        .descendant(
+          of: find.byType(DensityHeatmap),
+          matching: find.byWidgetPredicate((_) => true),
+        )
+        .evaluate()
+        .length;
+    expect(
+      widgetCount,
+      lessThan(80),
+      reason: '每格一个 widget 的写法会让这个数字变成几千',
+    );
+
+    // 换成两个月的短窗口，widget 数量必须**一样**
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: Padding(
+            padding: const EdgeInsets.all(20),
+            child: DensityHeatmap(
+              data: <String, int>{key: 5},
+              from: today.subtract(const Duration(days: 60)),
+              to: today,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final shortCount = find
+        .descendant(
+          of: find.byType(DensityHeatmap),
+          matching: find.byWidgetPredicate((_) => true),
+        )
+        .evaluate()
+        .length;
+    expect(
+      shortCount,
+      widgetCount,
+      reason: '窗口长短不该改变 widget 数量（格子是画出来的）',
+    );
   });
 
   testWidgets('文件夹对比模块会列出各文件夹', (tester) async {

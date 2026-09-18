@@ -723,7 +723,18 @@ String heatDayKey(DateTime d) =>
     '${d.month.toString().padLeft(2, '0')}-'
     '${d.day.toString().padLeft(2, '0')}';
 
-class DensityHeatmap extends StatelessWidget {
+/// 发布密度热力图。
+///
+/// **整张图用一个 CustomPaint 画，不给每格建 widget。**
+///
+/// 以前每格是 `SizedBox > Tooltip > Center > Container` 四个 widget：
+/// 时间范围一放开（"全部"可能是两三年），一屏就是七百多格 ≈ 三千个
+/// widget，全在一帧里建出来 —— 滚到它卡一下，页面上任何一次 setState
+/// （比如换篇幅分档）也跟着卡一下。现在只有 1 个 paint 节点。
+///
+/// 代价是悬停提示得自己算：指针坐标除以格距就知道是哪一格。
+/// 好处是不用为七百个格子各挂一个 Tooltip。
+class DensityHeatmap extends StatefulWidget {
   const DensityHeatmap({
     super.key,
     required this.data,
@@ -738,23 +749,44 @@ class DensityHeatmap extends StatelessWidget {
   final DateTime from;
   final DateTime to;
 
-  static const double _gap = 2;
-
   @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final firstDay = DateTime(from.year, from.month, from.day);
-    final lastDay = DateTime(to.year, to.month, to.day);
+  State<DensityHeatmap> createState() => _DensityHeatmapState();
+}
 
-    // 从第一个格子所在的那一周的周日开始，保证每一列都是完整的一周
-    var cursor = firstDay.subtract(Duration(days: firstDay.weekday % 7));
-    final weeks = <List<DateTime>>[];
-    while (!cursor.isAfter(lastDay)) {
-      weeks.add(<DateTime>[
+class _DensityHeatmapState extends State<DensityHeatmap> {
+  /// 当前指着的那一格。
+  ({String day, int count})? _hover;
+
+  static const double _gap = 2;
+  static const double _labelHeight = 16;
+
+  DateTime get _firstDay =>
+      DateTime(widget.from.year, widget.from.month, widget.from.day);
+  DateTime get _lastDay =>
+      DateTime(widget.to.year, widget.to.month, widget.to.day);
+
+  /// 每一列（周）的七天。从第一个格子所在那周的周日开始，
+  /// 保证每一列都是完整的一周。
+  List<List<DateTime>> get _weeks {
+    var cursor = _firstDay.subtract(Duration(days: _firstDay.weekday % 7));
+    final out = <List<DateTime>>[];
+    while (!cursor.isAfter(_lastDay)) {
+      out.add(<DateTime>[
         for (var d = 0; d < 7; d++) cursor.add(Duration(days: d)),
       ]);
       cursor = cursor.add(const Duration(days: 7));
     }
+    return out;
+  }
+
+  bool _inWindow(DateTime d) =>
+      !d.isBefore(_firstDay) && !d.isAfter(_lastDay);
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final weeks = _weeks;
+    final n = weeks.length;
 
     // 色阶按**窗口内**的最大值定。用整库最大值的话，
     // 一年只写 2 篇的窗口会淡成一片白，等于没画。
@@ -762,25 +794,13 @@ class DensityHeatmap extends StatelessWidget {
     var total = 0;
     for (final week in weeks) {
       for (final day in week) {
-        if (day.isBefore(firstDay) || day.isAfter(lastDay)) continue;
-        final v = data[heatDayKey(day)] ?? 0;
+        if (!_inWindow(day)) continue;
+        final v = widget.data[heatDayKey(day)] ?? 0;
         total += v;
         if (v > maxCount) maxCount = v;
       }
     }
     if (maxCount == 0) maxCount = 1;
-
-    final n = weeks.length;
-    // 月份标签：月份一变就标一个
-    final labels = <int, String>{};
-    int? prevMonth;
-    for (var i = 0; i < n; i++) {
-      final m = weeks[i].first.month;
-      if (m != prevMonth) {
-        labels[i] = m == 1 ? '${weeks[i].first.year}年' : '$m月';
-        prevMonth = m;
-      }
-    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -790,26 +810,28 @@ class DensityHeatmap extends StatelessWidget {
         // 窗口可能是三个月（十几列）也可能是好几年（几百列）：
         // 写死尺寸的话短窗口会稀稀拉拉、长窗口要横向滚半天；
         // 均分（Expanded）又会在短窗口把格子拉成一根根粗条。
-        // 按可用宽度算、并夹在一个合理区间里，才是两头都不难看。
+        // 按可用宽度算、并且**只夹上限**：下限一设就会把行撑破
+        // （窄屏 + 三年跨度实际抓到过 164px 溢出）。格子细一点没关系，
+        // 密度图看的是疏密。
         LayoutBuilder(
           builder: (context, box) {
-            // 只夹上限（免得短窗口变成大色块），**下限绝对不设** ——
-            // 设了就会把这一行撑破：可用宽度就这么多，几年跨度要放下，
-            // 格子自然得细。密度图看的是疏密，细也一样看得懂。
             final pitch = math.min(22.0, box.maxWidth / n);
             final gap = pitch >= 8 ? _gap : 0.6;
             final cell = math.max(0.5, pitch - gap);
             final radius = math.min(2.0, cell / 3);
+            final gridHeight = 7 * pitch;
 
             // 标签挤在一起不如不标：至少隔 34px 才放一个
-            final labelled = <int, String>{};
+            final labels = <int, String>{};
             var lastLabelX = -1e9;
+            int? prevMonth;
             for (var i = 0; i < n; i++) {
-              final t = labels[i];
-              if (t == null) continue;
+              final m = weeks[i].first.month;
+              if (m == prevMonth) continue;
+              prevMonth = m;
               final x = i * pitch;
               if (x - lastLabelX < 34) continue;
-              labelled[i] = t;
+              labels[i] = m == 1 ? '${weeks[i].first.year}年' : '$m月';
               lastLabelX = x;
             }
 
@@ -817,53 +839,44 @@ class DensityHeatmap extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(
-                  height: 16,
-                  child: Row(
-                    children: <Widget>[
-                      for (var i = 0; i < n; i++)
-                        SizedBox(
-                          width: pitch,
-                          child: labelled[i] == null
-                              ? null
-                              : Text(
-                                  labelled[i]!,
-                                  // 格子只有十几像素宽，标签要允许溢出到右边，
-                                  // 否则会被裁成"1…"
-                                  softWrap: false,
-                                  overflow: TextOverflow.visible,
-                                  style: AppText.caption2.copyWith(
-                                    color: c.quaternaryLabel,
-                                  ),
-                                ),
-                        ),
-                    ],
+                  height: _labelHeight,
+                  child: CustomPaint(
+                    size: Size(box.maxWidth, _labelHeight),
+                    painter: _HeatLabelPainter(
+                      labels: labels,
+                      pitch: pitch,
+                      color: c.quaternaryLabel,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 4),
                 SizedBox(
-                  height: 7 * pitch,
-                  child: Row(
-                    children: <Widget>[
-                      for (final week in weeks)
-                        SizedBox(
-                          width: pitch,
-                          child: Column(
-                            children: <Widget>[
-                              for (final day in week)
-                                _cellBox(
-                                  c,
-                                  day,
-                                  firstDay,
-                                  lastDay,
-                                  maxCount,
-                                  pitch,
-                                  cell,
-                                  radius,
-                                ),
-                            ],
-                          ),
+                  height: gridHeight,
+                  child: MouseRegion(
+                    onHover: (e) => _updateHover(e.localPosition, weeks, pitch),
+                    onExit: (_) {
+                      if (_hover != null) setState(() => _hover = null);
+                    },
+                    child: GestureDetector(
+                      // 手机上没有鼠标，点一下也能看数值
+                      onTapDown: (d) =>
+                          _updateHover(d.localPosition, weeks, pitch),
+                      child: CustomPaint(
+                        size: Size(box.maxWidth, gridHeight),
+                        painter: _HeatGridPainter(
+                          weeks: weeks,
+                          data: widget.data,
+                          maxCount: maxCount,
+                          empty: _emptyColor(c),
+                          tint: c.tint,
+                          pitch: pitch,
+                          cell: cell,
+                          radius: radius,
+                          firstDay: _firstDay,
+                          lastDay: _lastDay,
                         ),
-                    ],
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -890,9 +903,15 @@ class DensityHeatmap extends StatelessWidget {
             const SizedBox(width: 2),
             Text('多', style: AppText.caption2.copyWith(color: c.quaternaryLabel)),
             const Spacer(),
+            // 指着哪一格就在这儿报出来。以前是每格一个 Tooltip，
+            // 七百多个 Tooltip 的代价比这个提示本身大得多。
             Text(
-              '共 $total 篇有发布记录',
-              style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+              _hover == null
+                  ? '共 $total 篇有发布记录'
+                  : '${_hover!.day}  ${_hover!.count == 0 ? '无' : '${_hover!.count} 篇'}',
+              style: AppText.caption2.copyWith(
+                color: _hover == null ? c.quaternaryLabel : c.secondaryLabel,
+              ),
             ),
           ],
         ),
@@ -900,54 +919,134 @@ class DensityHeatmap extends StatelessWidget {
     );
   }
 
-  static Color _emptyColor(AppColors c) =>
-      c.isDark ? const Color(0xFF1F1F22) : const Color(0xFFE2E2E8);
-
-  /// 一个格子。
-  ///
-  /// 尺寸写死 + `Padding` 撑开，**不能**靠父级的 stretch ——
-  /// 之前用 `Expanded` + 松宽度约束，格子会缩成 0 宽，整张热力图一片空白。
-  Widget _cellBox(
-    AppColors c,
-    DateTime day,
-    DateTime firstDay,
-    DateTime lastDay,
-    int maxCount,
-    double pitch,
-    double cell,
-    double radius,
-  ) {
-    // 首尾补出来的那几天不属于窗口，画成透明占位
-    if (day.isBefore(firstDay) || day.isAfter(lastDay)) {
-      return SizedBox(width: pitch, height: pitch);
+  void _updateHover(Offset pos, List<List<DateTime>> weeks, double pitch) {
+    final col = (pos.dx / pitch).floor();
+    final row = (pos.dy / pitch).floor();
+    if (col < 0 || col >= weeks.length || row < 0 || row >= 7) {
+      if (_hover != null) setState(() => _hover = null);
+      return;
+    }
+    final day = weeks[col][row];
+    if (!_inWindow(day)) {
+      if (_hover != null) setState(() => _hover = null);
+      return;
     }
     final key = heatDayKey(day);
-    final count = data[key] ?? 0;
-
-    return SizedBox(
-      width: pitch,
-      height: pitch,
-      child: Tooltip(
-        message: '$key  ${count == 0 ? '无' : '$count 篇'}',
-        waitDuration: const Duration(milliseconds: 350),
-        child: Center(
-          child: Container(
-            width: cell,
-            height: cell,
-            decoration: BoxDecoration(
-              color: count == 0
-                  ? _emptyColor(c)
-                  : c.tint.withValues(
-                      alpha: 0.2 + 0.8 * (count / maxCount).clamp(0.0, 1.0),
-                    ),
-              borderRadius: BorderRadius.circular(radius),
-            ),
-          ),
-        ),
-      ),
-    );
+    final count = widget.data[key] ?? 0;
+    if (_hover?.day == key) return;
+    setState(() => _hover = (day: key, count: count));
   }
+
+  static Color _emptyColor(AppColors c) =>
+      c.isDark ? const Color(0xFF1F1F22) : const Color(0xFFE2E2E8);
 }
+
+/// 画所有格子。一次 paint 画完，没有 per-cell widget。
+class _HeatGridPainter extends CustomPainter {
+  _HeatGridPainter({
+    required this.weeks,
+    required this.data,
+    required this.maxCount,
+    required this.empty,
+    required this.tint,
+    required this.pitch,
+    required this.cell,
+    required this.radius,
+    required this.firstDay,
+    required this.lastDay,
+  });
+
+  final List<List<DateTime>> weeks;
+  final Map<String, int> data;
+  final int maxCount;
+  final Color empty;
+  final Color tint;
+  final double pitch;
+  final double cell;
+  final double radius;
+  final DateTime firstDay;
+  final DateTime lastDay;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+    // 格子小于 3px 时圆角没意义，还多一次 drawRRect
+    final rounded = radius > 0.8;
+    // 一个格子都没画的时候，细格子仍有 0.6px 的缝，看起来像竖条。
+    // 小于这个尺寸就直接铺满，反而更像密度图。
+    final inset = (pitch - cell) / 2;
+
+    for (var col = 0; col < weeks.length; col++) {
+      final week = weeks[col];
+      final x = col * pitch + inset;
+      if (x > size.width) break;
+      for (var row = 0; row < 7; row++) {
+        final day = week[row];
+        if (day.isBefore(firstDay) || day.isAfter(lastDay)) continue;
+        final count = data[heatDayKey(day)] ?? 0;
+        paint.color = count == 0
+            ? empty
+            : tint.withValues(
+                alpha: 0.2 + 0.8 * (count / maxCount).clamp(0.0, 1.0),
+              );
+        final rect = Rect.fromLTWH(x, row * pitch + inset, cell, cell);
+        if (rounded) {
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(rect, Radius.circular(radius)),
+            paint,
+          );
+        } else {
+          canvas.drawRect(rect, paint);
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_HeatGridPainter old) =>
+      old.weeks.length != weeks.length ||
+      old.pitch != pitch ||
+      old.maxCount != maxCount ||
+      old.data != data ||
+      old.firstDay != firstDay ||
+      old.lastDay != lastDay ||
+      old.tint != tint ||
+      old.empty != empty;
+}
+
+/// 画月份标签。也就十来个，单独一个 paint 省得和格子互相拖累。
+class _HeatLabelPainter extends CustomPainter {
+  _HeatLabelPainter({
+    required this.labels,
+    required this.pitch,
+    required this.color,
+  });
+
+  final Map<int, String> labels;
+  final double pitch;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final entry in labels.entries) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: entry.value,
+          style: AppText.caption2.copyWith(color: color),
+        ),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      // 不裁剪：格子只有十几像素宽，标签本来就该溢出到右边
+      tp.paint(canvas, Offset(entry.key * pitch, (size.height - tp.height) / 2));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_HeatLabelPainter old) =>
+      old.pitch != pitch || old.color != color || old.labels.length != labels.length;
+}
+
 
 // ── 一天 24 小时的分布 ────────────────────────────────────────────────────
 

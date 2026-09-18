@@ -322,6 +322,7 @@ class _StatsPageState extends State<StatsPage> {
     // 口径变了，缓存必须作废
     _trendSeriesCache = null;
     _cumulativeSeriesCache = null;
+    _moduleCache.clear();
 
     setState(() {
       // 概览也走 _query：勾了文件夹就只算这几个
@@ -370,6 +371,9 @@ class _StatsPageState extends State<StatsPage> {
     final q = _query;
     _trendSeriesCache = null;
     _cumulativeSeriesCache = null;
+    // 数据整体重算，模块缓存全作废（不清也不会错，键里都有数据实例，
+    // 但清掉更省内存也更不容易想歪）
+    _moduleCache.clear();
     setState(() {
       // **概览也得重算**。以前漏了这一行：图表全跟着筛选变了，
       // 只有概览还挂着上一次的数字，看着就是"筛选没生效"。
@@ -680,7 +684,13 @@ class _StatsPageState extends State<StatsPage> {
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 1120),
-        child: child,
+        // **每张卡片独立成层**。
+        //
+        // 图表（尤其 fl_chart 那种几十条路径的）一帧重画一次不便宜，
+        // 而这个列表是懒加载的：滑动时新卡片进场、旧卡片离场，
+        // 没有边界的话整个视口每帧都在重画。加一层之后没变的卡片
+        // 直接复用已有的图层。
+        child: RepaintBoundary(child: child),
       ),
     );
 
@@ -717,22 +727,96 @@ class _StatsPageState extends State<StatsPage> {
 
   /// 按 id 造出单个模块卡片。
   Widget _moduleWidget(String id, AppColors c) => switch (id) {
-    'overview' => _overviewCard(c),
-    'trend' => _trendCard(c),
-    'cumulative' => _cumulativeCard(c),
-    'share' => _shareCard(c),
-    'compare' => _compareCard(c),
-    'heatmap' => _heatmapCard(c),
-    'hourly' => _hourlyCard(c),
-    'length' => _lengthCard(c),
-    'streak' => _streakCard(c),
-    'top' => _topCard(c),
-    'tags' => _tagsCard(c),
-    'keywords' => _keywordsCard(c),
-    'fields' => _fieldsCard(c),
-    'storage' => _storageCard(c),
+    'overview' => _cached('overview', (c, _overview), () => _overviewCard(c)),
+    'trend' => _cached(
+      'trend',
+      (
+        c,
+        _trend,
+        _metric,
+        _trendStyle,
+        _showDots,
+        _smooth,
+        _showGrid,
+        _zoom,
+        _viewStart,
+        _granularity,
+      ),
+      () => _trendCard(c),
+    ),
+    'cumulative' => _cached(
+      'cumulative',
+      (
+        c,
+        _cumulative,
+        _cumMetric,
+        _cumStyle,
+        _showDots,
+        _smooth,
+        _showGrid,
+        _zoom,
+        _viewStart,
+        _granularity,
+      ),
+      () => _cumulativeCard(c),
+    ),
+    'share' => _cached('share', (c, _share, _shareStyle), () => _shareCard(c)),
+    'compare' => _cached('compare', (c, _comparisons), () => _compareCard(c)),
+    'heatmap' => _cached(
+      'heatmap',
+      (c, _density, _range, _from, _to),
+      () => _heatmapCard(c),
+    ),
+    'hourly' => _cached('hourly', (c, _hourly, _weekday), () => _hourlyCard(c)),
+    'length' => _cached(
+      'length',
+      // 换分档只让这一个 key 变 —— 其余模块的实例原样还回去，
+      // Flutter 直接跳过它们的 build
+      (c, _lengths, _lenScale),
+      () => _lengthCard(c),
+    ),
+    'streak' => _cached('streak', (c, _streak), () => _streakCard(c)),
+    'top' => _cached('top', (c, _top), () => _topCard(c)),
+    'tags' => _cached('tags', (c, _tags), () => _tagsCard(c)),
+    'keywords' => _cached('keywords', (c, _keywords), () => _keywordsCard(c)),
+    // 参数统计自己会去查库，隐私空间一换必须重来
+    'fields' => _cached(
+      'fields',
+      (c, context.read<AppState>().privacyMode),
+      () => _fieldsCard(c),
+    ),
+    'storage' => _cached(
+      'storage',
+      (c, _mediaStats, _dbBytes),
+      () => _storageCard(c),
+    ),
     _ => const SizedBox.shrink(),
   };
+
+  /// 模块卡片的实例缓存。
+  ///
+  /// 每次 `setState` 都会把所有可见模块重造一遍 —— 整页三千来个 widget，
+  /// 其中三张 fl_chart 是大头（实测换一次篇幅分档要 300ms 左右，
+  /// 而那次改动只影响一个直方图）。其余模块其实一个字都没变。
+  ///
+  /// 这里按**模块自己的输入**缓存 widget 实例：输入没变就把同一个对象还回去。
+  /// Flutter 的 `Element.updateChild` 发现新旧 widget 是同一个对象时，
+  /// 会直接跳过整棵子树的 build —— 比任何"局部刷新"的写法都省。
+  ///
+  /// 缓存键里放的是数据对象**本身**（同一份数据就是同一个实例）。
+  /// 所以"漏了某个输入"最坏也只是某次样式没刷新，不会露陈旧数据：
+  /// 数据一变实例就变，实例一变必然重建。数据整体重算时
+  /// （[_load] / [_reload]）还会把整张表清掉，双保险。
+  final Map<String, ({Object key, Widget widget})> _moduleCache =
+      <String, ({Object key, Widget widget})>{};
+
+  Widget _cached(String id, Object key, Widget Function() build) {
+    final hit = _moduleCache[id];
+    if (hit != null && hit.key == key) return hit.widget;
+    final w = build();
+    _moduleCache[id] = (key: key, widget: w);
+    return w;
+  }
 
   /// 存储与数据：笔记数、总字数、图片、视频、磁盘占用。
   ///
