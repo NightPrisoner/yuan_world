@@ -94,12 +94,17 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
   /// 工具栏该作用在哪个输入框上。
   ///
-  /// 正文拆成多段之后，"光标在哪一段"决定了加粗作用于谁。
-  /// 没有任何一段聚焦时退回整体，避免按钮点了没反应。
+  /// 没有任何一段聚焦时（刚打开笔记、刚重建过分段）退回**第一个文字段** ——
+  /// 不能退回 `_body`：它是个不挂在任何输入框上的模型，改它屏幕上什么都不动，
+  /// 而 `****` 这类标记会被自动保存写进正文（阅读视图里看得见）。
+  /// 用户点一下"加粗"结果什么反应都没有、正文里却多了标记，很莫名。
   MarkdownEditingController get _activeBody {
     final i = _focusedSegment;
     if (i != null && i >= 0 && i < _segControllers.length) {
       return _segControllers[i];
+    }
+    for (var k = 0; k < _segments.length && k < _segControllers.length; k++) {
+      if (_segments[k] is TextSegment) return _segControllers[k];
     }
     return _body;
   }
@@ -281,28 +286,37 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
   // ── 撤销 / 重做 ─────────────────────────────────────────────────────────
 
-  void _undo() {
-    if (_undoStack.isEmpty) return;
-    _redoStack.add(_body.value);
-    final v = _undoStack.removeLast();
+  /// 撤销 / 重做。
+  ///
+  /// **改完 `_body` 必须重建分段。**
+  ///
+  /// `_body` 是唯一真源（保存、统计都读它），但屏幕上显示的是
+  /// `_segControllers` 里那些输入框。以前这里只改 `_body` 就 setState ——
+  /// 屏幕上一动不动，1.2 秒后自动保存却把"撤销后的"内容写进了库。
+  /// 用户的感受是"按了撤销没反应"，再打开笔记发现刚写的东西没了。
+  /// 更糟的是接着敲一个字：`_onSegmentChanged` 会用**屏幕上那份旧文本**
+  /// 覆盖 `_body`，撤销彻底作废。
+  void _applyHistory(TextEditingValue v) {
     _applyingHistory = true;
     _body.value = v;
     _lastValue = v;
     _applyingHistory = false;
+    // 让可见的输入框跟着回到同一个状态：看到的就是会存下去的
+    _rebuildSegments();
     _scheduleSave();
     setState(() {});
+  }
+
+  void _undo() {
+    if (_undoStack.isEmpty) return;
+    _redoStack.add(_body.value);
+    _applyHistory(_undoStack.removeLast());
   }
 
   void _redo() {
     if (_redoStack.isEmpty) return;
     _undoStack.add(_body.value);
-    final v = _redoStack.removeLast();
-    _applyingHistory = true;
-    _body.value = v;
-    _lastValue = v;
-    _applyingHistory = false;
-    _scheduleSave();
-    setState(() {});
+    _applyHistory(_redoStack.removeLast());
   }
 
   // ── 工具栏动作 ──────────────────────────────────────────────────────────
@@ -363,7 +377,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     action();
     // 工具栏改的是"当前这一段"，改完要立刻拼回整体
     if (identical(target, _body)) {
-      _bodyFocus.requestFocus();
+      // 走到这里说明连一个文字段都没有（理论上不会，_rebuildSegments
+      // 保证至少有一段），兜底把 _body 的内容铺回界面上
+      _rebuildSegments();
     } else {
       _onSegmentChanged();
     }

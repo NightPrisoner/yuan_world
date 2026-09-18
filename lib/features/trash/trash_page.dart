@@ -53,50 +53,70 @@ class _TrashPageState extends State<TrashPage> {
 
   // ── 操作 ────────────────────────────────────────────────────────────────
 
-  Future<void> _restoreNotes(List<int> ids) async {
-    if (_busy || ids.isEmpty) return;
+  /// 这四个操作都用 `_busy` 做重入保护。
+  ///
+  /// **`_busy` 必须在 finally 里复位。** 以前是"await 成功之后才置回 false"，
+  /// 中间任何一次异常（数据库报错、刷新失败）都会把它**永久留在 true** ——
+  /// 于是这一页所有按钮的 onTap 都变成 null，整页点不动，
+  /// 只能退出去再进来。这类"点不动"最难查，因为界面看起来完全正常。
+  Future<void> _runOnce(Future<void> Function() work, String done) async {
+    if (_busy) return;
     setState(() => _busy = true);
-    await context.read<AppState>().restoreFromTrash(ids);
+    Object? failure;
+    try {
+      await work();
+    } catch (e) {
+      // **不能咽下去**：删/恢复出错必须留下痕迹。
+      // 但也不能 rethrow —— 批量操作里一步失败不该把后面的步骤全掐断。
+      failure = e;
+      debugPrint('回收站操作失败: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
     if (!mounted) return;
-    setState(() => _busy = false);
-    _toast('已恢复 ${ids.length} 篇（连同所属文件夹）');
+    _toast(failure == null ? done : '有内容没能完成：$failure');
+  }
+
+  Future<void> _restoreNotes(List<int> ids) async {
+    if (ids.isEmpty) return;
+    await _runOnce(
+      () => context.read<AppState>().restoreFromTrash(ids),
+      '已恢复 ${ids.length} 篇（连同所属文件夹）',
+    );
   }
 
   Future<void> _restoreCols(List<int> ids) async {
-    if (_busy || ids.isEmpty) return;
-    setState(() => _busy = true);
-    await context.read<AppState>().restoreCollections(ids);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    _toast('已恢复 ${ids.length} 个文件夹');
+    if (ids.isEmpty) return;
+    await _runOnce(
+      () => context.read<AppState>().restoreCollections(ids),
+      '已恢复 ${ids.length} 个文件夹',
+    );
   }
 
   Future<void> _purgeNotes(List<int> ids) async {
-    if (_busy || ids.isEmpty) return;
+    if (ids.isEmpty) return;
     final ok = await _confirm(
       '彻底删除这 ${ids.length} 篇？',
       '删除后无法恢复，图片也会一并清掉。',
     );
     if (ok != true || !mounted) return;
-    setState(() => _busy = true);
-    await context.read<AppState>().purgeFromTrash(ids);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    _toast('已彻底删除 ${ids.length} 篇');
+    await _runOnce(
+      () => context.read<AppState>().purgeFromTrash(ids),
+      '已彻底删除 ${ids.length} 篇',
+    );
   }
 
   Future<void> _purgeCols(List<int> ids) async {
-    if (_busy || ids.isEmpty) return;
+    if (ids.isEmpty) return;
     final ok = await _confirm(
       '彻底删除这 ${ids.length} 个文件夹？',
       '文件夹和里面的笔记都会被永久删除，无法恢复。',
     );
     if (ok != true || !mounted) return;
-    setState(() => _busy = true);
-    await context.read<AppState>().purgeCollections(ids);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    _toast('已彻底删除 ${ids.length} 个文件夹');
+    await _runOnce(
+      () => context.read<AppState>().purgeCollections(ids),
+      '已彻底删除 ${ids.length} 个文件夹',
+    );
   }
 
   Future<void> _emptyAll() async {
@@ -107,16 +127,14 @@ class _TrashPageState extends State<TrashPage> {
     final ok = await _confirm('清空回收站？', '里面的 $n 项将无法恢复。');
     if (ok != true || !mounted) return;
 
-    setState(() => _busy = true);
-    // 文件夹先删：它的笔记会跟着一起走
-    await state.purgeCollections(
-      state.trashedCollections.map((c) => c.id).toList(),
-    );
-    await state.emptyTrash();
-    if (!mounted) return;
-    setState(() => _busy = false);
-    _exitSelection();
-    _toast('回收站已清空');
+    await _runOnce(() async {
+      // 文件夹先删：它的笔记会跟着一起走
+      await state.purgeCollections(
+        state.trashedCollections.map((c) => c.id).toList(),
+      );
+      await state.emptyTrash();
+    }, '已清空回收站');
+    if (mounted) _exitSelection();
   }
 
   Future<bool?> _confirm(String title, String body) => showDialog<bool>(
@@ -267,14 +285,28 @@ class _TrashPageState extends State<TrashPage> {
       ),
     );
 
-    void restoreAll() {
-      if (_pickedCols.isNotEmpty) _restoreCols(_pickedCols.toList());
-      if (_pickedNotes.isNotEmpty) _restoreNotes(_pickedNotes.toList());
+    // **先 await 上一个，并且先把选中的 id 抄下来。**
+    //
+    // 两个坑叠在一起：
+    //   1. 这两个方法都以 `if (_busy) return;` 开头，而 `_busy = true` 是在
+    //      第一个 await 之前同步执行的 —— 不等就调第二个，它会在门口被挡掉；
+    //   2. 第一个操作跑完会刷新列表，`_load` 里会把选中集合清空 ——
+    //      所以第二个操作**不能再去读 _pickedNotes**，那时它已经是空的了。
+    // 表现都是：文件夹和笔记一起选，点"恢复"只回来文件夹，
+    // 笔记还躺在回收站里，下一次"清空回收站"就真没了。
+    Future<void> restoreAll() async {
+      final cols = _pickedCols.toList();
+      final notes = _pickedNotes.toList();
+      // 先快照再动手：第一步跑完会刷新列表，选中集合可能已经被清掉
+      if (cols.isNotEmpty) await _restoreCols(cols);
+      if (notes.isNotEmpty) await _restoreNotes(notes);
     }
 
-    void purgeAll() {
-      if (_pickedCols.isNotEmpty) _purgeCols(_pickedCols.toList());
-      if (_pickedNotes.isNotEmpty) _purgeNotes(_pickedNotes.toList());
+    Future<void> purgeAll() async {
+      final cols = _pickedCols.toList();
+      final notes = _pickedNotes.toList();
+      if (cols.isNotEmpty) await _purgeCols(cols);
+      if (notes.isNotEmpty) await _purgeNotes(notes);
     }
 
     return Padding(

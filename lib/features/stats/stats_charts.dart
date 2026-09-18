@@ -7,6 +7,7 @@ library;
 import 'dart:math' as math;
 
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 
 import '../../core/motion/app_motion.dart';
@@ -1044,7 +1045,11 @@ class _HeatLabelPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HeatLabelPainter old) =>
-      old.pitch != pitch || old.color != color || old.labels.length != labels.length;
+      old.pitch != pitch ||
+      old.color != color ||
+      // **不能只比长度**：同长度的两个窗口（比如都是 12 个月）换了年份之后
+      // 标签内容变了、长度没变，只比长度就会一直画着旧的「2024年」。
+      !mapEquals(old.labels, labels);
 }
 
 

@@ -316,11 +316,18 @@ class _SheetRow<T> extends StatelessWidget {
           children: [
             Icon(item.icon, size: 19, color: color),
             const SizedBox(width: 13),
-            Text(
-              item.label,
-              style: AppText.callout.copyWith(
-                color: color,
-                fontWeight: item.destructive ? FontWeight.w600 : FontWeight.w400,
+            // 必须 Expanded：桌面版那个 _MenuRow 是弹窗宽度自适应的，
+            // 底部面板是整屏宽 —— 长名字（比如很长的文集名）会直接撑破
+            Expanded(
+              child: Text(
+                item.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.callout.copyWith(
+                  color: color,
+                  fontWeight:
+                      item.destructive ? FontWeight.w600 : FontWeight.w400,
+                ),
               ),
             ),
           ],

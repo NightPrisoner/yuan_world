@@ -1,6 +1,9 @@
 /// 笔记仓储层。所有 SQL 集中在这里，UI 层不直接碰数据库。
 library;
 
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import '../../core/utils/filename_sort.dart';
@@ -636,17 +639,63 @@ class NoteRepository {
     final list = ids.toList();
     if (list.isEmpty) return;
     _d.execute('DELETE FROM notes WHERE id IN (${list.join(',')})');
+    _purgeMedia(list);
+  }
+
+  /// 顺手删掉这些笔记的图片目录。
+  ///
+  /// 回收站的按钮上写着"图片也会一并清掉"，但以前只删了数据库行 ——
+  /// 图片永远留在磁盘上。既是空间泄漏，也是**隐私泄漏**：
+  /// 用户以为彻底删掉了，文件其实还在 `data/images/<id>/` 里。
+  ///
+  /// 尽力而为：删不掉（被占用、权限）也不能让"彻底删除"失败，
+  /// 行已经删了，留个目录总比让用户以为没删成功好。
+  void _purgeMedia(Iterable<int> noteIds) {
+    for (final id in noteIds) {
+      try {
+        final dir = Directory(p.join(db.imageRoot.path, '$id'));
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      } catch (_) {
+        // 忽略
+      }
+    }
   }
 
   void purgeCollection(int id) {
     final ids = <int>[id, ...descendantCollectionIdsIncludingTrashed(id)];
-    _d.execute('DELETE FROM notes WHERE collection_id IN (${ids.join(',')})');
+    // **只删真的在回收站里的笔记**。
+    //
+    // 这里以前是无条件 `DELETE FROM notes WHERE collection_id IN (...)`，
+    // 于是有这么一条会把活笔记永久删掉的路径：
+    //   删掉文集 X（X 和它的笔记进回收站）→ 再导入一批文件、文集名又叫 X
+    //   → 新笔记挂在**已在回收站里的** X 上（ensureCollectionPath 只按名字找）
+    //   → 这些新笔记是"活的"、列表里看得见，可 X 不在侧栏里
+    //   → 后来清空回收站，它们被一起干掉，而且**从来没进过回收站**，找不回来。
+    //
+    // 现在活着的笔记不动，靠 notes.collection_id 的 ON DELETE SET NULL
+    // 变成未分类 —— 文集没了，笔记还在。
+    final doomed = _d
+        .select(
+          'SELECT id FROM notes WHERE collection_id IN (${ids.join(',')}) '
+          'AND deleted_at IS NOT NULL',
+        )
+        .map((r) => r['id'] as int)
+        .toList();
+    _d.execute(
+      'DELETE FROM notes WHERE collection_id IN (${ids.join(',')}) '
+      'AND deleted_at IS NOT NULL',
+    );
     _d.execute('DELETE FROM collections WHERE id IN (${ids.join(',')})');
+    _purgeMedia(doomed);
   }
 
   /// 清空回收站。返回清掉的笔记数。
   int purgeAllTrash() {
     final n = trashedCount();
+    final doomed = _d
+        .select('SELECT id FROM notes WHERE deleted_at IS NOT NULL')
+        .map((r) => r['id'] as int)
+        .toList();
     final cols = _d
         .select('SELECT id FROM collections WHERE deleted_at IS NOT NULL')
         .map((r) => r['id'] as int)
@@ -657,6 +706,7 @@ class NoteRepository {
       );
     }
     _d.execute('DELETE FROM notes WHERE deleted_at IS NOT NULL');
+    _purgeMedia(doomed);
     return n;
   }
 
@@ -678,10 +728,18 @@ class NoteRepository {
       'DELETE FROM collections WHERE deleted_at IS NOT NULL AND deleted_at < ?',
       <Object?>[cutoff],
     );
+    final doomed = _d
+        .select(
+          'SELECT id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?',
+          <Object?>[cutoff],
+        )
+        .map((r) => r['id'] as int)
+        .toList();
     _d.execute(
       'DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?',
       <Object?>[cutoff],
     );
+    _purgeMedia(doomed);
     return n;
   }
 
@@ -710,29 +768,44 @@ class NoteRepository {
 
   // ── 标签 ────────────────────────────────────────────────────────────────
 
+  /// 覆盖一篇笔记的标签。
+  ///
+  /// **整段包在一个事务里**：先删后插，中途失败的话会把这篇笔记的标签
+  /// 全丢光（删已经生效、插还没做）。
   void setNoteTags(int noteId, List<String> names) {
-    _d.execute('DELETE FROM note_tags WHERE note_id = ?', [noteId]);
-    for (final raw in names) {
-      final name = raw.trim();
-      if (name.isEmpty) continue;
-      _d.execute(
-        'INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)',
-        [name, DateTime.now().millisecondsSinceEpoch],
-      );
-      final tid =
-          _d.select('SELECT id FROM tags WHERE name = ?', [name]).first['id'] as int;
-      _d.execute(
-        'INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)',
-        [noteId, tid],
-      );
+    _d.execute('BEGIN');
+    try {
+      _d.execute('DELETE FROM note_tags WHERE note_id = ?', [noteId]);
+      for (final raw in names) {
+        final name = raw.trim();
+        if (name.isEmpty) continue;
+        _d.execute(
+          'INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)',
+          [name, DateTime.now().millisecondsSinceEpoch],
+        );
+        final found = _d.select('SELECT id FROM tags WHERE name = ?', [name]);
+        if (found.isEmpty) continue;
+        final tid = found.first['id'] as int;
+        _d.execute(
+          'INSERT OR IGNORE INTO note_tags (note_id, tag_id) VALUES (?, ?)',
+          [noteId, tid],
+        );
+      }
+      _d.execute('COMMIT');
+    } catch (_) {
+      _d.execute('ROLLBACK');
+      rethrow;
     }
   }
 
   List<TagStat> allTags() {
     final rows = _d.select(
+      // 回收站里的笔记不算数：不然标签会一直挂在侧栏上，
+      // 计数还包含已经删掉的内容，点进去却是空的
       'SELECT t.id, t.name, t.color, COUNT(n.id) AS cnt FROM tags t '
       'JOIN note_tags nt ON nt.tag_id = t.id '
-      'JOIN notes n ON n.id = nt.note_id AND n.is_hidden = 0 '
+      'JOIN notes n ON n.id = nt.note_id '
+      ' AND n.is_hidden = 0 AND n.is_archived = 0 AND n.deleted_at IS NULL '
       'GROUP BY t.id HAVING cnt > 0 ORDER BY cnt DESC',
     );
     return rows.map((r) => TagStat.fromRow(r)).toList();
@@ -929,12 +1002,27 @@ class NoteRepository {
       if (name.isEmpty) continue;
 
       final hit = _d.select(
-        'SELECT id, parent_id FROM collections WHERE name = ?',
+        // **不能捡起回收站里的同名文集。**
+        //
+        // 捡起来的话，新导入的笔记会挂在一个"看不见"的文集上：
+        // 侧栏里没有它（被软删了），可笔记是活的 —— 之后清空回收站
+        // 会连这些活笔记一起永久删掉（purgeCollection 那条路径）。
+        // 这里优先用活着的；只剩回收站里的那条时，把它**还原**回来，
+        // 让导入落到一个用户看得见、也找得回的地方。
+        'SELECT id, parent_id, deleted_at FROM collections '
+        'WHERE name = ? ORDER BY (deleted_at IS NULL) DESC LIMIT 1',
         <Object?>[name],
       );
 
       if (hit.isNotEmpty) {
         leafId = hit.first['id'] as int;
+        if (hit.first['deleted_at'] != null) {
+          // 连同它的子孙一起还原，否则子树还是残缺的
+          final sub = <int>[leafId, ...descendantCollectionIdsIncludingTrashed(leafId)];
+          _d.execute(
+            'UPDATE collections SET deleted_at = NULL WHERE id IN (${sub.join(',')})',
+          );
+        }
         final currentParent = hit.first['parent_id'] as int?;
         // 已有这条但还挂在顶层（或别的父级）时，把它挂到正确的父下。
         // 不能把它挂到自己的子孙下面，否则树会成环。
@@ -973,8 +1061,24 @@ class NoteRepository {
   }) {
     final n = name.trim();
     if (n.isEmpty) return null;
-    final exists = _d.select('SELECT 1 FROM collections WHERE name = ?', [n]);
-    if (exists.isNotEmpty) return null;
+    // name 上的 UNIQUE 是**全表**的，回收站里的行也占着名字。
+    // 所以这里不能只看"活着的有没有重名"：
+    //   - 活着的同名 → 真的重复，返回 null
+    //   - 只有回收站里那条同名 → 把它还原回来（否则用户会看到
+    //     "名字重复"，可侧栏里根本没有这个名字，完全摸不着头脑）
+    final hit = _d.select(
+      'SELECT id, deleted_at FROM collections WHERE name = ?',
+      <Object?>[n],
+    );
+    if (hit.isNotEmpty) {
+      if (hit.first['deleted_at'] == null) return null;
+      final id = hit.first['id'] as int;
+      final sub = <int>[id, ...descendantCollectionIdsIncludingTrashed(id)];
+      _d.execute(
+        'UPDATE collections SET deleted_at = NULL WHERE id IN (${sub.join(',')})',
+      );
+      return id;
+    }
     _d.execute(
       'INSERT INTO collections (name, color, icon, sort_order, parent_id, created_at) '
       'VALUES (?,?,?,?,?,?)',
@@ -991,6 +1095,9 @@ class NoteRepository {
   }
 
   /// 重命名。与已有文集重名时返回 false。
+  ///
+  /// 这里**必须**连回收站里的同名一起算重名：`name` 的 UNIQUE 是全表的，
+  /// 只比对活着的行，重命名会直接撞约束抛异常。
   bool renameCollection(int id, String name) {
     final n = name.trim();
     if (n.isEmpty) return false;
@@ -1235,23 +1342,32 @@ class NoteRepository {
   // 用户把东西藏起来，就是不想在任何地方看到它的痕迹，包括数字。
 
   Overview overview({bool hiddenOnly = false}) {
-    // 普通空间排除隐藏项；隐私空间反过来，只看隐藏项
+    // 普通空间排除隐藏项；隐私空间反过来，只看隐藏项。
+    //
+    // **所有聚合共用同一个 scope。** 以前只有 note_count/字数用了它，
+    // 而收藏数、文集数、标签数、起止日期各自漏掉了 `deleted_at IS NULL`
+    // （收藏数连 `is_archived` 也没排）—— 于是把一篇收藏过的笔记丢进
+    // 回收站，侧栏"收藏 1"还在，点进去却是空的。
     final scope = hiddenOnly
         ? 'is_hidden = 1 AND deleted_at IS NULL'
         : 'is_archived = 0 AND is_hidden = 0 AND deleted_at IS NULL';
+    // 文集/标签这类"结构"只按隐私空间区分，但一样要排掉回收站
+    final liveScope = hiddenOnly
+        ? 'is_hidden = 1 AND deleted_at IS NULL'
+        : 'is_hidden = 0 AND deleted_at IS NULL';
     final r = _d.select('''
       SELECT
         (SELECT COUNT(*) FROM notes WHERE $scope) AS note_count,
         (SELECT IFNULL(SUM(char_count),0) FROM notes WHERE $scope) AS total_chars,
         (SELECT IFNULL(SUM(word_count),0) FROM notes WHERE $scope) AS total_words,
         (SELECT IFNULL(SUM(image_count),0) FROM notes WHERE $scope) AS image_count,
-        (SELECT COUNT(*) FROM collections WHERE ${hiddenOnly ? 'is_hidden = 1' : 'is_hidden = 0'}) AS collection_count,
+        (SELECT COUNT(*) FROM collections WHERE $liveScope) AS collection_count,
         (SELECT COUNT(DISTINCT nt.tag_id) FROM note_tags nt
            JOIN notes n ON n.id = nt.note_id
-          WHERE ${hiddenOnly ? 'n.is_hidden = 1' : 'n.is_hidden = 0'})   AS tag_count,
-        (SELECT COUNT(*) FROM notes WHERE is_favorite = 1 AND ${hiddenOnly ? 'is_hidden = 1' : 'is_hidden = 0'}) AS favorite_count,
-        (SELECT MIN(IFNULL(published_at, created_at)) FROM notes WHERE ${hiddenOnly ? 'is_hidden = 1' : 'is_hidden = 0'}) AS first_at,
-        (SELECT MAX(IFNULL(published_at, created_at)) FROM notes WHERE ${hiddenOnly ? 'is_hidden = 1' : 'is_hidden = 0'}) AS last_at
+          WHERE $scope) AS tag_count,
+        (SELECT COUNT(*) FROM notes WHERE is_favorite = 1 AND $scope) AS favorite_count,
+        (SELECT MIN(IFNULL(published_at, created_at)) FROM notes WHERE $scope) AS first_at,
+        (SELECT MAX(IFNULL(published_at, created_at)) FROM notes WHERE $scope) AS last_at
     ''').first;
     DateTime? dt(Object? v) =>
         v == null ? null : DateTime.fromMillisecondsSinceEpoch(v as int);
@@ -1273,7 +1389,7 @@ class NoteRepository {
     final rows = _d.select('''
       SELECT strftime('%Y-%m', IFNULL(published_at, created_at)/1000, 'unixepoch', 'localtime') AS bucket,
              COUNT(*) AS cnt, IFNULL(SUM(char_count),0) AS chars
-      FROM notes WHERE is_archived = 0 AND is_hidden = 0
+      FROM notes WHERE is_archived = 0 AND is_hidden = 0 AND deleted_at IS NULL
       GROUP BY bucket ORDER BY bucket ASC
     ''');
     return rows
@@ -1293,7 +1409,7 @@ class NoteRepository {
              COUNT(n.id) AS cnt,
              IFNULL(SUM(n.char_count),0) AS chars
       FROM notes n LEFT JOIN collections c ON c.id = n.collection_id
-      WHERE n.is_archived = 0 AND n.is_hidden = 0
+      WHERE n.is_archived = 0 AND n.is_hidden = 0 AND n.deleted_at IS NULL
       GROUP BY c.id ORDER BY cnt DESC
     ''');
     return rows
@@ -1324,7 +1440,7 @@ class NoteRepository {
       'n.is_pinned, n.is_favorite, n.is_archived, n.is_hidden, n.sort_index, n.cover_image, '
       'c.name AS collection_name, c.color AS collection_color '
       'FROM notes n LEFT JOIN collections c ON c.id = n.collection_id '
-      'WHERE n.is_archived = 0 AND n.is_hidden = 0 '
+      'WHERE n.is_archived = 0 AND n.is_hidden = 0 AND n.deleted_at IS NULL '
       'ORDER BY n.char_count DESC LIMIT ?',
       [limit],
     );
@@ -1340,7 +1456,8 @@ class NoteRepository {
   /// 用于词云/高频词：取全部标题与摘要的原始文本，交给 Dart 侧分词。
   List<String> allTitlesAndExcerpts({int limit = 2000}) {
     final rows = _d.select(
-      'SELECT title, excerpt FROM notes WHERE is_archived = 0 AND is_hidden = 0 LIMIT ?',
+      'SELECT title, excerpt FROM notes '
+      'WHERE is_archived = 0 AND is_hidden = 0 AND deleted_at IS NULL LIMIT ?',
       [limit],
     );
     return rows.map((r) => '${r['title']} ${r['excerpt']}').toList();

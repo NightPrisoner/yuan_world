@@ -34,7 +34,13 @@ const List<int> kCollectionColors = <int>[
 /// 新建或重命名文集。返回 true 表示有改动。
 ///
 /// [parentId] 非空表示在某个文件夹下**新建子文件夹**（嵌套）。
-Future<bool> showCollectionEditor(
+/// 新建 / 重命名文集。返回**文集 id**，取消或失败返回 null。
+///
+/// 以前返回的是 bool，调用方只能靠"刚建的那个应该排在最后"去猜 ——
+/// 可 `createCollection` 写的是 `MIN(sort_order) - 1`，新文集排**最前**，
+/// 于是"新建文集并移入"会把笔记塞进一个完全无关的文件夹。
+/// 返回真实 id 之后就不用猜了。
+Future<int?> showCollectionEditor(
   BuildContext context, {
   Collection? existing,
   int? parentId,
@@ -71,7 +77,7 @@ Future<bool> showCollectionEditor(
           ),
         );
 
-  if (result == null) return false;
+  if (result == null) return null;
 
   if (existing == null) {
     final id = await state.createCollection(
@@ -81,20 +87,20 @@ Future<bool> showCollectionEditor(
     );
     if (id == null && context.mounted) {
       _toast(context, '已有同名文集');
-      return false;
+      return null;
     }
     if (context.mounted) _toast(context, '已创建「${result.name}」');
-    return id != null;
+    return id;
   }
 
   final renamed = await state.renameCollection(existing.id, result.name);
   if (!renamed && context.mounted) {
     _toast(context, '已有同名文集');
-    return false;
+    return null;
   }
   await state.setCollectionColor(existing.id, result.color);
   if (context.mounted) _toast(context, '已更新「${result.name}」');
-  return true;
+  return existing.id;
 }
 
 /// 选择要把笔记移到哪个文集。
@@ -132,12 +138,17 @@ Future<void> showCollectionPicker(BuildContext context, Note note) async {
   if (picked == null || !context.mounted) return;
 
   if (picked == -2) {
-    final created = await showCollectionEditor(context);
-    if (!created || !context.mounted) return;
-    final latest = state.collections.isEmpty ? null : state.collections.last;
-    if (latest == null) return;
-    await state.moveNoteToCollection(note.id, latest.id);
-    if (context.mounted) _toast(context, '已移动到「${latest.name}」');
+    // 拿真实的 id，不要假设"刚建的那个排在最后" —— 它排在最前
+    final createdId = await showCollectionEditor(context);
+    if (createdId == null || !context.mounted) return;
+    await state.moveNoteToCollection(note.id, createdId);
+    if (!context.mounted) return;
+    final name = state.collections
+            .where((x) => x.id == createdId)
+            .map((x) => x.name)
+            .firstOrNull ??
+        '文集';
+    _toast(context, '已移动到「$name」');
     return;
   }
 

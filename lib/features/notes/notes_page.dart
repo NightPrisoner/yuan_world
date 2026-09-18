@@ -387,17 +387,26 @@ class _StaggeredState extends State<_Staggered>
     super.dispose();
   }
 
+  /// 曲线只建一次。
+  ///
+  /// `CurvedAnimation` 的构造函数会给 `_c` 挂一个 status 监听，
+  /// 而只有 `dispose()` 才摘掉。写在 build 里的话，卡片每重建一次
+  /// （任何一次 AppState 通知：编辑器敲一个字、切个筛选）就漏一个监听，
+  /// 越积越多。用 `drive` 不产生额外对象，最省。
+  late final Animation<double> _fade = _c.drive(
+    CurveTween(curve: AppMotion.enter),
+  );
+
   @override
   Widget build(BuildContext context) {
     if (AppMotion.reduceMotion(context)) return widget.child;
-    final curved = CurvedAnimation(parent: _c, curve: AppMotion.enter);
     return FadeTransition(
-      opacity: curved,
+      opacity: _fade,
       child: SlideTransition(
         position: Tween<Offset>(
           begin: const Offset(0, 0.06),
           end: Offset.zero,
-        ).animate(curved),
+        ).animate(_fade),
         child: widget.child,
       ),
     );

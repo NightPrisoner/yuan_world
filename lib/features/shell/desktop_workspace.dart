@@ -20,6 +20,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -745,25 +746,11 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                   // 放在某个分组里面会让人以为只收这一组。
                   Padding(
                     padding: const EdgeInsets.fromLTRB(10, 2, 10, 0),
-                    child: _HoverTint(
-                      child: GestureDetector(
-                        onTap: () => setState(() => _navCollapsed = true),
-                        behavior: HitTestBehavior.opaque,
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.chevron_left_rounded,
-                              size: 17,
-                              color: c.secondaryLabel,
-                            ),
-                            const SizedBox(width: 9),
-                            Text(
-                              '收起侧栏',
-                              style: AppText.footnote.copyWith(color: c.label),
-                            ),
-                          ],
-                        ),
-                      ),
+                    child: _NavRow(
+                      icon: Icons.chevron_left_rounded,
+                      label: '收起侧栏',
+                      selected: false,
+                      onTap: () => setState(() => _navCollapsed = true),
                     ),
                   ),
                   Padding(
@@ -771,8 +758,12 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                     child: _NavGroupLabel(
                       '我的文件夹',
                       onAdd: () async {
-                        final ok = await showCollectionEditor(context);
-                        if (ok) _goSection(_Section.notes);
+                        final created = await showCollectionEditor(context);
+                        // 弹窗挂在根 Navigator 上，等它关掉的这段时间里
+                        // 窗口被拖窄到 1000px 以下会让这个 workspace 被销毁
+                        if (created != null && mounted) {
+                          _goSection(_Section.notes);
+                        }
                       },
                     ),
                   ),
@@ -887,32 +878,24 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
 
             // ── 导入文集（在设置上面） ──
             //
-            // **不要用常亮的主题色底**：那样看起来像"当前选中/按下了"，
-            // 而它只是一个动作按钮。改成和别的导航项一致的静息态，
-            // 悬停时才浮现 —— 和左边其它项是同一套交互语言。
+            // **用 _NavRow，不要手写一行。** 之前这里是手搓的
+            // `Pressable > _HoverTint > Row`，而 _HoverTint 的左内边距是
+            // 22px（那是给缩进的子文件夹用的），_NavRow 是 10px ——
+            // 于是"导入文集"整体比同级右移了 12px，一眼就看得出来没对齐。
+            // 复用 _NavRow 之后几何由同一份代码决定，不可能再走偏。
+            //
+            // 顺带保住了原来的意图：selected 传 false，静息态没有底色，
+            // 悬停才浮现 —— 它是"动作"，不是"当前所在"，不该看着像被按住。
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 2, 10, 0),
-              child: Pressable(
+              child: _NavRow(
+                icon: Icons.download_rounded,
+                label: '导入文集',
+                selected: false,
                 onTap: () => Navigator.of(context).push(
                   ApplePageRoute<void>(
                     pageBuilder: (_) => const ImportPage(),
                     fullscreenDialog: true,
-                  ),
-                ),
-                child: _HoverTint(
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.download_rounded,
-                        size: 17,
-                        color: c.secondaryLabel,
-                      ),
-                      const SizedBox(width: 9),
-                      Text(
-                        '导入文集',
-                        style: AppText.footnote.copyWith(color: c.label),
-                      ),
-                    ],
                   ),
                 ),
               ),
@@ -1485,8 +1468,8 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
       case 'rename':
         await showCollectionEditor(context, existing: col);
       case 'sub':
-        final ok = await showCollectionEditor(context, parentId: col.id);
-        if (ok) await state.refresh();
+        final created = await showCollectionEditor(context, parentId: col.id);
+        if (created != null) await state.refresh();
       case 'top':
         state.repo.moveCollectionToTopLevel(col.id);
         await state.refresh();
@@ -2095,46 +2078,6 @@ class _NavGroupLabel extends StatelessWidget {
   }
 }
 
-/// 操作面板里的一行（文集菜单用）。
-
-/// 静息态透明、悬停时才浮现底色的一行。
-///
-/// 用来让"动作型"导航项（导入文集）和"状态型"导航项（当前选中的分类）
-/// 在视觉上区分开：前者平时不该有底色，否则看着像一直被按着。
-class _HoverTint extends StatefulWidget {
-  const _HoverTint({required this.child});
-
-  final Widget child;
-
-  @override
-  State<_HoverTint> createState() => _HoverTintState();
-}
-
-class _HoverTintState extends State<_HoverTint> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: AnimatedContainer(
-        duration: AppMotion.fast,
-        curve: AppMotion.enter,
-        margin: const EdgeInsets.symmetric(vertical: 1),
-        padding: const EdgeInsets.only(left: 22, right: 6, top: 8, bottom: 8),
-        decoration: BoxDecoration(
-          color: _hover ? c.fill : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: widget.child,
-      ),
-    );
-  }
-}
-
 /// 文件夹前面的收起/展开小三角。
 ///
 /// 命中区域给到 15px 见方，比图标本身大 —— 这个小东西点起来本来就费劲，
@@ -2159,14 +2102,18 @@ class _CollapseToggle extends StatelessWidget {
       child: SizedBox(
         width: 15,
         height: 20,
-        child: AnimatedRotation(
-          turns: collapsed ? 0 : 0.25,
-          duration: AppMotion.fast,
-          curve: AppMotion.enter,
-          child: Icon(
-            Icons.chevron_right_rounded,
-            size: 16,
-            color: color,
+        // 三角转 90° 用带过冲的弹簧：转到头会"甩"过一点再收回来。
+        // 隐式动画没有回弹，转起来是"转过去、停住"，很死。
+        child: SpringAnimatedValue(
+          value: collapsed ? 0 : 0.25,
+          spring: AppMotion.bouncy,
+          builder: (context, v) => Transform.rotate(
+            angle: v * 2 * math.pi,
+            child: Icon(
+              Icons.chevron_right_rounded,
+              size: 16,
+              color: color,
+            ),
           ),
         ),
       ),

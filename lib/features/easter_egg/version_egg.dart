@@ -153,13 +153,20 @@ class _VersionEggPageState extends State<VersionEggPage> {
               left: 0,
               right: 0,
               bottom: 0,
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 14),
-                  child: Text(
-                    '点一下换一张',
-                    textAlign: TextAlign.center,
-                    style: AppText.caption2.copyWith(color: Colors.white24),
+              // **提示条不能吃点击。**
+              //
+              // Text 自己是可以被命中的，而它在 Stack 里排在整屏
+              // GestureDetector 后面 —— 于是"点一下换一张"这几个字
+              // 正好在它自己的位置上把点击吞掉了：越按提示越没反应。
+              child: IgnorePointer(
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Text(
+                      '点一下换一张',
+                      textAlign: TextAlign.center,
+                      style: AppText.caption2.copyWith(color: Colors.white24),
+                    ),
                   ),
                 ),
               ),

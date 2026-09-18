@@ -135,7 +135,7 @@ class _MediaCardState extends State<MediaCard> {
         c,
         icon: _exists ? Icons.play_arrow_rounded : Icons.videocam_off_outlined,
         title: _exists ? '视频' : '视频找不到了',
-        subtitle: _exists ? widget.relPath : widget.relPath,
+        subtitle: _exists ? widget.relPath : '${widget.relPath}（文件已删除）',
         onTap: _exists ? _start : null,
       );
     }

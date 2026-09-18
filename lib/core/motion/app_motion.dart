@@ -53,6 +53,13 @@ class AppMotion {
   /// 标准缓入缓出
   static const Curve standard = Cubic(0.4, 0, 0.2, 1);
 
+  /// **会过冲的曲线**：走到头会稍微超出去一点再收回来。
+  ///
+  /// 给用不了弹簧的地方（`AnimatedContainer` 这类隐式动画）留的 ——
+  /// 一个纯缓动曲线是没有"回弹"的，看起来就是"移过去、停住"，
+  /// 少了那点生气。带回弹的曲线才有"Q弹"的手感。
+  static const Curve pop = Cubic(0.34, 1.56, 0.64, 1);
+
   // ── 弹簧参数 ────────────────────────────────────────────────────────────
 
   /// 利落、无回弹（大部分界面用这个）
@@ -186,6 +193,32 @@ class _PressableState extends State<Pressable> {
     final child = widget.child;
     final hasSecondary = widget.onSecondaryTap != null;
 
+    // 缩放走**真弹簧**，不是时长曲线。
+    //
+    // 这是"Q弹"的来源：按下去用 [AppMotion.snappy]（阻尼比 1.0，不弹，
+    // 跟手而利落），松手用 [AppMotion.bouncy]（阻尼比 0.78）——
+    // 弹回 1.0 的时候会自然地过冲一点点再收住。
+    // 而且弹簧会继承当前速度，所以快速连点不会出现"速度突变"的顿挫。
+    //
+    // 之前这里是 `AnimatedScale` + 120ms 曲线：按下去、弹回来都是匀速收尾，
+    // 手感是"软"，弹不起来。
+    Widget body = SpringAnimatedValue(
+      value: (!reduce && _down) ? widget.scale : 1.0,
+      spring: _down ? AppMotion.snappy : AppMotion.bouncy,
+      builder: (context, v) => Transform.scale(scale: v, child: child),
+    );
+
+    // 透明度还是用隐式动画（弹簧会过冲到 1 以上，Opacity 会断言失败），
+    // 但按下去要快、松开稍慢，和缩放的节奏对上
+    body = AnimatedOpacity(
+      opacity: (!reduce && _down) ? widget.opacity : 1.0,
+      duration: _down
+          ? const Duration(milliseconds: 90)
+          : const Duration(milliseconds: 220),
+      curve: _down ? Curves.easeOut : AppMotion.enter,
+      child: body,
+    );
+
     return MouseRegion(
       cursor: widget.onTap != null
           ? SystemMouseCursors.click
@@ -201,17 +234,7 @@ class _PressableState extends State<Pressable> {
             hasSecondary ? (d) => _secondaryAt = d.globalPosition : null,
         onSecondaryTap:
             hasSecondary ? () => widget.onSecondaryTap!(_secondaryAt) : null,
-        child: AnimatedScale(
-          scale: (!reduce && _down) ? widget.scale : 1.0,
-          duration: AppMotion.instant,
-          curve: AppMotion.enter,
-          child: AnimatedOpacity(
-            opacity: (!reduce && _down) ? widget.opacity : 1.0,
-            duration: AppMotion.instant,
-            curve: AppMotion.enter,
-            child: child,
-          ),
-        ),
+        child: body,
       ),
     );
   }

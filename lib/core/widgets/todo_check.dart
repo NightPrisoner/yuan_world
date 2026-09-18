@@ -8,6 +8,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 
 import '../motion/app_motion.dart';
 import '../theme/app_theme.dart';
@@ -31,28 +32,39 @@ class TodoCheck extends StatefulWidget {
 }
 
 class _TodoCheckState extends State<TodoCheck> with TickerProviderStateMixin {
-  /// 勾号绘制进度（0 → 1 画完）。
-  late final AnimationController _mark = AnimationController(
+  /// 勾号绘制进度（0 → 1 画完）。走弹簧，落笔有"啪"的一下的手感。
+  late final AnimationController _mark = AnimationController.unbounded(
     vsync: this,
-    duration: const Duration(milliseconds: 260),
-    value: widget.checked ? 1 : 0,
-  );
+  )..value = widget.checked ? 1 : 0;
 
   /// 点按脉冲。
-  late final AnimationController _pulse = AnimationController(
+  ///
+  /// 这里**不是**"推到 1 再拉回 0"，而是给弹簧一个初速度让它自己荡回来：
+  /// `SpringSimulation(spring, 1, 1, v)` 起点终点都是 1，光靠初速度
+  /// 冲出去、再自己收回来 —— 这才是"弹一下"的物理写法。
+  /// 之前是 `forward().then(reverse)` 两段固定时长，收尾是硬的。
+  late final AnimationController _pulse = AnimationController.unbounded(
     vsync: this,
-    duration: const Duration(milliseconds: 180),
-  );
+  )..value = 1;
 
   @override
   void didUpdateWidget(covariant TodoCheck old) {
     super.didUpdateWidget(old);
     if (widget.checked != old.checked) {
       if (widget.checked) {
-        _pulse.forward(from: 0).then((_) => _pulse.reverse());
-        _mark.forward();
+        // 正的初速度 → 先胀出去再荡回来
+        _pulse
+          ..value = 1
+          ..animateWith(
+            SpringSimulation(AppMotion.bouncy, 1, 1, 4.2),
+          );
+        _mark.animateWith(
+          SpringSimulation(AppMotion.bouncy, _mark.value, 1, 0),
+        );
       } else {
-        _mark.reverse();
+        _mark.animateWith(
+          SpringSimulation(AppMotion.snappy, _mark.value, 0, 0),
+        );
       }
     }
   }
@@ -79,14 +91,16 @@ class _TodoCheckState extends State<TodoCheck> with TickerProviderStateMixin {
           child: AnimatedBuilder(
             animation: Listenable.merge(<Listenable>[_mark, _pulse]),
             builder: (context, _) {
-              // 脉冲：先放大到 1.12 再回来
-              final pulse = 1 + 0.12 * Curves.easeOut.transform(_pulse.value <= 0.5 ? _pulse.value * 2 : (1 - _pulse.value) * 2);
+              // 脉冲：弹簧会荡到 1 以上再收回来，直接当倍率用就行。
+              // 夹一下范围：弹簧过冲不受控，别让它在极端情况下把圆撑爆。
+              final pulse = (1 + 0.12 * (_pulse.value - 1)).clamp(0.85, 1.22);
               return Transform.scale(
                 scale: pulse,
                 child: CustomPaint(
                   size: Size.square(widget.size + 4),
                   painter: _CheckPainter(
-                    progress: _mark.value,
+                    // 弹簧会冲过 1，画的时候夹住 —— 让它"冲"但不画出界
+                    progress: _mark.value.clamp(0.0, 1.0),
                     tint: tint,
                     border: c.tertiaryLabel,
                   ),

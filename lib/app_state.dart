@@ -252,8 +252,12 @@ class AppState extends ChangeNotifier {
   );
 
   /// 只看没有归类的笔记。
+  ///
+  /// **保留当前的排序**：以前这里新建了一个 `const NoteFilter()`，
+  /// 于是点「未分类」会把排序悄悄重置成默认值 —— 列表突然重排，
+  /// 而旁边的「全部笔记」「收藏」都是保留的。
   void selectUncategorized() => setFilter(
-    const NoteFilter().copyWith(uncategorizedOnly: true),
+    _filter.copyWith(clearCollection: true, uncategorizedOnly: true),
   );
 
   /// 回到「全部笔记」。
@@ -428,12 +432,18 @@ class AppState extends ChangeNotifier {
   Future<void> toggleFavorite(Note n) async {
     repo.setFavorite(n.id, !n.isFavorite);
     refreshListOnly();
-    _overview = repo.overview();
+    // **必须带上 hiddenOnly**：漏了的话，在隐私空间里收藏一篇，
+    // 侧栏的计数会当场换成普通空间的数字 —— 隐私空间的意义就是
+    // 外面看不到里面的痕迹，数字也算痕迹。
+    _overview = repo.overview(hiddenOnly: _privacyMode);
     notifyListeners();
   }
 
   Future<void> deleteNote(int id) async {
     repo.deleteNote(id);
+    // 回收站缓存也要刷：侧栏的回收站角标读的是 trashedNotes.length，
+    // 不刷的话删完笔记角标还是旧数字（要点进回收站才对）
+    refreshTrash();
     await refresh();
   }
 
