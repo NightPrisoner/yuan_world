@@ -90,13 +90,34 @@ void main() {
       expect(() => windowsSortKey('9' * 30), returnsNormally);
     });
 
-    test('中文能排出稳定顺序（虽不是拼音序）', () {
-      // 中文目前按码点排，做不到 Windows 那种拼音序 ——
-      // 但至少必须是**稳定**的，不能每次排出来不一样
+    test('中文按拼音排，不是码点序', () {
+      // 码点序里「阿」(U+963F) 在「波」(U+6CE2) **后面**，因为 CJK
+      // 是按部首笔画编码的。按拼音就该是 阿(a) < 波(b) < 陈(c)。
+      final out = sorted(<String>['陈', '阿', '波']);
+      expect(
+        out,
+        <String>['阿', '波', '陈'],
+        reason: '拼音序：a < b < c',
+      );
+    });
+
+    test('同样的前缀按后续拼音排', () {
+      final out = sorted(<String>['日记本', '小明', '阿飞']);
+      expect(out.first, '阿飞');
+    });
+
+    test('中英混排时英文按字母、中文按拼音，同一套顺序', () {
+      final out = sorted(<String>['banana', '阿', 'cherry', '波']);
+      // a(阿) < b(banana) < b(波) < c(cherry)
+      // 阿和波都是 b 开头，具体先后取决于拼音全拼；关键是都在 b 段
+      expect(out.first, '阿');
+      expect(out.last, 'cherry');
+    });
+
+    test('拼音排序是稳定的，每次都一样', () {
       final once = sorted(<String>['杂碎记', '小小说', '评论区文学']);
       final twice = sorted(<String>['杂碎记', '小小说', '评论区文学']);
       expect(once, twice);
-      expect(once.length, 3);
     });
 
     test('混合中英文数字不会崩', () {
