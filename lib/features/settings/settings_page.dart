@@ -4,6 +4,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -11,7 +12,9 @@ import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/motion/apple_page_route.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/repositories/note_repository.dart';
 import '../collections/manage_collections_page.dart';
+import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
 import '../privacy/privacy_page.dart';
 import 'field_manager_page.dart';
@@ -396,7 +399,7 @@ class SettingsPage extends StatelessWidget {
             _SectionHeader('关于'),
             _Group(
               children: [
-                const _InfoRow(label: '版本', value: '1.0.0'),
+                _VersionRow(version: '1.0.0'),
                 _RowDivider(),
                 const _InfoRow(label: '本地数据库', value: 'SQLite · FTS5'),
                 _RowDivider(),
@@ -524,6 +527,81 @@ class _RowShell extends StatelessWidget {
     );
     if (onTap == null) return content;
     return InkWell(onTap: onTap, child: content);
+  }
+}
+
+/// 「版本」这一行 —— 连点几下会出彩蛋。
+///
+/// 照安卓那套：点的时候**有反馈但不告诉你还差几次**（安卓是点版本号，
+/// 点够了弹出大字标）。这里每点一下让整行轻轻缩一下、再来一次轻触感，
+/// 点满 [kEggTapCount] 下就打开彩蛋。
+///
+/// 计数不落盘：换一次页面就重新数。彩蛋不该被"上次点了两下"提前触发。
+class _VersionRow extends StatefulWidget {
+  const _VersionRow({required this.version});
+  final String version;
+
+  @override
+  State<_VersionRow> createState() => _VersionRowState();
+}
+
+class _VersionRowState extends State<_VersionRow> {
+  int _taps = 0;
+  double _scale = 1;
+
+  Future<void> _tap() async {
+    _taps++;
+    HapticFeedback.selectionClick();
+    // 每一下都缩一下 —— 点的人能感觉到"点到了"，但看不出进度
+    setState(() => _scale = 0.97);
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+    if (mounted) setState(() => _scale = 1);
+    if (_taps < kEggTapCount || !mounted) return;
+    _taps = 0;
+    HapticFeedback.mediumImpact();
+    await showVersionEgg(
+      context,
+      version: widget.version,
+      words: harvestCharacters(_recentTitles()),
+    );
+  }
+
+  /// 用户自己的笔记标题 —— 彩蛋里捡的就是这些字。
+  ///
+  /// 包在 try 里：彩蛋**绝不能**因为一次查询失败把设置页搞崩。
+  List<String> _recentTitles() {
+    try {
+      return context
+          .read<AppState>()
+          .repo
+          .listNotes(const NoteFilter(), limit: 120)
+          .map((n) => n.title)
+          .toList();
+    } catch (_) {
+      return const <String>[];
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return _RowShell(
+      onTap: _tap,
+      child: AnimatedScale(
+        scale: _scale,
+        duration: AppMotion.instant,
+        child: Row(
+          children: [
+            Text('版本', style: AppText.body.copyWith(color: c.label)),
+            const Spacer(),
+            Text(
+              widget.version,
+              style: AppText.body.copyWith(color: c.secondaryLabel),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
