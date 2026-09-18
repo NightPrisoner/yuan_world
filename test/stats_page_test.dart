@@ -228,6 +228,9 @@ void main() {
     await state.refresh();
     await pumpStats(tester);
 
+    // 时间范围收在下拉里了，先点开
+    await tester.tap(find.byIcon(Icons.schedule_rounded));
+    await tester.pumpAndSettle();
     expect(find.text('自定义'), findsOneWidget);
     await tester.tap(find.text('自定义'));
     await tester.pumpAndSettle();
@@ -243,6 +246,8 @@ void main() {
     await state.refresh();
     await pumpStats(tester);
 
+    await tester.tap(find.byIcon(Icons.schedule_rounded));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('自定义'));
     await tester.pumpAndSettle();
 
@@ -275,6 +280,8 @@ void main() {
     await state.refresh();
     await pumpStats(tester);
 
+    await tester.tap(find.byIcon(Icons.schedule_rounded));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('自定义'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('输入'));
@@ -529,10 +536,12 @@ void main() {
     await state.refresh();
     await pumpStats(tester);
 
-    // 默认「全部」
-    expect(find.text('近 3 个月'), findsOneWidget);
+    // 默认「全部」——下拉按钮上写的就是当前范围
+    expect(find.text('全部'), findsWidgets);
 
-    await tester.tap(find.text('近 3 个月'));
+    await tester.tap(find.byIcon(Icons.schedule_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('近 3 个月').last);
     await tester.pumpAndSettle();
 
     expect(state.repo.getSetting('stats.range'), 'm3');

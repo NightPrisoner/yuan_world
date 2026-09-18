@@ -61,18 +61,22 @@ List<T> sliceRange<T>(List<T> src, int start, int end) {
   return s >= e ? <T>[] : src.sublist(s, e);
 }
 
-/// 算出 Y 轴的可见范围。
+/// 算出 Y 轴的显示范围。**全自动，没有旋钮**。
 ///
-/// 图表本身和页面上那行「纵轴 1,200 – 8,400」都调这个函数 ——
-/// 两处各算一遍的话迟早会算岔，标签报的范围就不是图上那条了。
+/// 规则只有一条：数据整体离 0 很远时贴着数据画，否则老老实实从 0 起。
+/// - 三条线都在 5000–6000 之间时，从 0 起就是三条贴在顶上的平线，
+///   什么差异都看不出来 —— 这时候贴着数据画。
+/// - 数据本来就够到 0 附近（比如 0–100），截断基线只会把差异放大成假象 ——
+///   这时候从 0 起。
 ///
-/// [zoomY] > 1 时在 [fromZero] 定出的基础范围里再放大，
-/// [viewYStart]（0..1）决定放大后停在哪一段。
-({double lo, double hi}) trendYRange({
-  required Iterable<double> values,
-  required bool fromZero,
-  double zoomY = 1,
-  double viewYStart = 0,
+/// 以前这是个开关（"Y 轴从 0 开始"），但没人是来看开关的，
+/// 该贴着画还是该从 0 起，数据自己知道。
+///
+/// [forceZeroBase] 给柱状图用：柱子的长度就是它的语义，
+/// 截断基线等于撒谎，所以必须从 0 起。
+({double lo, double hi}) trendYRange(
+  Iterable<double> values, {
+  bool forceZeroBase = false,
 }) {
   var maxV = 0.0;
   var minV = double.infinity;
@@ -88,21 +92,10 @@ List<T> sliceRange<T>(List<T> src, int start, int end) {
   }
   if (maxV <= 0) maxV = 1;
 
-  final hi0 = maxV * 1.18;
-  // 从 0 起最诚实；关掉之后贴着数据走，多条线都挤在顶部时才看得出差异。
-  // 留 8% 余量免得线贴边。
-  final lo0 = fromZero ? 0.0 : (minV <= 0 ? 0.0 : minV * 0.92);
-
-  var lo = lo0;
-  var hi = hi0;
-  final span = hi0 - lo0;
-  if (zoomY > 1 && span > 0) {
-    final visible = span / zoomY;
-    final maxStart = span - visible;
-    lo = lo0 + viewYStart.clamp(0.0, 1.0) * maxStart;
-    hi = lo + visible;
-  }
-  return (lo: lo, hi: hi);
+  // 上限留 18% 余量，免得线贴着顶边
+  final hi = maxV * 1.18;
+  final hugsData = !forceZeroBase && minV > 0 && minV > maxV * 0.25;
+  return (lo: hugsData ? minV * 0.92 : 0.0, hi: hi);
 }
 
 class TrendChart extends StatelessWidget {
@@ -112,12 +105,9 @@ class TrendChart extends StatelessWidget {
     required this.metric,
     required this.style,
     this.series = const <TrendSeries>[],
-    this.fromZero = true,
     this.showDots = true,
     this.smooth = true,
     this.showGrid = true,
-    this.zoomY = 1,
-    this.viewYStart = 0,
   });
 
   final List<TrendPoint> points;
@@ -129,12 +119,6 @@ class TrendChart extends StatelessWidget {
   /// 传了 2 条以上就走**多线模式**，[points] 那时只用来定 X 轴刻度。
   final List<TrendSeries> series;
 
-  /// Y 轴从 0 起。
-  ///
-  /// 关掉之后按数据的最小值缩放下限 —— 多条线挤在顶部时，
-  /// 从 0 起是看不出差异的。
-  final bool fromZero;
-
   /// 是否画数据点。点多的时候关掉更清爽。
   final bool showDots;
 
@@ -144,12 +128,6 @@ class TrendChart extends StatelessWidget {
 
   final bool showGrid;
 
-  /// Y 轴放大倍数。1 = 看全部。
-  final double zoomY;
-
-  /// Y 轴可视范围的起点（0..1）。只在 [zoomY] > 1 时起作用。
-  final double viewYStart;
-
   bool get _multi => series.length > 1;
 
   @override
@@ -157,18 +135,14 @@ class TrendChart extends StatelessWidget {
     final c = context.colors;
     final values = points.map<double>((p) => p.valueOf(metric).toDouble()).toList();
 
-    // 多线模式下 Y 轴要按**所有线**定范围，否则某条会被截断
-    final y = trendYRange(
-      values: <double>[
-        ...values,
-        if (_multi)
-          for (final s in series)
-            for (final p in s.points) p.valueOf(metric).toDouble(),
-      ],
-      fromZero: fromZero,
-      zoomY: zoomY,
-      viewYStart: viewYStart,
-    );
+    // 多线模式下 Y 轴要按**所有线**定范围，否则某条会被截断。
+    // 到底从 0 起还是贴着数据，由 trendYRange 自己判断
+    final y = trendYRange(<double>[
+      ...values,
+      if (_multi)
+        for (final s in series)
+          for (final p in s.points) p.valueOf(metric).toDouble(),
+    ]);
 
     // 点位太密时只画一部分标签，否则轴会糊成一片
     final labelStep = points.length > 18 ? (points.length / 8).ceil() : 1;
@@ -722,42 +696,26 @@ class ShareChart extends StatelessWidget {
 
 // ── 发布密度热力图 ────────────────────────────────────────────────────────
 
-/// 热力图的时间窗口。
+/// 算出热力图的窗口。
 ///
-/// 以前写死"近一年"、一个字都改不了 —— 想看去年写了多少都做不到。
-enum HeatWindow {
-  m3('最近三个月'),
-  m6('最近半年'),
-  y1('最近一年'),
-  ytd('今年'),
-  lastYear('去年');
-
-  const HeatWindow(this.label);
-  final String label;
-
-  /// 算出窗口的起止（都是**当天**，含首尾）。
-  ({DateTime from, DateTime to}) resolve(DateTime now) {
-    final today = DateTime(now.year, now.month, now.day);
-    return switch (this) {
-      HeatWindow.m3 => (
-        from: today.subtract(const Duration(days: 89)),
-        to: today,
-      ),
-      HeatWindow.m6 => (
-        from: today.subtract(const Duration(days: 181)),
-        to: today,
-      ),
-      HeatWindow.y1 => (
-        from: today.subtract(const Duration(days: 364)),
-        to: today,
-      ),
-      HeatWindow.ytd => (from: DateTime(today.year, 1, 1), to: today),
-      HeatWindow.lastYear => (
-        from: DateTime(today.year - 1, 1, 1),
-        to: DateTime(today.year - 1, 12, 31),
-      ),
-    };
+/// 有明确的时间范围就用它（"近三个月"就画三个月）；"全部"时用数据的实际跨度
+/// ——总得有个头尾才能排格子，画到今天会拖出一条空长尾。
+/// 实在什么都没有就退回最近一年。
+({DateTime from, DateTime to}) heatWindow({
+  DateTime? rangeFrom,
+  DateTime? rangeTo,
+  DateTime? dataFrom,
+  DateTime? dataTo,
+  required DateTime now,
+}) {
+  DateTime day(DateTime t) => DateTime(t.year, t.month, t.day);
+  final today = day(now);
+  final from = rangeFrom ?? dataFrom;
+  final to = rangeTo ?? dataTo;
+  if (from == null || to == null || from.isAfter(to)) {
+    return (from: today.subtract(const Duration(days: 364)), to: today);
   }
+  return (from: day(from), to: day(to));
 }
 
 String heatDayKey(DateTime d) =>
@@ -780,15 +738,7 @@ class DensityHeatmap extends StatelessWidget {
   final DateTime from;
   final DateTime to;
 
-  /// 格子尺寸写死，**不再用 Expanded 均分**。
-  ///
-  /// 均分的话窗口一短（比如"最近三个月"只有 14 列），格子会被拉成
-  /// 一根根粗条，完全不像热力图。写死 + 横向滚动，列数多少都不变形。
-  static const double _cell = 12;
   static const double _gap = 2;
-  static const double _pitch = _cell + _gap;
-
-  static const double _height = 16 + 4 + 7 * _pitch;
 
   @override
   Widget build(BuildContext context) {
@@ -820,11 +770,11 @@ class DensityHeatmap extends StatelessWidget {
     }
     if (maxCount == 0) maxCount = 1;
 
-    // 月份标签：月份一变就标一个。相邻标签至少隔 4 列（约 56px），
-    // 不会撞在一起。
+    final n = weeks.length;
+    // 月份标签：月份一变就标一个
     final labels = <int, String>{};
     int? prevMonth;
-    for (var i = 0; i < weeks.length; i++) {
+    for (var i = 0; i < n; i++) {
       final m = weeks[i].first.month;
       if (m != prevMonth) {
         labels[i] = m == 1 ? '${weeks[i].first.year}年' : '$m月';
@@ -835,26 +785,49 @@ class DensityHeatmap extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(
-          height: _height,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            child: Column(
+        // **格子尺寸跟着宽度走**。
+        //
+        // 窗口可能是三个月（十几列）也可能是好几年（几百列）：
+        // 写死尺寸的话短窗口会稀稀拉拉、长窗口要横向滚半天；
+        // 均分（Expanded）又会在短窗口把格子拉成一根根粗条。
+        // 按可用宽度算、并夹在一个合理区间里，才是两头都不难看。
+        LayoutBuilder(
+          builder: (context, box) {
+            // 只夹上限（免得短窗口变成大色块），**下限绝对不设** ——
+            // 设了就会把这一行撑破：可用宽度就这么多，几年跨度要放下，
+            // 格子自然得细。密度图看的是疏密，细也一样看得懂。
+            final pitch = math.min(22.0, box.maxWidth / n);
+            final gap = pitch >= 8 ? _gap : 0.6;
+            final cell = math.max(0.5, pitch - gap);
+            final radius = math.min(2.0, cell / 3);
+
+            // 标签挤在一起不如不标：至少隔 34px 才放一个
+            final labelled = <int, String>{};
+            var lastLabelX = -1e9;
+            for (var i = 0; i < n; i++) {
+              final t = labels[i];
+              if (t == null) continue;
+              final x = i * pitch;
+              if (x - lastLabelX < 34) continue;
+              labelled[i] = t;
+              lastLabelX = x;
+            }
+
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(
                   height: 16,
                   child: Row(
                     children: <Widget>[
-                      for (var i = 0; i < weeks.length; i++)
+                      for (var i = 0; i < n; i++)
                         SizedBox(
-                          width: _pitch,
-                          child: labels[i] == null
+                          width: pitch,
+                          child: labelled[i] == null
                               ? null
                               : Text(
-                                  labels[i]!,
-                                  // 格子只有 14px 宽，标签要允许溢出到右边，
+                                  labelled[i]!,
+                                  // 格子只有十几像素宽，标签要允许溢出到右边，
                                   // 否则会被裁成"1…"
                                   softWrap: false,
                                   overflow: TextOverflow.visible,
@@ -868,16 +841,25 @@ class DensityHeatmap extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 SizedBox(
-                  height: 7 * _pitch,
+                  height: 7 * pitch,
                   child: Row(
                     children: <Widget>[
                       for (final week in weeks)
                         SizedBox(
-                          width: _pitch,
+                          width: pitch,
                           child: Column(
                             children: <Widget>[
                               for (final day in week)
-                                _cellBox(c, day, firstDay, lastDay, maxCount),
+                                _cellBox(
+                                  c,
+                                  day,
+                                  firstDay,
+                                  lastDay,
+                                  maxCount,
+                                  pitch,
+                                  cell,
+                                  radius,
+                                ),
                             ],
                           ),
                         ),
@@ -885,8 +867,8 @@ class DensityHeatmap extends StatelessWidget {
                   ),
                 ),
               ],
-            ),
-          ),
+            );
+          },
         ),
         const SizedBox(height: 8),
         Row(
@@ -899,7 +881,9 @@ class DensityHeatmap extends StatelessWidget {
                 height: 9,
                 margin: const EdgeInsets.only(right: 3),
                 decoration: BoxDecoration(
-                  color: i == 0 ? _emptyColor(c) : c.tint.withValues(alpha: 0.18 + 0.2 * i),
+                  color: i == 0
+                      ? _emptyColor(c)
+                      : c.tint.withValues(alpha: 0.18 + 0.2 * i),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -929,30 +913,34 @@ class DensityHeatmap extends StatelessWidget {
     DateTime firstDay,
     DateTime lastDay,
     int maxCount,
+    double pitch,
+    double cell,
+    double radius,
   ) {
     // 首尾补出来的那几天不属于窗口，画成透明占位
     if (day.isBefore(firstDay) || day.isAfter(lastDay)) {
-      return const SizedBox(width: _pitch, height: _pitch);
+      return SizedBox(width: pitch, height: pitch);
     }
     final key = heatDayKey(day);
     final count = data[key] ?? 0;
 
     return SizedBox(
-      width: _pitch,
-      height: _pitch,
+      width: pitch,
+      height: pitch,
       child: Tooltip(
         message: '$key  ${count == 0 ? '无' : '$count 篇'}',
         waitDuration: const Duration(milliseconds: 350),
-        child: Padding(
-          padding: const EdgeInsets.all(_gap / 2),
-          child: DecoratedBox(
+        child: Center(
+          child: Container(
+            width: cell,
+            height: cell,
             decoration: BoxDecoration(
               color: count == 0
                   ? _emptyColor(c)
                   : c.tint.withValues(
                       alpha: 0.2 + 0.8 * (count / maxCount).clamp(0.0, 1.0),
                     ),
-              borderRadius: BorderRadius.circular(2),
+              borderRadius: BorderRadius.circular(radius),
             ),
           ),
         ),
@@ -1131,40 +1119,19 @@ class WeekdayChart extends StatelessWidget {
 // ── 篇幅分布直方图 ────────────────────────────────────────────────────────
 
 class LengthHistogram extends StatelessWidget {
-  const LengthHistogram({
-    super.key,
-    required this.buckets,
-    this.zoomY = 1,
-    this.viewYStart = 0,
-    this.asPercent = false,
-  });
+  const LengthHistogram({super.key, required this.buckets});
 
   final List<LengthBucket> buckets;
-
-  /// Y 轴放大倍数与起点。柱子不比折线，不从 0 起会骗人，
-  /// 所以默认就是 1× / 从 0 起 —— 放大是用户自己按下去的。
-  final double zoomY;
-  final double viewYStart;
-
-  /// Y 轴显示占比而不是篇数。
-  ///
-  /// 换了分档之后各档的篇数完全不是一个量级，看"占多少"比看"几篇"有用。
-  final bool asPercent;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     final total = buckets.fold<int>(0, (s, b) => s + b.count);
-    // 占比模式下 0 篇的档位也是 0%，不用特殊处理
-    double valueOf(int i) => asPercent
-        ? (total == 0 ? 0 : buckets[i].count / total * 100)
-        : buckets[i].count.toDouble();
 
+    // 柱子必须从 0 起：柱长就是它的语义，截断基线等于撒谎
     final y = trendYRange(
-      values: <double>[for (var i = 0; i < buckets.length; i++) valueOf(i)],
-      fromZero: true,
-      zoomY: zoomY,
-      viewYStart: viewYStart,
+      <double>[for (final b in buckets) b.count.toDouble()],
+      forceZeroBase: true,
     );
 
     return SizedBox(
@@ -1184,12 +1151,8 @@ class LengthHistogram extends StatelessWidget {
                 AppText.caption2.copyWith(color: Colors.white70),
                 children: [
                   TextSpan(
-                    // 两个数都给：光有占比不知道基数，光有篇数不好比档位
-                    text: asPercent
-                        ? '${rod.toY.toStringAsFixed(1)}%'
-                              '（${buckets[group.x].count} 篇）'
-                        : '${buckets[group.x].count} 篇'
-                              '${total == 0 ? '' : '（${(buckets[group.x].count / total * 100).round()}%）'}',
+                    text: '${buckets[group.x].count} 篇'
+                        '${total == 0 ? '' : '（${(buckets[group.x].count / total * 100).round()}%）'}',
                     style: AppText.footnote.copyWith(
                       color: Colors.white,
                       fontWeight: FontWeight.w600,
@@ -1205,13 +1168,11 @@ class LengthHistogram extends StatelessWidget {
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: asPercent ? 38 : 30,
+                reservedSize: 30,
                 getTitlesWidget: (value, meta) {
                   if (value == 0) return const SizedBox.shrink();
                   return Text(
-                    asPercent
-                        ? '${value.toStringAsFixed(0)}%'
-                        : fmtNum(value),
+                    fmtNum(value),
                     style: AppText.caption2.copyWith(color: c.quaternaryLabel),
                   );
                 },
@@ -1251,7 +1212,6 @@ class LengthHistogram extends StatelessWidget {
           gridData: FlGridData(
             show: true,
             drawVerticalLine: false,
-            // 按可见范围算，放大之后网格线才不会全跑到画面外
             horizontalInterval: (y.hi - y.lo) / 3,
             getDrawingHorizontalLine: (_) => FlLine(
               color: c.separator.withValues(alpha: 0.35),
@@ -1266,7 +1226,7 @@ class LengthHistogram extends StatelessWidget {
                 x: i,
                 barRods: <BarChartRodData>[
                   BarChartRodData(
-                    toY: valueOf(i),
+                    toY: buckets[i].count.toDouble(),
                     width: 22,
                     borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(5),

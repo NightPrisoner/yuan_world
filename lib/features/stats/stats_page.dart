@@ -150,6 +150,11 @@ class _StatsPageState extends State<StatsPage> {
   int _dbBytes = 0;
   MediaStats _mediaStats = const MediaStats(images: 0, videos: 0, bytes: 0);
 
+  /// 热力图靠这两个兜底：时间范围选"全部"时没有起止，
+  /// 得拿数据本身的首尾才知道格子从哪天排到哪天。
+  DateTime? _densityFrom;
+  DateTime? _densityTo;
+
   /// 上一次见到的隐私空间状态，用于判断要不要重算。
   bool _lastPrivacy = false;
 
@@ -200,26 +205,15 @@ class _StatsPageState extends State<StatsPage> {
       );
       // 显示选项：只有明确存过 '0' 才算关，其它情况保持默认开
       bool flag(String key) => repo.getSetting(key) != '0';
-      _fromZero = flag('stats.fromZero');
       _showDots = flag('stats.showDots');
       _smooth = flag('stats.smooth');
       _showGrid = flag('stats.showGrid');
       // 倍率记着，平移位置不记（下次打开回到开头更符合预期）
       _zoom = _storedZoom(repo, 'stats.zoom');
-      _zoomY = _storedZoom(repo, 'stats.zoomY');
       _lenScale = byName(
         LengthScale.values,
         repo.getSetting('stats.lenScale'),
         _lenScale,
-      );
-      // **不能用 flag()**：它的语义是"不等于 '0' 就是真"，也就是没存过时为真。
-      // 那几个开关默认本来就是开的所以没事，但这个默认要关
-      // （篇幅分布默认看篇数，不是占比）。
-      _lenPercent = repo.getSetting('stats.lenPercent') == '1';
-      _heatWindow = byName(
-        HeatWindow.values,
-        repo.getSetting('stats.heatWindow'),
-        _heatWindow,
       );
       final raw = repo.getSetting('stats.hidden');
       if (raw != null && raw.isNotEmpty) {
@@ -273,13 +267,9 @@ class _StatsPageState extends State<StatsPage> {
     repo.setSetting('stats.to', _to?.toIso8601String() ?? '');
     repo.setSetting('stats.order', jsonEncode(_orderedIds()));
     repo.setSetting('stats.zoom', '$_zoom');
-    repo.setSetting('stats.zoomY', '$_zoomY');
-    repo.setSetting('stats.heatWindow', _heatWindow.name);
     repo.setSetting('stats.lenScale', _lenScale.name);
-    repo.setSetting('stats.lenPercent', _lenPercent ? '1' : '0');
     repo.setSetting('stats.cumMetric', _cumMetric.name);
     repo.setSetting('stats.cumStyle', _cumStyle.name);
-    repo.setSetting('stats.fromZero', _fromZero ? '1' : '0');
     repo.setSetting('stats.showDots', _showDots ? '1' : '0');
     repo.setSetting('stats.smooth', _smooth ? '1' : '0');
     repo.setSetting('stats.showGrid', _showGrid ? '1' : '0');
@@ -342,11 +332,9 @@ class _StatsPageState extends State<StatsPage> {
       _trend = stats.trend(query: q, granularity: _granularity);
       _cumulative = stats.cumulative(query: q, granularity: _granularity);
       _share = stats.collectionShare(query: q);
-      // 热力图的窗口是它自己那一档定的，所以取数**不带时间范围** ——
-      // 不然选了'最近三个月'之后再看'去年'，整张图会全是空格子
-      _density = stats.dailyDensity(
-        query: q.copyWith(clearFrom: true, clearTo: true),
-      );
+      // 热力图跟着页面时间范围走，取数也就跟着走
+      _density = stats.dailyDensity(query: q);
+      _refreshDensitySpan(stats, q);
       _hourly = stats.hourlyDistribution(query: q);
       _weekday = stats.weekdayDistribution(query: q);
       _lengths = stats.lengthDistribution(query: q, scale: _lenScale);
@@ -359,6 +347,21 @@ class _StatsPageState extends State<StatsPage> {
     });
   }
 
+  /// 热力图在"全部"时要靠数据的实际跨度才知道画到哪儿。
+  void _refreshDensitySpan(StatsRepository stats, StatsQuery q) {
+    // 范围里没写死起止时，才需要问数据本身的首尾
+    if (q.from != null && q.to != null) {
+      _densityFrom = null;
+      _densityTo = null;
+      return;
+    }
+    final span = stats.dataSpan(
+      query: q.copyWith(clearFrom: true, clearTo: true),
+    );
+    _densityFrom = q.from ?? span.first;
+    _densityTo = q.to ?? span.last;
+  }
+
   /// 换筛选条件只需要重算与筛选相关的部分，
   /// 词频这种重活跟着重算一次也就几毫秒，索性一起刷新，保证图之间自洽。
   void _reload() {
@@ -368,14 +371,14 @@ class _StatsPageState extends State<StatsPage> {
     _trendSeriesCache = null;
     _cumulativeSeriesCache = null;
     setState(() {
+      // **概览也得重算**。以前漏了这一行：图表全跟着筛选变了，
+      // 只有概览还挂着上一次的数字，看着就是"筛选没生效"。
+      _overview = stats.overview(query: q);
       _trend = stats.trend(query: q, granularity: _granularity);
       _cumulative = stats.cumulative(query: q, granularity: _granularity);
       _share = stats.collectionShare(query: q);
-      // 热力图的窗口是它自己那一档定的，所以取数**不带时间范围** ——
-      // 不然选了'最近三个月'之后再看'去年'，整张图会全是空格子
-      _density = stats.dailyDensity(
-        query: q.copyWith(clearFrom: true, clearTo: true),
-      );
+      _density = stats.dailyDensity(query: q);
+      _refreshDensitySpan(stats, q);
       _hourly = stats.hourlyDistribution(query: q);
       _weekday = stats.weekdayDistribution(query: q);
       _lengths = stats.lengthDistribution(query: q, scale: _lenScale);
@@ -384,6 +387,18 @@ class _StatsPageState extends State<StatsPage> {
       _keywords = stats.keywords(query: q, limit: 26);
       _streak = stats.streak(query: q);
       _comparisons = stats.compareCollections(query: q);
+    });
+  }
+
+  /// 只重算篇幅分布。
+  ///
+  /// 换分档只影响这一个直方图，没必要把整页十来个聚合全跑一遍 ——
+  /// 那是几十到几百毫秒的同步阻塞，用户看到的就是"点完卡住不动"。
+  void _reloadLengths() {
+    final stats = _stats;
+    if (stats == null) return;
+    setState(() {
+      _lengths = stats.lengthDistribution(query: _query, scale: _lenScale);
     });
   }
 
@@ -899,52 +914,77 @@ class _StatsPageState extends State<StatsPage> {
               ),
               const SizedBox(height: 14),
 
-              // 时间范围：一处改，所有模块跟着变
-              SizedBox(
-                height: 32,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  children: [
-                    for (final r in StatsRange.values)
-                      _Chip(
-                        label: r == StatsRange.custom && _range == r
-                            ? '${_fmtDay(_from)} – ${_fmtDay(_to)}'
-                            : r.label,
-                        selected: _range == r,
-                        icon: r == StatsRange.custom
-                            ? Icons.calendar_month_rounded
-                            : null,
-                        onTap: () => r == StatsRange.custom
-                            ? _pickCustomRange()
-                            : _setRange(r),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-
-              // 文件夹筛选：**做成下拉，不再铺成一排 chip**。
+              // 时间范围 + 文件夹：**都收成下拉，摆在同一行**。
               //
-              // 之前每个文件夹一个 chip，十几个文件夹就占满两行还在溢出，
-              // 而且那堆 chip 里真正在用的只有一个 —— 视觉噪音远大于信息量。
-              // 下拉里一眼看到全部选项和当前选中项，还省掉一整行。
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Builder(
-                  builder: (btnCtx) => _FilterButton(
-                    icon: Icons.folder_rounded,
-                    label: _folderLabel,
-                    accent: _folderAccent(c),
-                    onTap: () => _pickCollectionMenu(btnCtx),
+              // 六个 chip 铺一行既占地方，又和下面的文件夹下拉风格不一致，
+              // 而真正常用的就那一两个。两个下拉一行放得下，
+              // 窄屏自动折到两行。
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: <Widget>[
+                  Builder(
+                    builder: (btnCtx) => _FilterButton(
+                      icon: Icons.schedule_rounded,
+                      label: _rangeLabel,
+                      accent: _range == StatsRange.all
+                          ? c.tint
+                          : c.palette[4],
+                      onTap: () => _pickRangeMenu(btnCtx),
+                    ),
                   ),
-                ),
+                  Builder(
+                    builder: (btnCtx) => _FilterButton(
+                      icon: Icons.folder_rounded,
+                      label: _folderLabel,
+                      accent: _folderAccent(c),
+                      onTap: () => _pickCollectionMenu(btnCtx),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// 时间范围按钮上的文字。
+  String get _rangeLabel {
+    if (_range != StatsRange.custom) return _range.label;
+    if (_from == null || _to == null) return '自定义';
+    return '${_fmtDay(_from)} – ${_fmtDay(_to)}';
+  }
+
+  /// 时间范围下拉。选「自定义」再弹日历。
+  Future<void> _pickRangeMenu(BuildContext btnCtx) async {
+    final picked = await showAppMenu<StatsRange>(
+      btnCtx,
+      anchor: AppMenuAnchor(context: btnCtx),
+      header: '时间范围',
+      items: <AppMenuItem<StatsRange>>[
+        for (final r in StatsRange.values)
+          AppMenuItem(
+            value: r,
+            label: r == StatsRange.custom && _range == r
+                ? _rangeLabel
+                : r.label,
+            icon: _range == r
+                ? Icons.check_circle_rounded
+                : (r == StatsRange.custom
+                      ? Icons.calendar_month_rounded
+                      : Icons.circle_outlined),
+            color: _range == r ? context.colors.tint : null,
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    if (picked == StatsRange.custom) {
+      await _pickCustomRange();
+    } else {
+      _setRange(picked);
+    }
   }
 
   /// 文件夹多选。
@@ -1315,6 +1355,9 @@ class _StatsPageState extends State<StatsPage> {
           Row(
             children: [
               _Stat(
+                // key 是给测试用的：筛选一变，这个数字就得跟着变，
+                // 之前漏了 _overview 的重算，它一直挂着旧值
+                key: const Key('ov-notes'),
                 label: '笔记',
                 value: '${o.noteCount}',
                 unit: '篇',
@@ -1322,6 +1365,7 @@ class _StatsPageState extends State<StatsPage> {
                 icon: Icons.article_rounded,
               ),
               _Stat(
+                key: const Key('ov-chars'),
                 label: '总字数',
                 value: fmtNum(o.totalChars),
                 color: c.palette[4],
@@ -1394,36 +1438,14 @@ class _StatsPageState extends State<StatsPage> {
   /// 这几项都是"同一份数据怎么画"的问题，和指标、样式属于一类，
   /// 所以合并成一个下拉，不占地方也不打断视线。
   ///
-  /// **Y 轴从 0 开始**尤其重要：多文件夹对比时各条线往往都在图表顶部，
-  /// 从 0 起看全都贴在一起，关掉之后差异才看得出来。
-  bool _fromZero = true;
+  /// **Y 轴不在这里**：它现在完全自动（见 trendYRange），
+  /// 该从 0 起还是贴着数据画，数据自己说了算。
   bool _showDots = true;
   bool _smooth = true;
   bool _showGrid = true;
 
-  /// 热力图自己的时间窗口。
-  ///
-  /// **不跟页面的时间范围联动**：页面范围一变整页都跟着动，
-  /// 而"我就想单看去年"是个很具体的需求，两个旋钮拧同一件事只会打架。
-  /// 所以热力图的数据按文件夹/隐私空间取，窗口由它自己这一档决定。
-  HeatWindow _heatWindow = HeatWindow.y1;
-
-  /// 篇幅分布自己的几个旋钮：分档粗细、Y 轴单位、Y 轴缩放。
-  /// 和趋势那套分开 —— 两张图的纵轴量纲完全不同，
-  /// 共用一套倍率的话调了这张那张也跟着变，很莫名。
+  /// 篇幅分布的**X 轴**分档。纵轴不再提供任何调节。
   LengthScale _lenScale = LengthScale.normal;
-  bool _lenPercent = false;
-  double _lenZoomY = 1;
-  double _lenViewYStart = 0;
-
-  void _stepLenZoomY(int dir) {
-    final next = _stepIn(_zoomLevels, _lenZoomY, dir);
-    if (_zoomLevels[next] == _lenZoomY) return;
-    setState(() {
-      _lenZoomY = _zoomLevels[next];
-      if (_lenZoomY <= 1) _lenViewYStart = 0;
-    });
-  }
 
   /// 累计增长的指标与样式。以前写死成"字数 + 面积"。
   TrendMetric _cumMetric = TrendMetric.chars;
@@ -1436,11 +1458,6 @@ class _StatsPageState extends State<StatsPage> {
   /// 可视窗口的起点（0..1）。**不持久化** ——
   /// 平移是个临时动作，下次打开回到开头比停在上次那个位置更符合预期。
   double _viewStart = 0;
-
-  /// Y 轴放大倍数 + 起点。和 X 轴各管各的：
-  /// 横着看某几个月、同时竖着看某个字数段，是很常见的组合。
-  double _zoomY = 1;
-  double _viewYStart = 0;
 
   int _stepIn(List<double> levels, double cur, int dir) =>
       (math.max(0, levels.indexOf(cur)) + dir).clamp(0, levels.length - 1);
@@ -1459,16 +1476,6 @@ class _StatsPageState extends State<StatsPage> {
       _zoom = _zoomLevels[next];
       // 回到 1× 时窗口本来就是全量，不清掉的话下次放大位置会很怪
       if (_zoom <= 1) _viewStart = 0;
-    });
-    _persist();
-  }
-
-  void _stepZoomY(int dir) {
-    final next = _stepIn(_zoomLevels, _zoomY, dir);
-    if (_zoomLevels[next] == _zoomY) return;
-    setState(() {
-      _zoomY = _zoomLevels[next];
-      if (_zoomY <= 1) _viewYStart = 0;
     });
     _persist();
   }
@@ -1498,64 +1505,33 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
-  /// 图表下方的坐标轴控制条：横轴一行、纵轴一行。
+  /// 图表下方的**横轴**控制条。
   ///
   /// 放在图下面而不是塞进右上角的菜单里 —— 缩放是个要**反复拖**的操作，
   /// 藏进菜单会让它变成没人发现的功能。
-  /// 两行都摊开而不是做成"X/Y 切换"：切换式的界面里，
-  /// 用户永远不知道没显示的那一半被藏在哪。
-  Widget _zoomBar(
-    AppColors c,
-    List<TrendPoint> axis, {
-    required List<TrendSeries> series,
-    required TrendMetric metric,
-  }) {
+  ///
+  /// 只有横轴：纵轴现在完全自动，没有可调的东西。
+  Widget _zoomBar(AppColors c, List<TrendPoint> axis) {
     final first = axis.isEmpty ? null : axis.first.label;
     final last = axis.isEmpty ? null : axis.last.label;
     final xText = _zoom <= 1
         ? '全部'
         : (first != null && last != null ? '$first – $last' : '—');
 
-    final y = trendYRange(
-      values: <double>[
-        for (final p in axis) p.valueOf(metric).toDouble(),
-        for (final s in series)
-          for (final p in s.points) p.valueOf(metric).toDouble(),
-      ],
-      fromZero: _fromZero,
-      zoomY: _zoomY,
-      viewYStart: _viewYStart,
-    );
-
     return Padding(
       // 页面上别处也有"全部"字样（范围筛选），测试要能精确定位到这一条
       key: const Key('stats-zoom-bar'),
       padding: const EdgeInsets.only(top: 2),
-      child: Column(
-        children: <Widget>[
-          _zoomRow(
-            c,
-            '横轴',
-            _zoom,
-            _viewStart,
-            () => _stepZoom(-1),
-            () => _stepZoom(1),
-            (v) => setState(() => _viewStart = v),
-            xText,
-            'x',
-          ),
-          _zoomRow(
-            c,
-            '纵轴',
-            _zoomY,
-            _viewYStart,
-            () => _stepZoomY(-1),
-            () => _stepZoomY(1),
-            (v) => setState(() => _viewYStart = v),
-            '${fmtNum(y.lo)} – ${fmtNum(y.hi)}',
-            'y',
-          ),
-        ],
+      child: _zoomRow(
+        c,
+        '横轴',
+        _zoom,
+        _viewStart,
+        () => _stepZoom(-1),
+        () => _stepZoom(1),
+        (v) => setState(() => _viewStart = v),
+        xText,
+        'x',
       ),
     );
   }
@@ -1668,14 +1644,6 @@ class _StatsPageState extends State<StatsPage> {
           header: '显示选项',
           items: <AppMenuItem<String>>[
             AppMenuItem(
-              value: 'zero',
-              label: 'Y 轴从 0 开始',
-              icon: _fromZero
-                  ? Icons.check_box_rounded
-                  : Icons.check_box_outline_blank_rounded,
-              color: _fromZero ? c.tint : null,
-            ),
-            AppMenuItem(
               value: 'dots',
               label: '显示数据点',
               icon: _showDots
@@ -1704,8 +1672,6 @@ class _StatsPageState extends State<StatsPage> {
         if (picked == null || !mounted) return;
         setState(() {
           switch (picked) {
-            case 'zero':
-              _fromZero = !_fromZero;
             case 'dots':
               _showDots = !_showDots;
             case 'smooth':
@@ -1781,15 +1747,12 @@ class _StatsPageState extends State<StatsPage> {
                     style: _trendStyle,
                     // 选了多个文件夹时画多条线
                     series: win.series,
-                    fromZero: _fromZero,
                     showDots: _showDots,
                     smooth: _smooth,
                     showGrid: _showGrid,
-                    zoomY: _zoomY,
-                    viewYStart: _viewYStart,
                   ),
                 ),
-                _zoomBar(c, win.axis, series: win.series, metric: _metric),
+                _zoomBar(c, win.axis),
               ],
             ),
     );
@@ -1888,15 +1851,12 @@ class _StatsPageState extends State<StatsPage> {
               metric: _cumMetric,
               style: _cumStyle,
               series: win.series,
-              fromZero: _fromZero,
               showDots: _showDots,
               smooth: _smooth,
               showGrid: _showGrid,
-              zoomY: _zoomY,
-              viewYStart: _viewYStart,
             ),
           ),
-          _zoomBar(c, win.axis, series: win.series, metric: _cumMetric),
+          _zoomBar(c, win.axis),
         ],
       ),
     );
@@ -1928,21 +1888,17 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   Widget _heatmapCard(AppColors c) {
-    final win = _heatWindow.resolve(DateTime.now());
+    // 窗口跟着页面顶部的时间范围走，卡片上只如实报出实际画的是哪一段
+    final win = heatWindow(
+      rangeFrom: _query.from,
+      rangeTo: _query.to,
+      dataFrom: _densityFrom,
+      dataTo: _densityTo,
+      now: DateTime.now(),
+    );
     String d(DateTime t) => '${t.year}.${t.month}';
     return _Card(
       title: '发布热力图',
-      controls: <Widget>[
-        _MiniSelect<HeatWindow>(
-          value: _heatWindow,
-          options: HeatWindow.values,
-          labelOf: (v) => v.label,
-          onChanged: (v) {
-            setState(() => _heatWindow = v);
-            _persist();
-          },
-        ),
-      ],
       trailing: Text(
         '${d(win.from)} – ${d(win.to)}',
         style: AppText.caption1.copyWith(color: c.tertiaryLabel),
@@ -1989,21 +1945,11 @@ class _StatsPageState extends State<StatsPage> {
 
   Widget _lengthCard(AppColors c) {
     final total = _lengths.fold<int>(0, (s, b) => s + b.count);
-    final y = trendYRange(
-      values: <double>[
-        for (final b in _lengths)
-          _lenPercent
-              ? (total == 0 ? 0 : b.count / total * 100)
-              : b.count.toDouble(),
-      ],
-      fromZero: true,
-      zoomY: _lenZoomY,
-      viewYStart: _lenViewYStart,
-    );
     return _Card(
       title: '篇幅分布',
       controls: <Widget>[
-        // X 轴：换分档。日记和长文集共用一套档位，必然有一半是空的
+        // 只留 X 轴：换分档。日记和长文集共用一套档位，必然有一半是空的。
+        // 纵轴不给任何调节 —— 柱状图从 0 起是它唯一的诚实画法。
         _MiniSelect<LengthScale>(
           value: _lenScale,
           options: LengthScale.values,
@@ -2011,18 +1957,12 @@ class _StatsPageState extends State<StatsPage> {
           onChanged: (v) {
             setState(() => _lenScale = v);
             _persist();
-            _reload();
-          },
-        ),
-        // Y 轴：篇数 / 占比
-        _ChartStyleButton<bool>(
-          value: _lenPercent,
-          options: const <bool>[false, true],
-          labelOf: (v) => v ? '占比' : '篇数',
-          iconOf: (v) => v ? Icons.percent_rounded : Icons.tag_rounded,
-          onChanged: (v) {
-            setState(() => _lenPercent = v);
-            _persist();
+            // **只重算这一个直方图**。
+            //
+            // 以前这里调的是 _reload() —— 换个分档把整页十来个聚合全跑一遍
+            // （含全库词频和文件夹逐条取数），在真实库上就是一段明显的
+            // 同步卡顿：点完界面不动了，还以为死了。分档只影响这一张图。
+            _reloadLengths();
           },
         ),
       ],
@@ -2030,34 +1970,7 @@ class _StatsPageState extends State<StatsPage> {
         '$total 篇',
         style: AppText.caption1.copyWith(color: c.tertiaryLabel),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          LengthHistogram(
-            buckets: _lengths,
-            zoomY: _lenZoomY,
-            viewYStart: _lenViewYStart,
-            asPercent: _lenPercent,
-          ),
-          Padding(
-            key: const Key('stats-length-zoom-bar'),
-            padding: const EdgeInsets.only(top: 2),
-            child: _zoomRow(
-              c,
-              '纵轴',
-              _lenZoomY,
-              _lenViewYStart,
-              () => _stepLenZoomY(-1),
-              () => _stepLenZoomY(1),
-              (v) => setState(() => _lenViewYStart = v),
-              _lenPercent
-                  ? '${y.lo.toStringAsFixed(1)}% – ${y.hi.toStringAsFixed(1)}%'
-                  : '${fmtNum(y.lo)} – ${fmtNum(y.hi)}',
-              'len-y',
-            ),
-          ),
-        ],
-      ),
+      child: LengthHistogram(buckets: _lengths),
     );
   }
 
@@ -2332,6 +2245,7 @@ class _Card extends StatelessWidget {
 
 class _Stat extends StatelessWidget {
   const _Stat({
+    super.key,
     required this.label,
     required this.value,
     required this.color,
@@ -2854,68 +2768,6 @@ class _FilterButtonState extends State<_FilterButton> {
   }
 }
 
-class _Chip extends StatelessWidget {
-  const _Chip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.icon,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  final IconData? icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final tint = c.tint;
-    return Pressable(
-      onTap: onTap,
-      scale: 0.95,
-      child: AnimatedContainer(
-        duration: AppMotion.fast,
-        curve: AppMotion.enter,
-        margin: const EdgeInsets.only(right: 7),
-        // 收紧内边距：六个时间档位本来就不长，之前的胶囊太占地方
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: selected ? tint : c.secondaryBackground,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: selected
-                ? Colors.transparent
-                : (c.isDark
-                    ? c.separator.withValues(alpha: 0.5)
-                    : const Color(0x14000000)),
-            width: 0.5,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(
-                icon,
-                size: 13,
-                color: selected ? Colors.white : c.tertiaryLabel,
-              ),
-              const SizedBox(width: 5),
-            ],
-            Text(
-              label,
-              style: AppText.footnote.copyWith(
-                color: selected ? Colors.white : c.secondaryLabel,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 /// 卡片里的小下拉（粒度、指标）。
 class _MiniSelect<T> extends StatelessWidget {
@@ -2951,7 +2803,9 @@ class _MiniSelect<T> extends StatelessWidget {
               ),
           ],
         );
-        if (picked != null) onChanged(picked);
+        // 等菜单关掉的这段时间里，这张卡片可能已经被滚出屏幕
+        // （模块列表是懒加载的 sliver），那就别再往下走
+        if (picked != null && context.mounted) onChanged(picked);
       },
       scale: 0.96,
       child: Container(
@@ -3049,7 +2903,8 @@ class _ChartStyleButton<T> extends StatelessWidget {
               ),
           ],
         );
-        if (picked != null) onChanged(picked);
+        // 同 _MiniSelect：卡片可能已经不在树上了
+        if (picked != null && context.mounted) onChanged(picked);
       },
       scale: 0.9,
       child: Tooltip(

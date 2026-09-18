@@ -137,4 +137,72 @@ void main() {
     expect(state.repo.getSetting('stats.collectionIds'), isNotEmpty);
     expect(state.repo.getSetting('stats.collectionIds'), contains(','));
   });
+
+  /// 概览卡片里某个数字（第一行是标签，第二行才是值）。
+  String statValue(WidgetTester tester, String key) {
+    final texts = tester
+        .widgetList<Text>(
+          find.descendant(of: find.byKey(Key(key)), matching: find.byType(Text)),
+        )
+        .map((t) => t.data)
+        .whereType<String>()
+        .toList();
+    return texts.length < 2 ? '' : texts[1];
+  }
+
+  /// 打开筛选 → 只勾一个 → 确定。
+  Future<void> pickOnly(WidgetTester tester, String name) async {
+    await tester.tap(find.text('全部文件夹'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('全部（不筛选）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(name).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('改文件夹筛选，概览**当场**就变（不是等下次进页面）', (tester) async {
+    await seed();
+    await pumpStats(tester);
+
+    // 三个文件夹各 6 篇 = 18 篇
+    expect(statValue(tester, 'ov-notes'), '18');
+
+    await pickOnly(tester, '文集乙');
+
+    // 这条盯的就是用户报的那个 bug：_reload() 漏了 _overview，
+    // 图表全跟着筛选变了，概览还挂着 18
+    expect(statValue(tester, 'ov-notes'), '6');
+    expect(find.textContaining('只看「文集乙」'), findsOneWidget);
+  });
+
+  testWidgets('概览的总字数也跟着筛选走', (tester) async {
+    await seed();
+    await pumpStats(tester);
+    final all = statValue(tester, 'ov-chars');
+    expect(all, isNotEmpty);
+
+    await pickOnly(tester, '文集丙');
+
+    expect(statValue(tester, 'ov-chars'), isNot(all));
+    expect(statValue(tester, 'ov-notes'), '6');
+  });
+
+  testWidgets('取消筛选后概览恢复成全库', (tester) async {
+    await seed();
+    await pumpStats(tester);
+
+    await pickOnly(tester, '文集甲');
+    expect(statValue(tester, 'ov-notes'), '6');
+
+    await tester.tap(find.text('文集甲').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('全部（不筛选）'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确定'));
+    await tester.pumpAndSettle();
+
+    expect(statValue(tester, 'ov-notes'), '18');
+  });
 }

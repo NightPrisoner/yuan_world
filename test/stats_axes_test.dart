@@ -20,49 +20,62 @@ void main() {
   group('热力图窗口', () {
     final now = DateTime(2026, 5, 20, 14, 30);
 
-    test('每个档位都给得出合法的起止（含首尾、首不晚于尾）', () {
-      for (final w in HeatWindow.values) {
-        final r = w.resolve(now);
-        expect(r.from.isBefore(r.to), isTrue, reason: '${w.label} 起止反了');
-        // 都是"当天"零点，不带时分秒 —— 否则补周的时候会错开一天
-        expect(<int>[r.from.hour, r.from.minute, r.from.second], <int>[0, 0, 0]);
-        expect(<int>[r.to.hour, r.to.minute, r.to.second], <int>[0, 0, 0]);
+    test('有明确时间范围就用范围本身（起止都截到当天）', () {
+      final w = heatWindow(
+        rangeFrom: DateTime(2026, 2, 20, 9),
+        rangeTo: DateTime(2026, 5, 20, 22),
+        now: now,
+      );
+      expect(w.from, DateTime(2026, 2, 20));
+      expect(w.to, DateTime(2026, 5, 20));
+    });
+
+    test('只有起始就用数据的末尾收尾', () {
+      final w = heatWindow(
+        rangeFrom: DateTime(2026, 1, 1),
+        dataTo: DateTime(2026, 3, 8, 15),
+        now: now,
+      );
+      expect(w.from, DateTime(2026, 1, 1));
+      expect(w.to, DateTime(2026, 3, 8));
+    });
+
+    test('"全部"时用数据的实际跨度，不拖到今天', () {
+      final w = heatWindow(
+        dataFrom: DateTime(2024, 3, 2, 8),
+        dataTo: DateTime(2026, 1, 9, 20),
+        now: now,
+      );
+      expect(w.from, DateTime(2024, 3, 2));
+      expect(w.to, DateTime(2026, 1, 9));
+      expect(w.to.isBefore(now), isTrue, reason: '不该补到今天');
+    });
+
+    test('什么都没有时退回最近一年', () {
+      final w = heatWindow(now: now);
+      expect(w.to, DateTime(2026, 5, 20));
+      expect(w.to.difference(w.from).inDays, 364);
+    });
+
+    test('起止颠倒了也不崩，退回最近一年', () {
+      final w = heatWindow(
+        rangeFrom: DateTime(2026, 5, 1),
+        rangeTo: DateTime(2026, 1, 1),
+        now: now,
+      );
+      expect(w.from.isBefore(w.to), isTrue);
+      expect(w.to, DateTime(2026, 5, 20));
+    });
+
+    test('去掉时分秒，免得补周的时候错开一天', () {
+      final w = heatWindow(
+        dataFrom: DateTime(2025, 12, 31, 23, 59),
+        dataTo: DateTime(2026, 1, 1, 0, 1),
+        now: now,
+      );
+      for (final t in <DateTime>[w.from, w.to]) {
+        expect(<int>[t.hour, t.minute, t.second], <int>[0, 0, 0]);
       }
-    });
-
-    test('今年 = 1 月 1 日到今天', () {
-      final r = HeatWindow.ytd.resolve(now);
-      expect(r.from, DateTime(2026, 1, 1));
-      expect(r.to, DateTime(2026, 5, 20));
-    });
-
-    test('去年 = 整年，且不包含今年', () {
-      final r = HeatWindow.lastYear.resolve(now);
-      expect(r.from, DateTime(2025, 1, 1));
-      expect(r.to, DateTime(2025, 12, 31));
-      expect(r.to.isBefore(DateTime(2026, 1, 1)), isTrue);
-    });
-
-    test('最近一年约 365 天', () {
-      final r = HeatWindow.y1.resolve(now);
-      expect(r.to.difference(r.from).inDays, 364);
-    });
-
-    test('窗口长度递增：三个月 < 半年 < 一年', () {
-      int days(HeatWindow w) =>
-          w.resolve(now).to.difference(w.resolve(now).from).inDays;
-      expect(days(HeatWindow.m3), lessThan(days(HeatWindow.m6)));
-      expect(days(HeatWindow.m6), lessThan(days(HeatWindow.y1)));
-    });
-
-    test('跨年边界不会算反（1 月 1 日看去年）', () {
-      final jan1 = DateTime(2026, 1, 1);
-      final r = HeatWindow.lastYear.resolve(jan1);
-      expect(r.from, DateTime(2025, 1, 1));
-      expect(r.to, DateTime(2025, 12, 31));
-      // 今年档位在 1 月 1 日就只有一天
-      final ytd = HeatWindow.ytd.resolve(jan1);
-      expect(ytd.from, ytd.to);
     });
   });
 
@@ -193,50 +206,58 @@ void main() {
     addAt(DateTime(now.year - 2, 3, 5), count: 1, chars: 25000);
   }
 
-  testWidgets('热力图有窗口选择器，换档位会改卡片上的起止', (tester) async {
+  testWidgets('热力图没有自己的时间选择器（跟着第一行走）', (tester) async {
     seed();
     await pumpStats(tester);
 
     expect(find.text('发布热力图'), findsOneWidget);
-    expect(find.text('最近一年'), findsWidgets);
-
-    // 切到「去年」——卡片 trailing 的起止要跟着变
-    await tester.tap(find.text('最近一年').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('去年').last);
-    await tester.pumpAndSettle();
-
-    final y = DateTime.now().year - 1;
-    expect(find.text('$y.1 – $y.12'), findsOneWidget);
-    expect(state.repo.getSetting('stats.heatWindow'), 'lastYear');
+    // 卡片上不该再有窗口下拉
+    expect(find.text('最近一年'), findsNothing);
+    expect(find.text('去年'), findsNothing);
+    expect(state.repo.getSetting('stats.heatWindow'), isNull);
   });
 
-  testWidgets('热力图数据不带页面时间范围（换窗口还能看到老数据）', (tester) async {
+  testWidgets('热力图窗口跟着页面时间范围变', (tester) async {
     seed();
     await pumpStats(tester);
 
-    // 页面范围切成「近三个月」，热力图窗口仍能看到去年
-    await tester.tap(find.text('全部').last);
+    String heatSpan() {
+      // 卡片 trailing 是"YYYY.M – YYYY.M"，找热力图卡片里的那一个
+      final card = find.ancestor(
+        of: find.text('发布热力图'),
+        matching: find.byType(Column),
+      );
+      final texts = tester
+          .widgetList<Text>(
+            find.descendant(of: card.last, matching: find.byType(Text)),
+          )
+          .map((t) => t.data)
+          .whereType<String>()
+          .where((s) => s.contains(' – '))
+          .toList();
+      return texts.isEmpty ? '' : texts.first;
+    }
+
+    // 切到「近 3 个月」
+    await tester.tap(find.text('全部').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('近 3 个月').last);
     await tester.pumpAndSettle();
 
-    // 找到热力图卡片里的"共 N 篇有发布记录"——不该是 0
-    final footer = tester
-        .widgetList<Text>(find.byType(Text))
-        .map((t) => t.data)
-        .whereType<String>()
-        .firstWhere((s) => s.contains('篇有发布记录'), orElse: () => '');
-    expect(footer, isNotEmpty);
-    expect(footer, isNot(contains('共 0 篇')));
+    final now = DateTime.now();
+    final from = DateTime(now.year, now.month - 2, 1);
+    expect(
+      heatSpan(),
+      '${from.year}.${from.month} – ${now.year}.${now.month}',
+      reason: '窗口该跟着范围收窄',
+    );
   });
 
-  testWidgets('篇幅分布：X 轴能换分档，Y 轴能换单位', (tester) async {
+  testWidgets('篇幅分布：X 轴能换分档', (tester) async {
     seed();
     await pumpStats(tester);
 
     expect(find.text('篇幅分布'), findsOneWidget);
-    // 默认标准分档
     expect(find.text('标准分档'), findsWidgets);
 
     await tester.tap(find.text('标准分档').first);
@@ -244,47 +265,26 @@ void main() {
     await tester.tap(find.text('细分档').last);
     await tester.pumpAndSettle();
     expect(state.repo.getSetting('stats.lenScale'), 'fine');
-
-    // Y 轴换占比。按钮上只有图标，标签在弹出菜单里
-    await tester.tap(find.byIcon(Icons.tag_rounded));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('占比').last);
-    await tester.pumpAndSettle();
-    expect(state.repo.getSetting('stats.lenPercent'), '1');
-
-    // 纵轴读数带上了百分号 —— 证明真的换单位了，不只是按钮变色
-    final texts = tester
-        .widgetList<Text>(find.byType(Text))
-        .map((t) => t.data)
-        .whereType<String>();
-    expect(texts.any((s) => s.contains('%') && s.contains(' – ')), isTrue);
   });
 
-  testWidgets('篇幅分布：纵轴能放大缩小，倍率到顶不越界', (tester) async {
+  testWidgets('篇幅分布：没有任何纵轴调节（换分档也不该卡住）', (tester) async {
     seed();
     await pumpStats(tester);
 
-    final bar = find.byKey(const Key('stats-length-zoom-bar'));
-    expect(bar, findsOneWidget);
+    expect(find.byKey(const Key('stats-length-zoom-bar')), findsNothing);
+    // 篇数/占比那个按钮没了
+    expect(find.byIcon(Icons.percent_rounded), findsNothing);
+    expect(find.text('纵轴'), findsNothing);
 
-    Finder btn(IconData icon) =>
-        find.descendant(of: bar, matching: find.byIcon(icon));
-
-    await tester.tap(btn(Icons.add_rounded));
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: bar, matching: find.text('2×')),
-      findsOneWidget,
-    );
-
-    for (var i = 0; i < 10; i++) {
-      await tester.tap(btn(Icons.add_rounded));
+    // 换分档之后页面还得是活的：连着换三次，每次都不能抛异常
+    for (final label in <String>['细分档', '粗分档', '标准分档']) {
+      await tester.tap(find.textContaining('分档').first);
       await tester.pumpAndSettle();
+      await tester.tap(find.text(label).last);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '换成 $label 时抛异常了');
     }
-    expect(
-      find.descendant(of: bar, matching: find.text('12×')),
-      findsOneWidget,
-    );
+    expect(state.repo.getSetting('stats.lenScale'), 'normal');
   });
 
   testWidgets('篇幅分布：换分档之后档位标签跟着变', (tester) async {
