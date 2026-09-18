@@ -654,16 +654,55 @@ class StatsRepository {
   /// 否则一个用来分组的父文件夹永远是 0，对比毫无意义。
   List<CollectionComparison> compareCollections({StatsQuery query = StatsQuery.empty}) {
     final hideFlag = query.hiddenOnly ? 1 : 0;
-    final tops = _d.select(
-      'SELECT id, name, color FROM collections '
-      'WHERE is_hidden = $hideFlag AND deleted_at IS NULL AND parent_id IS NULL '
-      'ORDER BY sort_order ASC, name ASC',
-    );
+
+    // **时间范围也得跟着走**。以前这块只认隐私空间，旁边所有卡片都变成
+    // "近一年"了，它还照算全部 —— 数字对不上，看着就是坏的。
+    final range = <String>[];
+    if (query.from != null) {
+      range.add('${_ts('n')} >= ${query.from!.millisecondsSinceEpoch}');
+    }
+    if (query.to != null) {
+      final end = DateTime(query.to!.year, query.to!.month, query.to!.day + 1);
+      range.add('${_ts('n')} < ${end.millisecondsSinceEpoch}');
+    }
+    final rangeSql = range.isEmpty ? '' : ' AND ${range.join(' AND ')}';
+
+    // 比谁：选了文件夹就逐个比这几个，没选才比全部顶级文件夹。
+    // 不这么切的话，用户在别处筛选了半天，只有这块还在列全库，
+    // 一眼看上去就是"筛选没生效"。
+    final targets = <({int id, String name, int color})>[];
+    if (query.collectionIds.isNotEmpty) {
+      for (final id in query.collectionIds) {
+        final r = _d.select(
+          'SELECT id, name, color FROM collections '
+          'WHERE id = ? AND is_hidden = $hideFlag AND deleted_at IS NULL',
+          <Object?>[id],
+        );
+        if (r.isEmpty) continue;
+        targets.add((
+          id: id,
+          name: r.first['name'] as String,
+          color: r.first['color'] as int,
+        ));
+      }
+    } else {
+      final tops = _d.select(
+        'SELECT id, name, color FROM collections '
+        'WHERE is_hidden = $hideFlag AND deleted_at IS NULL AND parent_id IS NULL '
+        'ORDER BY sort_order ASC, name ASC',
+      );
+      for (final t in tops) {
+        targets.add((
+          id: t['id'] as int,
+          name: t['name'] as String,
+          color: t['color'] as int,
+        ));
+      }
+    }
 
     final out = <CollectionComparison>[];
-    for (final t in tops) {
-      final id = t['id'] as int;
-      final ids = <int>[id, ..._descendants(id)];
+    for (final t in targets) {
+      final ids = <int>[t.id, ..._descendants(t.id)];
       final r = _d.select('''
         SELECT COUNT(*) AS cnt,
                IFNULL(SUM(n.char_count), 0) AS chars,
@@ -671,13 +710,13 @@ class StatsRepository {
                MAX(${_ts('n')}) AS last_at
         FROM notes n
         WHERE n.is_archived = 0 AND n.deleted_at IS NULL AND n.is_hidden = $hideFlag
-          AND n.collection_id IN (${ids.join(',')})
+          AND n.collection_id IN (${ids.join(',')})$rangeSql
       ''').first;
 
       out.add(CollectionComparison(
-        id: id,
-        name: t['name'] as String,
-        color: t['color'] as int,
+        id: t.id,
+        name: t.name,
+        color: t.color,
         notes: r['cnt'] as int,
         chars: r['chars'] as int,
         images: r['images'] as int,
@@ -687,27 +726,31 @@ class StatsRepository {
       ));
     }
 
-    // 未分类也算一个可比对象，否则总数对不上会让人困惑
-    final orphan = _d.select('''
-      SELECT COUNT(*) AS cnt,
-             IFNULL(SUM(char_count), 0) AS chars,
-             IFNULL(SUM(image_count), 0) AS images,
-             MAX(${_ts('n')}) AS last_at
-      FROM notes n
-      WHERE n.is_archived = 0 AND n.deleted_at IS NULL AND n.is_hidden = $hideFlag AND n.collection_id IS NULL
-    ''').first;
-    if ((orphan['cnt'] as int) > 0) {
-      out.add(CollectionComparison(
-        id: -1,
-        name: '未分类',
-        color: 0xFF94A3B8,
-        notes: orphan['cnt'] as int,
-        chars: orphan['chars'] as int,
-        images: orphan['images'] as int,
-        lastAt: orphan['last_at'] == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(orphan['last_at'] as int),
-      ));
+    // 未分类也算一个可比对象，否则总数对不上会让人困惑。
+    // 但用户明确勾了文件夹时就不掺进来了 —— 那不在他要看的范围里。
+    if (query.collectionIds.isEmpty) {
+      final orphan = _d.select('''
+        SELECT COUNT(*) AS cnt,
+               IFNULL(SUM(char_count), 0) AS chars,
+               IFNULL(SUM(image_count), 0) AS images,
+               MAX(${_ts('n')}) AS last_at
+        FROM notes n
+        WHERE n.is_archived = 0 AND n.deleted_at IS NULL AND n.is_hidden = $hideFlag
+          AND n.collection_id IS NULL$rangeSql
+      ''').first;
+      if ((orphan['cnt'] as int) > 0) {
+        out.add(CollectionComparison(
+          id: -1,
+          name: '未分类',
+          color: 0xFF94A3B8,
+          notes: orphan['cnt'] as int,
+          chars: orphan['chars'] as int,
+          images: orphan['images'] as int,
+          lastAt: orphan['last_at'] == null
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(orphan['last_at'] as int),
+        ));
+      }
     }
 
     out.sort((a, b) => b.notes.compareTo(a.notes));

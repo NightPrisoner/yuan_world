@@ -40,6 +40,27 @@ class TrendSeries {
   final List<TrendPoint> points;
 }
 
+/// 按缩放倍数算出可视窗口的下标区间。
+///
+/// **裁在调用方做，不在这里**：切完之后 `TrendChart` 收到的就是一段普通数据，
+/// X 轴刻度、Y 轴范围全都是照常算的 —— 放大看某一小段时 Y 轴会自动重新
+/// 撑开，那一段的高低差才看得出来。图表本身不用知道有"缩放"这回事。
+({int start, int end}) trendWindow(int n, double zoom, double viewStart) {
+  if (n <= 2 || zoom <= 1) return (start: 0, end: n);
+  // 至少留 2 个点，否则画不出线
+  final span = math.max(2, (n / zoom).ceil());
+  final maxStart = math.max(0, n - span);
+  final start = (viewStart * maxStart).round().clamp(0, maxStart);
+  return (start: start, end: math.min(n, start + span));
+}
+
+/// 按下标区间切片；越界就返回能取到的部分。
+List<T> sliceRange<T>(List<T> src, int start, int end) {
+  final s = math.min(math.max(start, 0), src.length);
+  final e = math.min(math.max(end, s), src.length);
+  return s >= e ? <T>[] : src.sublist(s, e);
+}
+
 class TrendChart extends StatelessWidget {
   const TrendChart({
     super.key,
@@ -332,11 +353,14 @@ class TrendChart extends StatelessWidget {
                       color: s.color,
                       // 多线默认不画点（会糊成一团），但用户要的话就给
                       dotData: FlDotData(
-                        show: showDots && s.points.length <= 24,
+                        show: showDots && s.points.length <= 30,
+                        // 半径 3 太秀气 —— 线宽 2.2 直接把它盖住了，
+                        // 用户的原话是"显示数据点好像没什么变化"。
+                        // 加粗 + 描边，点才真的看得见。
                         getDotPainter: (spot, _, _, _) => FlDotCirclePainter(
-                          radius: 3,
+                          radius: 3.8,
                           color: s.color,
-                          strokeWidth: 1.5,
+                          strokeWidth: 2,
                           strokeColor: c.secondaryBackground,
                         ),
                       ),
@@ -405,11 +429,13 @@ class TrendChart extends StatelessWidget {
             barWidth: 2.4,
             color: c.tint,
             dotData: FlDotData(
-              show: showDots && points.length <= 24,
+              show: showDots && points.length <= 30,
+              // 线宽 2.4、点半径 3 的时候点几乎被线吃掉，
+              // 加粗描边之后才有"数据点"的样子
               getDotPainter: (spot, _, _, _) => FlDotCirclePainter(
-                radius: 3,
+                radius: 4,
                 color: c.tint,
-                strokeWidth: 1.5,
+                strokeWidth: 2,
                 strokeColor: c.secondaryBackground,
               ),
             ),

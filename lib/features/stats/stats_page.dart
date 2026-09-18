@@ -307,6 +307,10 @@ class _StatsPageState extends State<StatsPage> {
     final stats = _stats ??= StatsRepository(state.db);
     final q = _query;
 
+    // 口径变了，缓存必须作废
+    _trendSeriesCache = null;
+    _cumulativeSeriesCache = null;
+
     setState(() {
       _overview = state.repo.overview(hiddenOnly: state.privacyMode);
       // 磁盘扫描比较慢（要遍历整个图片目录），只在加载时做一次
@@ -334,6 +338,8 @@ class _StatsPageState extends State<StatsPage> {
     final stats = _stats;
     if (stats == null) return;
     final q = _query;
+    _trendSeriesCache = null;
+    _cumulativeSeriesCache = null;
     setState(() {
       _trend = stats.trend(query: q, granularity: _granularity);
       _cumulative = stats.cumulative(query: q, granularity: _granularity);
@@ -395,14 +401,23 @@ class _StatsPageState extends State<StatsPage> {
     _reload();
   }
 
+  /// 趋势的多序列。**带缓存** ——
+  ///
+  /// 这两个 getter 每次都会查库。缩放条一拖就是每帧一次重建，
+  /// 不缓存的话拖一下要打好几十轮 SQL，文件夹一多直接卡住。
+  /// 只在 `_load` / `_reload` 里清掉，那才是口径真的变了的时候。
+  List<TrendSeries>? _trendSeriesCache;
+  List<TrendSeries>? _cumulativeSeriesCache;
+
+  List<TrendSeries> get _trendSeries =>
+      _trendSeriesCache ??= _seriesFor(
+        (q) => _stats!.trend(query: q, granularity: _granularity),
+        (p) => p.notes,
+      );
+
   /// 每个选区一条序列。选了 N 个文件夹就返回 N 条。
   ///
   /// 单选/不选时只有一条 —— 走的还是原来的路径，不影响原来那些图。
-  List<TrendSeries> get _trendSeries => _seriesFor(
-    (q) => _stats!.trend(query: q, granularity: _granularity),
-    (p) => p.notes,
-  );
-
   /// 按当前选中的文件夹逐条取数。
   ///
   /// 抽成泛型是因为趋势和累计的取数函数签名一样、
@@ -474,10 +489,12 @@ class _StatsPageState extends State<StatsPage> {
           images: p.images as int,
         );
 
-  /// 累计增长的多序列版本。
-  ///
+  /// 累计增长的多序列版本（**带缓存**，原因同 [_trendSeries]）。
+  List<TrendSeries> get _cumulativeSeries =>
+      _cumulativeSeriesCache ??= _computeCumulativeSeries();
+
   /// 和趋势一样按文件夹逐条取 —— 累计点是另一种类型，得转一下。
-  List<TrendSeries> get _cumulativeSeries {
+  List<TrendSeries> _computeCumulativeSeries() {
     final stats = _stats;
     if (stats == null) return const <TrendSeries>[];
 
@@ -813,8 +830,6 @@ class _StatsPageState extends State<StatsPage> {
   // ── 顶部栏 ──────────────────────────────────────────────────────────────
 
   Widget _header(AppColors c) {
-    final collections = context.watch<AppState>().collections;
-
     return Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
@@ -890,19 +905,8 @@ class _StatsPageState extends State<StatsPage> {
                 child: Builder(
                   builder: (btnCtx) => _FilterButton(
                     icon: Icons.folder_rounded,
-                    label: _collectionId == null
-                        ? '全部文件夹'
-                        : _collectionName(_collectionId!),
-                    accent: _collectionId == null
-                        ? c.tint
-                        : Color(
-                            collections
-                                .firstWhere(
-                                  (x) => x.id == _collectionId,
-                                  orElse: () => collections.first,
-                                )
-                                .color,
-                          ),
+                    label: _folderLabel,
+                    accent: _folderAccent(c),
                     onTap: () => _pickCollectionMenu(btnCtx),
                   ),
                 ),
@@ -934,20 +938,53 @@ class _StatsPageState extends State<StatsPage> {
   String _fmtDay(DateTime? d) =>
       d == null ? '自定义' : '${d.year}.${d.month}.${d.day}';
 
-  String _rangeSubtitle() {
-    final o = _overview;
-    if (o == null || o.noteCount == 0) return '还没有数据';
-    final scope = _collectionId == null
-        ? ''
-        : ' · 只看「${_collectionName(_collectionId!)}」';
-    if (_range == StatsRange.custom) {
-      return '${_fmtDay(_from)} – ${_fmtDay(_to)}$scope';
+  /// 筛选按钮上的文字。
+  ///
+  /// 多选时不能再写"全部文件夹" —— 用户明明勾了两个，
+  /// 按钮却说全部，这个谎话比不显示还糟。
+  String get _folderLabel {
+    if (_collectionIds.isEmpty) return '全部文件夹';
+    if (_collectionIds.length == 1) return _collectionName(_collectionIds.first);
+    return '已选 ${_collectionIds.length} 个文件夹';
+  }
+
+  /// 筛选按钮的点色：单选跟文件夹自己的颜色，多选/全选统一用主色。
+  Color _folderAccent(AppColors c) {
+    if (_collectionIds.length != 1) return c.tint;
+    final all = context.read<AppState>().collections;
+    for (final x in all) {
+      if (x.id == _collectionIds.first) return Color(x.color);
     }
-    final first = o.firstAt;
-    final last = o.lastAt;
-    if (first == null || last == null) return '共 ${o.noteCount} 篇';
+    // 文件夹被删了但设置里还留着 id —— 兜底成主色，不要抛
+    return c.tint;
+  }
+
+  String _rangeSubtitle() {
+    final stats = _stats;
+    final o = _overview;
+    if (stats == null || o == null) return '还没有数据';
+
+    // **篇数必须是筛选后的**。以前这里永远显示全库总数 ——
+    // 勾了 3 个文件夹之后摘要还写着"共 76 篇"，而下面的图只有 12 篇，
+    // 用户会以为筛选坏了。趋势点的合计恰好就是范围内的篇数。
+    final scoped = _trend.fold<int>(0, (s, p) => s + p.notes);
+    if (scoped == 0) return '还没有数据';
+
+    final scope = switch (_collectionIds.length) {
+      0 => '',
+      1 => ' · 只看「${_collectionName(_collectionIds.first)}」',
+      final n => ' · 对比 $n 个文件夹',
+    };
+    if (_range == StatsRange.custom) {
+      return '${_fmtDay(_from)} – ${_fmtDay(_to)} · 共 $scoped 篇$scope';
+    }
+    // 起止也跟着范围走：选了"近一年"，头一行就不该从 2014 年开始报
+    final span = stats.dataSpan(query: _query);
+    final first = span.first;
+    final last = span.last;
+    if (first == null || last == null) return '共 $scoped 篇$scope';
     String d(DateTime t) => '${t.year}.${t.month}';
-    return '${d(first)} – ${d(last)} · 共 ${o.noteCount} 篇$scope';
+    return '${d(first)} – ${d(last)} · 共 $scoped 篇$scope';
   }
 
   String _collectionName(int id) {
@@ -961,10 +998,12 @@ class _StatsPageState extends State<StatsPage> {
 
   Widget _compareCard(AppColors c) {
     if (_comparisons.length < 2) {
-      return _Card(
-        title: '文件夹对比',
-        child: _empty(c, '至少要有两个文件夹才能对比'),
-      );
+      // 只勾了一个文件夹时，问题不是"库里没有两个文件夹"，
+      // 而是"你还差一个没勾" —— 同一句话会把人指错方向
+      final msg = _collectionIds.length == 1
+          ? '再选一个文件夹就能对比'
+          : '至少要有两个文件夹才能对比';
+      return _Card(title: '文件夹对比', child: _empty(c, msg));
     }
 
     final maxNotes = _comparisons.map((e) => e.notes).reduce(math.max);
@@ -1337,6 +1376,141 @@ class _StatsPageState extends State<StatsPage> {
   TrendMetric _cumMetric = TrendMetric.chars;
   TrendStyle _cumStyle = TrendStyle.area;
 
+  /// 缩放档位。连续滑块点不准，给整数档。
+  static const List<double> _zoomLevels = <double>[1, 2, 3, 5, 8, 12];
+  double _zoom = 1;
+
+  /// 可视窗口的起点（0..1）。**不持久化** ——
+  /// 平移是个临时动作，下次打开回到开头比停在上次那个位置更符合预期。
+  double _viewStart = 0;
+
+  void _stepZoom(int dir) {
+    final cur = math.max(0, _zoomLevels.indexOf(_zoom));
+    final next = (cur + dir).clamp(0, _zoomLevels.length - 1);
+    if (next == cur) return;
+    setState(() {
+      _zoom = _zoomLevels[next];
+      // 回到 1× 时窗口本来就是全量，不清掉的话下次放大位置会很怪
+      if (_zoom <= 1) _viewStart = 0;
+    });
+    _persist();
+  }
+
+  /// 把一条轴和它的序列**一起**裁到可视窗口。
+  ///
+  /// 两个都得裁：只裁轴的话序列还是全长，多线模式下 `spots` 的下标 0
+  /// 就成了全量的开头，画出来是窗口外的数据。
+  /// 裁完交给 TrendChart，Y 轴范围自然跟着窗口重算 ——
+  /// 放大到某几个月时，那几个月之间的高低差才撑得开。
+  ({List<TrendPoint> axis, List<TrendSeries> series}) _windowTrend(
+    List<TrendPoint> axisAll,
+    List<TrendSeries> seriesAll,
+  ) {
+    if (_zoom <= 1) return (axis: axisAll, series: seriesAll);
+    final w = trendWindow(axisAll.length, _zoom, _viewStart);
+    return (
+      axis: sliceRange(axisAll, w.start, w.end),
+      series: <TrendSeries>[
+        for (final s in seriesAll)
+          TrendSeries(
+            label: s.label,
+            color: s.color,
+            points: sliceRange(s.points, w.start, w.end),
+          ),
+      ],
+    );
+  }
+
+  /// 图表下方的缩放条：档位按钮 + 平移滑块 + 当前可视时段。
+  ///
+  /// 放在图下面而不是塞进右上角的菜单里 —— 缩放是个要**反复拖**的操作，
+  /// 藏进菜单会让它变成没人发现的功能。
+  Widget _zoomBar(AppColors c, List<TrendPoint> axis) {
+    final zoomed = _zoom > 1;
+    final first = axis.isEmpty ? null : axis.first.label;
+    final last = axis.isEmpty ? null : axis.last.label;
+    return Padding(
+      // 页面上别处也有"全部"字样（范围筛选），测试要能精确定位到这一条
+      key: const Key('stats-zoom-bar'),
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        children: <Widget>[
+          _zoomBtn(c, Icons.remove_rounded, zoomed, () => _stepZoom(-1), '缩小'),
+          SizedBox(
+            width: 40,
+            child: Text(
+              '${_zoom.toInt()}×',
+              textAlign: TextAlign.center,
+              style: AppText.caption1.copyWith(
+                color: zoomed ? c.tint : c.tertiaryLabel,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          _zoomBtn(
+            c,
+            Icons.add_rounded,
+            _zoom < _zoomLevels.last,
+            () => _stepZoom(1),
+            '放大',
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 13),
+              ),
+              child: Slider(
+                value: _viewStart.clamp(0.0, 1.0),
+                // 没放大时整段就是全部，滑它没有意义 —— 置灰而不是隐藏，
+                // 免得用户以为"这个图不能滑动"
+                onChanged: zoomed ? (v) => setState(() => _viewStart = v) : null,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          // 窄屏上时段文字会很长（"2024年3月 – 2026年1月"），
+          // 不夹住的话滑块会被挤成几像素宽，根本拖不动
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 130),
+            child: Text(
+              !zoomed
+                  ? '全部'
+                  : (first != null && last != null ? '$first – $last' : '—'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.caption2.copyWith(color: c.tertiaryLabel),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _zoomBtn(
+    AppColors c,
+    IconData icon,
+    bool enabled,
+    VoidCallback onTap,
+    String tip,
+  ) => Tooltip(
+    message: tip,
+    child: InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(7),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Icon(
+          icon,
+          size: 17,
+          color: enabled ? c.secondaryLabel : c.quaternaryLabel,
+        ),
+      ),
+    ),
+  );
+
   Widget _displayOptions(AppColors c) => Builder(
     builder: (btnCtx) => _IconMenuButton(
       icon: Icons.tune_rounded,
@@ -1400,6 +1574,11 @@ class _StatsPageState extends State<StatsPage> {
   );
 
   Widget _trendCard(AppColors c) {
+    // 空数据时不要去取序列 —— 那是真查库的
+    final ({List<TrendPoint> axis, List<TrendSeries> series}) win =
+        _trend.isEmpty
+        ? (axis: _trend, series: const <TrendSeries>[])
+        : _windowTrend(_trend, _trendSeries);
     return _Card(
       title: '写作趋势',
       controls: <Widget>[
@@ -1451,17 +1630,18 @@ class _StatsPageState extends State<StatsPage> {
                   // 多线对比时图例要占地方，配高一点
                   height: _trendSeries.length > 1 ? 250 : 210,
                   child: TrendChart(
-                    points: _trend,
+                    points: win.axis,
                     metric: _metric,
                     style: _trendStyle,
                     // 选了多个文件夹时画多条线
-                    series: _trendSeries,
+                    series: win.series,
                     fromZero: _fromZero,
                     showDots: _showDots,
                     smooth: _smooth,
                     showGrid: _showGrid,
                   ),
                 ),
+                _zoomBar(c, win.axis),
               ],
             ),
     );
@@ -1484,6 +1664,22 @@ class _StatsPageState extends State<StatsPage> {
       );
     }
     final last = _cumulative.last;
+    // 累计是单调递增的，放大看某一段同样有意义（看那段时间涨了多少）
+    final cumPoints = <TrendPoint>[
+      for (final p in _cumulative)
+        TrendPoint(
+          bucket: p.label,
+          label: p.label,
+          notes: p.notes,
+          chars: p.chars,
+          words: 0,
+          images: 0,
+        ),
+    ];
+    final ({List<TrendPoint> axis, List<TrendSeries> series}) win = _windowTrend(
+      cumPoints,
+      _cumulativeSeries,
+    );
     return _Card(
       title: '累计增长',
       controls: <Widget>[
@@ -1540,26 +1736,17 @@ class _StatsPageState extends State<StatsPage> {
           SizedBox(
             height: _cumulativeSeries.length > 1 ? 250 : 210,
             child: TrendChart(
-              points: <TrendPoint>[
-                for (final p in _cumulative)
-                  TrendPoint(
-                    bucket: p.label,
-                    label: p.label,
-                    notes: p.notes,
-                    chars: p.chars,
-                    words: 0,
-                    images: 0,
-                  ),
-              ],
+              points: win.axis,
               metric: _cumMetric,
               style: _cumStyle,
-              series: _cumulativeSeries,
+              series: win.series,
               fromZero: _fromZero,
               showDots: _showDots,
               smooth: _smooth,
               showGrid: _showGrid,
             ),
           ),
+          _zoomBar(c, win.axis),
         ],
       ),
     );
