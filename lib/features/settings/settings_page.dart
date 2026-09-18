@@ -12,7 +12,6 @@ import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/motion/apple_page_route.dart';
 import '../../core/theme/app_theme.dart';
-import '../../data/repositories/note_repository.dart';
 import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
@@ -559,27 +558,7 @@ class _VersionRowState extends State<_VersionRow> {
     if (_taps < kEggTapCount || !mounted) return;
     _taps = 0;
     HapticFeedback.mediumImpact();
-    await showVersionEgg(
-      context,
-      version: widget.version,
-      words: harvestCharacters(_recentTitles()),
-    );
-  }
-
-  /// 用户自己的笔记标题 —— 彩蛋里捡的就是这些字。
-  ///
-  /// 包在 try 里：彩蛋**绝不能**因为一次查询失败把设置页搞崩。
-  List<String> _recentTitles() {
-    try {
-      return context
-          .read<AppState>()
-          .repo
-          .listNotes(const NoteFilter(), limit: 120)
-          .map((n) => n.title)
-          .toList();
-    } catch (_) {
-      return const <String>[];
-    }
+    await showVersionEgg(context);
   }
 
   @override
