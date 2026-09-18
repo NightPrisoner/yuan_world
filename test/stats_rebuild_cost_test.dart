@@ -76,9 +76,7 @@ void main() {
       find.byType(DensityHeatmap),
     );
 
-    await tester.tap(find.text('标准分档').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('细分档').last);
+    await tester.tap(find.byKey(const Key('len-scale-fine')));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -202,5 +200,48 @@ void main() {
 
     final after = tester.widget<TrendChart>(find.byType(TrendChart).first);
     expect(after.showDots, isFalse, reason: '显示选项没生效 = 缓存键漏了这个开关');
+  });
+
+  testWidgets('点开又关掉菜单之后，路由栈必须是干净的', (tester) async {
+    // 点不动那种症状的常见来源就是没关干净的模态层。
+    seed();
+    await pumpStats(tester);
+
+    final nav = tester.state<NavigatorState>(find.byType(Navigator).first);
+    expect(nav.canPop(), isFalse);
+
+    // 点开
+    await tester.tap(find.byIcon(Icons.tune_rounded).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('显示网格线').last);
+    await tester.pumpAndSettle();
+    expect(nav.canPop(), isFalse, reason: '选完没关干净');
+
+    // 再点开，然后点空白处取消
+    await tester.tap(find.byIcon(Icons.tune_rounded).last);
+    await tester.pumpAndSettle();
+    expect(nav.canPop(), isTrue, reason: '菜单没开出来');
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+    expect(nav.canPop(), isFalse, reason: '取消后留下了遮罩');
+  });
+
+  testWidgets('菜单开着时再点按钮，不会叠出第二层', (tester) async {
+    seed();
+    await pumpStats(tester);
+
+    final nav = tester.state<NavigatorState>(find.byType(Navigator).first);
+    await tester.tap(find.byIcon(Icons.tune_rounded).last);
+    await tester.pumpAndSettle();
+    expect(nav.canPop(), isTrue);
+
+    // 连点几次别的地方（都打在遮罩上）—— 无论点到什么，
+    // 最后路由栈里最多只剩一层，不可能越点越多
+    for (var i = 0; i < 4; i++) {
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await tester.pumpAndSettle();
+    expect(nav.canPop(), isFalse, reason: '点了几次之后遮罩还留着，就是"点不动"');
   });
 }

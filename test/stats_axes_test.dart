@@ -258,16 +258,21 @@ void main() {
     await pumpStats(tester);
 
     expect(find.text('篇幅分布'), findsOneWidget);
-    expect(find.text('标准分档'), findsWidgets);
+    // 三档平铺，一眼看得见、一次点击就能切（不用先点开菜单）
+    for (final s in LengthScale.values) {
+      expect(
+        find.byKey(Key('len-scale-${s.name}')),
+        findsOneWidget,
+        reason: '${s.label} 这一档没有平铺出来',
+      );
+    }
 
-    await tester.tap(find.text('标准分档').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('细分档').last);
+    await tester.tap(find.byKey(const Key('len-scale-fine')));
     await tester.pumpAndSettle();
     expect(state.repo.getSetting('stats.lenScale'), 'fine');
   });
 
-  testWidgets('篇幅分布：没有任何纵轴调节（换分档也不该卡住）', (tester) async {
+  testWidgets('篇幅分布：没有任何纵轴调节', (tester) async {
     seed();
     await pumpStats(tester);
 
@@ -275,16 +280,35 @@ void main() {
     // 篇数/占比那个按钮没了
     expect(find.byIcon(Icons.percent_rounded), findsNothing);
     expect(find.text('纵轴'), findsNothing);
+  });
 
-    // 换分档之后页面还得是活的：连着换三次，每次都不能抛异常
-    for (final label in <String>['细分档', '粗分档', '标准分档']) {
-      await tester.tap(find.textContaining('分档').first);
+  testWidgets('连点分档 12 次：不能留下任何遮罩，别的控件照常能用', (tester) async {
+    // 这一条盯的是用户报的"多切几次之后鼠标什么都点不动"。
+    // 分段控件不涉及弹出路由，所以正确实现下不可能叠出模态层；
+    // 一旦有人把它改回下拉，这条会红。
+    seed();
+    await pumpStats(tester);
+
+    const seq = <String>['fine', 'coarse', 'normal'];
+    for (var i = 0; i < 12; i++) {
+      await tester.tap(find.byKey(Key('len-scale-${seq[i % 3]}')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text(label).last);
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull, reason: '换成 $label 时抛异常了');
+      expect(tester.takeException(), isNull);
     }
-    expect(state.repo.getSetting('stats.lenScale'), 'normal');
+
+    // 没有残留路由
+    final nav = tester.state<NavigatorState>(find.byType(Navigator).first);
+    expect(nav.canPop(), isFalse, reason: '有路由没关掉，之后整页都会点不动');
+
+    // 别的控件照常能用
+    await tester.tap(find.byIcon(Icons.tune_rounded).last, warnIfMissed: true);
+    await tester.pumpAndSettle();
+    expect(find.text('显示数据点'), findsOneWidget, reason: '菜单开不出来了');
+
+    // 关掉菜单后路由栈必须干净
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+    expect(nav.canPop(), isFalse);
   });
 
   testWidgets('篇幅分布：换分档之后档位标签跟着变', (tester) async {
@@ -295,9 +319,7 @@ void main() {
     // 所以挑**不带空格**的那几档来认
     expect(find.text('500–2000'), findsWidgets, reason: '标准分档有这一档');
 
-    await tester.tap(find.text('标准分档').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('细分档').last);
+    await tester.tap(find.byKey(const Key('len-scale-fine')));
     await tester.pumpAndSettle();
 
     expect(find.text('500–2000'), findsNothing, reason: '细分档没有这一档');

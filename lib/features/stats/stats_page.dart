@@ -2032,22 +2032,38 @@ class _StatsPageState extends State<StatsPage> {
     return _Card(
       title: '篇幅分布',
       controls: <Widget>[
-        // 只留 X 轴：换分档。日记和长文集共用一套档位，必然有一半是空的。
-        // 纵轴不给任何调节 —— 柱状图从 0 起是它唯一的诚实画法。
-        _MiniSelect<LengthScale>(
-          value: _lenScale,
-          options: LengthScale.values,
-          labelOf: (v) => '${v.label}分档',
-          onChanged: (v) {
-            setState(() => _lenScale = v);
-            _persist();
-            // **只重算这一个直方图**。
-            //
-            // 以前这里调的是 _reload() —— 换个分档把整页十来个聚合全跑一遍
-            // （含全库词频和文件夹逐条取数），在真实库上就是一段明显的
-            // 同步卡顿：点完界面不动了，还以为死了。分档只影响这一张图。
-            _reloadLengths();
-          },
+        // **X 轴分档做成平铺的分段选择，不弹菜单。**
+        //
+        // 三个选项用下拉是双重浪费：点开再点一下，还平白多出一个模态路由。
+        // 而这个控件的路由一旦留下没关干净的遮罩，整页就"点什么都没反应"了
+        // —— 用户报的正是这个。分段控件连路由都没有，顺带一次点击就能切。
+        // 纵轴不给任何调节：柱状图从 0 起是它唯一的诚实画法。
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              '分档',
+              style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+            ),
+            const SizedBox(width: 6),
+            _Segmented<LengthScale>(
+              value: _lenScale,
+              options: LengthScale.values,
+              labelOf: (v) => v.label,
+              keyOf: (v) => 'len-scale-${v.name}',
+              onChanged: (v) {
+                if (v == _lenScale) return;
+                setState(() => _lenScale = v);
+                _persist();
+                // **只重算这一个直方图**。
+                //
+                // 以前这里调的是 _reload() —— 换个分档把整页十来个聚合全跑一遍
+                // （含全库词频和文件夹逐条取数），在真实库上就是一段明显的
+                // 同步卡顿：点完界面不动了，还以为死了。分档只影响这一张图。
+                _reloadLengths();
+              },
+            ),
+          ],
         ),
       ],
       trailing: Text(
@@ -2852,6 +2868,71 @@ class _FilterButtonState extends State<_FilterButton> {
   }
 }
 
+
+/// 卡片里的小分段选择（两三个选项）。
+///
+/// 和 [_MiniSelect] 的区别是**不弹菜单**：选项少的时候摊开更好 ——
+/// 一次点击就能切，不用"点开→再点一下"，而且**不涉及弹出路由**。
+/// 弹出菜单是模态的，底下一层遮罩；控制项少的时候为它付这个代价不值得，
+/// 遮罩一旦留下没关干净，整页就点不动了。
+class _Segmented<T> extends StatelessWidget {
+  const _Segmented({
+    required this.value,
+    required this.options,
+    required this.labelOf,
+    required this.onChanged,
+    this.keyOf,
+  });
+
+  final T value;
+  final List<T> options;
+  final String Function(T) labelOf;
+  final ValueChanged<T> onChanged;
+
+  /// 给每段一个稳定的 key，测试能直接点某一段。
+  final String Function(T)? keyOf;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: c.fill,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          for (final o in options)
+            Pressable(
+              key: keyOf == null ? null : Key(keyOf!(o)),
+              // 已经是当前项就不要再回调：省一次无意义的重算
+              onTap: o == value ? null : () => onChanged(o),
+              scale: 0.95,
+              haptic: false,
+              child: AnimatedContainer(
+                duration: AppMotion.fast,
+                curve: AppMotion.enter,
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: o == value ? c.tint : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  labelOf(o),
+                  style: AppText.caption1.copyWith(
+                    color: o == value ? Colors.white : c.secondaryLabel,
+                    fontWeight: o == value ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 /// 卡片里的小下拉（粒度、指标）。
 class _MiniSelect<T> extends StatelessWidget {
