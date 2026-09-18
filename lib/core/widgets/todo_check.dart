@@ -1,0 +1,222 @@
+/// 待办用的圆形勾选框。
+///
+/// 动效细节（这是"丝滑"的关键，全部走弹簧而不是固定时长曲线）：
+///   - 未选中：细描边空心圆
+///   - 勾选瞬间：圆从空心填充为主题色，同时对勾号做一个带过冲的弹出
+///   - 取消勾选：反向播放，勾号先"缩回去"再清空圆
+///   - 全程叠一层很轻的缩放脉冲，让点击有"实体反馈"
+library;
+
+import 'package:flutter/material.dart';
+
+import '../motion/app_motion.dart';
+import '../theme/app_theme.dart';
+
+class TodoCheck extends StatefulWidget {
+  const TodoCheck({
+    super.key,
+    required this.checked,
+    required this.onChanged,
+    this.size = 24,
+    this.color,
+  });
+
+  final bool checked;
+  final ValueChanged<bool> onChanged;
+  final double size;
+  final Color? color;
+
+  @override
+  State<TodoCheck> createState() => _TodoCheckState();
+}
+
+class _TodoCheckState extends State<TodoCheck> with TickerProviderStateMixin {
+  /// 勾号绘制进度（0 → 1 画完）。
+  late final AnimationController _mark = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+    value: widget.checked ? 1 : 0,
+  );
+
+  /// 点按脉冲。
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 180),
+  );
+
+  @override
+  void didUpdateWidget(covariant TodoCheck old) {
+    super.didUpdateWidget(old);
+    if (widget.checked != old.checked) {
+      if (widget.checked) {
+        _pulse.forward(from: 0).then((_) => _pulse.reverse());
+        _mark.forward();
+      } else {
+        _mark.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _mark.dispose();
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final tint = widget.color ?? c.tint;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => widget.onChanged(!widget.checked),
+      child: SizedBox(
+        width: widget.size + 12,
+        height: widget.size + 12,
+        child: Center(
+          child: AnimatedBuilder(
+            animation: Listenable.merge(<Listenable>[_mark, _pulse]),
+            builder: (context, _) {
+              // 脉冲：先放大到 1.12 再回来
+              final pulse = 1 + 0.12 * Curves.easeOut.transform(_pulse.value <= 0.5 ? _pulse.value * 2 : (1 - _pulse.value) * 2);
+              return Transform.scale(
+                scale: pulse,
+                child: CustomPaint(
+                  size: Size.square(widget.size + 4),
+                  painter: _CheckPainter(
+                    progress: _mark.value,
+                    tint: tint,
+                    border: c.tertiaryLabel,
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckPainter extends CustomPainter {
+  _CheckPainter({
+    required this.progress,
+    required this.tint,
+    required this.border,
+  });
+
+  /// 0 = 未勾选，1 = 完全勾选
+  final double progress;
+  final Color tint;
+  final Color border;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.width / 2 - 1.5;
+
+    // 圆环：随进度从描边过渡到实心
+    final ringPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..color = Color.lerp(border, tint, progress)!;
+    canvas.drawCircle(center, radius, ringPaint);
+
+    if (progress > 0) {
+      final fill = Paint()
+        ..style = PaintingStyle.fill
+        ..color = tint.withValues(alpha: progress);
+      canvas.drawCircle(center, radius, fill);
+
+      // 勾号：两段线，前半段先画，后半段后画，形成"写出来"的感觉
+      final checkPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.1
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..color = Colors.white.withValues(alpha: progress);
+
+      final w = size.width;
+      final h = size.height;
+      final p1 = Offset(w * 0.28, h * 0.52);
+      final p2 = Offset(w * 0.44, h * 0.68);
+      final p3 = Offset(w * 0.73, h * 0.34);
+
+      // 用两段进度控制笔迹生长
+      final firstLeg = Curves.easeOut.transform((progress / 0.45).clamp(0.0, 1.0));
+      final secondLeg = Curves.easeOut.transform(((progress - 0.45) / 0.55).clamp(0.0, 1.0));
+
+      final path = Path()..moveTo(p1.dx, p1.dy);
+      path.lineTo(
+        p1.dx + (p2.dx - p1.dx) * firstLeg,
+        p1.dy + (p2.dy - p1.dy) * firstLeg,
+      );
+      if (secondLeg > 0) {
+        path.lineTo(
+          p2.dx + (p3.dx - p2.dx) * secondLeg,
+          p2.dy + (p3.dy - p2.dy) * secondLeg,
+        );
+      }
+      canvas.drawPath(path, checkPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CheckPainter old) =>
+      old.progress != progress || old.tint != tint || old.border != border;
+}
+
+/// 会「画」出来的删除线：完成时从左到右划过文字。
+class AnimatedStrikethrough extends StatelessWidget {
+  const AnimatedStrikethrough({
+    super.key,
+    required this.done,
+    required this.child,
+  });
+
+  final bool done;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Stack(
+      children: [
+        child,
+        Positioned.fill(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: 0, end: done ? 1 : 0),
+            duration: AppMotion.fast,
+            curve: AppMotion.enter,
+            builder: (context, t, _) => CustomPaint(
+              painter: _StrikePainter(progress: t, color: c.secondaryLabel),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StrikePainter extends CustomPainter {
+  _StrikePainter({required this.progress, required this.color});
+  final double progress;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0) return;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    final y = size.height / 2;
+    canvas.drawLine(Offset(0, y), Offset(size.width * progress, y), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _StrikePainter old) =>
+      old.progress != progress || old.color != color;
+}

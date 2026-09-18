@@ -1,0 +1,142 @@
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:provider/provider.dart';
+import 'package:screen_retriever/screen_retriever.dart';
+import 'package:window_manager/window_manager.dart';
+
+import 'app_state.dart';
+import 'core/app_paths.dart';
+import 'core/theme/app_theme.dart';
+import 'data/db/app_database.dart';
+import 'data/importer/import_service.dart';
+import 'data/repositories/note_repository.dart';
+import 'features/notes/editor/note_editor_page.dart';
+import 'features/shell/home_shell.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // media_kit 必须在用任何播放器之前初始化，否则一开视频就崩
+  MediaKit.ensureInitialized();
+
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    await _setupDesktopWindow();
+  }
+
+  final db = AppDatabase.openAt(await resolveAppRoot());
+  final repo = NoteRepository(db);
+  final importer = ImportService(db, repo);
+  final state = AppState(db, repo, importer);
+  await state.init();
+
+  final navKey = GlobalKey<NavigatorState>();
+
+  runApp(
+    ChangeNotifierProvider<AppState>.value(
+      value: state,
+      child: YuanWorldApp(navigatorKey: navKey),
+    ),
+  );
+
+  if (kDebugMode) _maybeOpenEditorForTesting(navKey);
+}
+
+/// 调试用：`YW_EDIT_NOTE=<笔记id>` 启动后直接进入该笔记的编辑器。
+///
+/// 纯 GUI 应用在自动化里很难"点"到深层页面（本机还禁止了合成输入），
+/// 这个钩子让截图验证编辑器这类页面变得可行。仅 debug 构建生效。
+void _maybeOpenEditorForTesting(GlobalKey<NavigatorState> navKey) {
+  final id = int.tryParse(Platform.environment['YW_EDIT_NOTE'] ?? '');
+  if (id == null) return;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    navKey.currentState?.push(
+      MaterialPageRoute<void>(builder: (_) => NoteEditorPage(noteId: id)),
+    );
+  });
+}
+
+/// 桌面端窗口初始化。
+///
+/// 这里有个坑：`WindowOptions.size` 是**逻辑像素**，而屏幕尺寸拿到的也是逻辑像素，
+/// 但两者一旦不一致（高分屏缩放、多显示器、Windows 的 DPI 虚拟化），
+/// 直接写死 1180×800 就可能生成一个**比屏幕还大**的窗口，
+/// 导致侧边栏底部、工具栏右侧被推到屏幕外，用户根本点不到。
+///
+/// 所以这里按主显示器的可用尺寸做钳制，保证窗口一定能完整显示。
+Future<void> _setupDesktopWindow() async {
+  await windowManager.ensureInitialized();
+
+  var width = 1180.0;
+  var height = 800.0;
+  try {
+    final display = await screenRetriever.getPrimaryDisplay();
+    final sw = display.size.width;
+    final sh = display.size.height;
+    if (sw > 0 && sh > 0) {
+      // 留出任务栏与窗口边框的余量
+      width = math.min(width, sw * 0.86);
+      height = math.min(height, sh * 0.86);
+    }
+  } catch (_) {
+    // 拿不到屏幕信息就退回默认尺寸
+  }
+
+  final opts = WindowOptions(
+    size: Size(width, height),
+    minimumSize: const Size(420, 560),
+    center: true,
+    title: '元世界',
+    titleBarStyle: TitleBarStyle.normal,
+    backgroundColor: Colors.transparent,
+  );
+  await windowManager.waitUntilReadyToShow(opts, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
+}
+
+class YuanWorldApp extends StatelessWidget {
+  const YuanWorldApp({super.key, this.navigatorKey});
+
+  final GlobalKey<NavigatorState>? navigatorKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    return MaterialApp(
+      title: '元世界',
+      navigatorKey: navigatorKey,
+      debugShowCheckedModeBanner: false,
+      themeMode: state.themeMode,
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      // 字号缩放放在这里一处生效：不改 AppText 里的每个字号，
+      // 也让第三方组件（对话框、滚轮、Toast）跟着一起缩放。
+      builder: (context, child) => MediaQuery.withClampedTextScaling(
+        minScaleFactor: state.textScale,
+        maxScaleFactor: state.textScale,
+        child: child ?? const SizedBox.shrink(),
+      ),
+      home: const _Bootstrap(),
+    );
+  }
+}
+
+/// 等待数据库加载完成，加载期间显示启动态。
+class _Bootstrap extends StatelessWidget {
+  const _Bootstrap();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    if (state.loading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(strokeWidth: 2.5)),
+      );
+    }
+    return const HomeShell();
+  }
+}
