@@ -9,6 +9,7 @@ import 'package:sqlite3/sqlite3.dart';
 import '../../core/utils/filename_sort.dart';
 import '../../core/utils/text_stats.dart';
 import '../db/app_database.dart';
+import '../db/query_scope.dart';
 import '../models.dart';
 
 /// 排序**字段**。与方向分开，对应 Windows 资源管理器那种
@@ -808,7 +809,7 @@ class NoteRepository {
       'SELECT t.id, t.name, t.color, COUNT(n.id) AS cnt FROM tags t '
       'JOIN note_tags nt ON nt.tag_id = t.id '
       'JOIN notes n ON n.id = nt.note_id '
-      ' AND n.is_hidden = 0 AND n.is_archived = 0 AND n.deleted_at IS NULL '
+      ' AND ${liveNote("n")} '
       'GROUP BY t.id HAVING cnt > 0 ORDER BY cnt DESC',
     );
     return rows.map((r) => TagStat.fromRow(r)).toList();
@@ -824,7 +825,7 @@ class NoteRepository {
     final rows = _d.select(
       'SELECT c.*, '
       '(SELECT COUNT(*) FROM notes n WHERE n.collection_id = c.id '
-      ' AND n.is_hidden = 0 AND n.is_archived = 0 AND n.deleted_at IS NULL) AS note_count '
+      ' AND ${liveNote("n")}) AS note_count '
       'FROM collections c '
       'WHERE ${includeHidden ? 'c.deleted_at IS NULL' : 'c.is_hidden = 0 AND c.deleted_at IS NULL'} '
       // 置顶排在最前：置顶是一票否决，不该被任何排序规则挤下去
@@ -1351,13 +1352,17 @@ class NoteRepository {
     // 而收藏数、文集数、标签数、起止日期各自漏掉了 `deleted_at IS NULL`
     // （收藏数连 `is_archived` 也没排）—— 于是把一篇收藏过的笔记丢进
     // 回收站，侧栏"收藏 1"还在，点进去却是空的。
-    final scope = hiddenOnly
-        ? 'is_hidden = 1 AND deleted_at IS NULL'
-        : 'is_archived = 0 AND is_hidden = 0 AND deleted_at IS NULL';
-    // 文集/标签这类"结构"只按隐私空间区分，但一样要排掉回收站
+    // 两种别名各备一份：同一个 SQL 里既有 `FROM notes`（不带别名）也有
+    // `JOIN notes n`。SQLite 在表起了别名之后**不认原名** —— 用错一种
+    // 就是 `no such column: notes.is_archived`。所以别名显式传给口径函数，
+    // 由调用点自己负责看对。
+    final scope = hiddenOnly ? hiddenNote('notes') : liveNote('notes');
+    final scopeN = hiddenOnly ? hiddenNote('n') : liveNote('n');
+    // 文集/标签这类"结构"只按隐私空间区分，但一样要排掉回收站。
+    // **别名是 collections，别顺手写成 notes** —— 这条查的是文集表。
     final liveScope = hiddenOnly
-        ? 'is_hidden = 1 AND deleted_at IS NULL'
-        : 'is_hidden = 0 AND deleted_at IS NULL';
+        ? 'collections.is_hidden = 1 AND collections.deleted_at IS NULL'
+        : liveCollection('collections');
     final r = _d.select('''
       SELECT
         (SELECT COUNT(*) FROM notes WHERE $scope) AS note_count,
@@ -1367,7 +1372,7 @@ class NoteRepository {
         (SELECT COUNT(*) FROM collections WHERE $liveScope) AS collection_count,
         (SELECT COUNT(DISTINCT nt.tag_id) FROM note_tags nt
            JOIN notes n ON n.id = nt.note_id
-          WHERE $scope) AS tag_count,
+          WHERE $scopeN) AS tag_count,
         (SELECT COUNT(*) FROM notes WHERE is_favorite = 1 AND $scope) AS favorite_count,
         (SELECT MIN(IFNULL(published_at, created_at)) FROM notes WHERE $scope) AS first_at,
         (SELECT MAX(IFNULL(published_at, created_at)) FROM notes WHERE $scope) AS last_at
@@ -1392,7 +1397,7 @@ class NoteRepository {
     final rows = _d.select('''
       SELECT strftime('%Y-%m', IFNULL(published_at, created_at)/1000, 'unixepoch', 'localtime') AS bucket,
              COUNT(*) AS cnt, IFNULL(SUM(char_count),0) AS chars
-      FROM notes WHERE is_archived = 0 AND is_hidden = 0 AND deleted_at IS NULL
+      FROM notes WHERE ${liveNote("notes")}
       GROUP BY bucket ORDER BY bucket ASC
     ''');
     return rows
@@ -1412,7 +1417,7 @@ class NoteRepository {
              COUNT(n.id) AS cnt,
              IFNULL(SUM(n.char_count),0) AS chars
       FROM notes n LEFT JOIN collections c ON c.id = n.collection_id
-      WHERE n.is_archived = 0 AND n.is_hidden = 0 AND n.deleted_at IS NULL
+      WHERE ${liveNote("n")}
       GROUP BY c.id ORDER BY cnt DESC
     ''');
     return rows
@@ -1429,7 +1434,9 @@ class NoteRepository {
   Map<String, int> activityByDay() {
     final rows = _d.select(
       'SELECT e.day, COUNT(*) AS cnt FROM note_events e '
-      'JOIN notes n ON n.id = e.note_id AND n.is_hidden = 0 '
+      // 这里以前只写了 `n.is_hidden = 0` —— 归档的和回收站里的笔记
+      // 活跃度照样被算进来。同一类遗漏，一起收进公共口径
+      'JOIN notes n ON n.id = e.note_id AND ${liveNote("n")} '
       'GROUP BY e.day ORDER BY e.day ASC',
     );
     return {for (final r in rows) r['day'] as String: r['cnt'] as int};
@@ -1443,7 +1450,7 @@ class NoteRepository {
       'n.is_pinned, n.is_favorite, n.is_archived, n.is_hidden, n.sort_index, n.cover_image, '
       'c.name AS collection_name, c.color AS collection_color '
       'FROM notes n LEFT JOIN collections c ON c.id = n.collection_id '
-      'WHERE n.is_archived = 0 AND n.is_hidden = 0 AND n.deleted_at IS NULL '
+      'WHERE ${liveNote("n")} '
       'ORDER BY n.char_count DESC LIMIT ?',
       [limit],
     );
@@ -1460,7 +1467,7 @@ class NoteRepository {
   List<String> allTitlesAndExcerpts({int limit = 2000}) {
     final rows = _d.select(
       'SELECT title, excerpt FROM notes '
-      'WHERE is_archived = 0 AND is_hidden = 0 AND deleted_at IS NULL LIMIT ?',
+      'WHERE ${liveNote("notes")} LIMIT ?',
       [limit],
     );
     return rows.map((r) => '${r['title']} ${r['excerpt']}').toList();
