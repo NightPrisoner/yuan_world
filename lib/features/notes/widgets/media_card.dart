@@ -309,6 +309,41 @@ class _MediaCardState extends State<MediaCard> {
   );
 }
 
+/// 底部控制条的外壳：渐变底 + 内边距，**只占它自己那一截**。
+///
+/// 单独做成公开 widget 是为了能直接测它。这一层踩过一个很隐蔽的坑：
+/// `Column` 默认 `mainAxisSize: max`，会把外壳撑到**整个视频那么高** ——
+/// 于是画面上的所有点击都被它吃掉，正中的播放键永远收不到点击，
+/// 而它自己的按钮却是好的（那些按钮本来就在这一层里）。
+/// 表现就是用户说的"点中间没反应、下面那排能用"。
+class VideoControlBarShell extends StatelessWidget {
+  const VideoControlBarShell({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      // 底部压一层渐变，白底视频上控件也看得清
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.55)],
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(10, 24, 10, 6),
+      child: Column(
+        // **必须是 min**：max 会把这一层撑满整个视频高度，
+        // 于是它把画面上的点击全部吃掉（详见类文档）
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: children,
+      ),
+    );
+  }
+}
+
 /// 播放器控件层。
 ///
 /// 结构（Stack 自下而上）：
@@ -499,19 +534,18 @@ class _VideoControlsState extends State<_VideoControls> {
           ),
 
           // 2) 正中央的大按钮：未播放或播完时显示。
-          //    **只负责好看** —— 手势交给上面那个 Listener，
-          //    所以这里必须 IgnorePointer，不能自己再抢一层。
+          //    **和底部那排控件同一套做法**（Pressable，直接吃手势），
+          //    而且是 Stack 里最上面的一层 —— 用户的原话就是
+          //    "不能做进视频控件里？"，那就让它和能用的那些按钮完全同构。
           if (!_playing)
-            IgnorePointer(
-              child: Center(
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: _centerButton(
-                    icon: _completed
-                        ? Icons.replay_rounded
-                        : Icons.play_arrow_rounded,
-                    tip: _completed ? '重新播放' : '播放',
-                  ),
+            Center(
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: _centerButton(
+                  icon: _completed
+                      ? Icons.replay_rounded
+                      : Icons.play_arrow_rounded,
+                  tip: _completed ? '重新播放' : '播放',
                 ),
               ),
             ),
@@ -537,24 +571,27 @@ class _VideoControlsState extends State<_VideoControls> {
 
   /// 画面正中的播放/重播按钮。
   ///
-  /// **纯视觉**：外面套了 IgnorePointer，手势由底下那个 Listener 统一处理。
-  /// 这样"点中间"和"点画面别处"走的是同一条路，不会再出现
-  /// "按钮看得见却点不动"。
+  /// 和底部那排控件**完全同构**（Tooltip + Pressable，自己吃手势）：
+  /// 用户反馈底部那排能用、中间这个不能，那就别让中间那条路特殊。
   Widget _centerButton({required IconData icon, required String tip}) => Tooltip(
     message: tip,
-    child: Container(
-      width: 58,
-      height: 58,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.42),
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.9),
-          width: 2,
+    child: Pressable(
+      onTap: () => unawaited(_toggle()),
+      scale: 0.94,
+      child: Container(
+        width: 58,
+        height: 58,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.42),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.9),
+            width: 2,
+          ),
         ),
+        child: Icon(icon, size: 34, color: Colors.white),
       ),
-      child: Icon(icon, size: 34, color: Colors.white),
     ),
   );
 
@@ -577,79 +614,60 @@ class _VideoControlsState extends State<_VideoControls> {
         final dur = player.state.duration;
         final vol = player.state.volume;
 
-        return Container(
-          // 底部压一层渐变，白底视频上控件也看得清
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.transparent,
-                Colors.black.withValues(alpha: 0.55),
+        return VideoControlBarShell(
+          children: [
+            SliderTheme(
+              data: SliderThemeData(
+                trackHeight: 3,
+                // 滑块平时藏起来，只在拖动时露头
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: SliderComponentShape.noOverlay,
+                activeTrackColor: Colors.white,
+                inactiveTrackColor: Colors.white24,
+                thumbColor: Colors.white,
+              ),
+              child: Slider(
+                value: dur.inMilliseconds == 0
+                    ? 0
+                    : pos.inMilliseconds
+                        .clamp(0, dur.inMilliseconds)
+                        .toDouble(),
+                // 时长还没读到时给 1，避免 max=0 让 Slider 断言失败
+                max: dur.inMilliseconds < 1 ? 1.0 : dur.inMilliseconds.toDouble(),
+                onChanged: (v) => player.seek(
+                  Duration(milliseconds: v.round()),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                _ctrlBtn(
+                  _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  _playing ? '暂停' : '播放',
+                  () => unawaited(_toggle()),
+                ),
+                _volumeControl(player, vol),
+                const SizedBox(width: 8),
+                Text(
+                  '${_fmt(pos)} / ${_fmt(dur)}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const Spacer(),
+                _speedBtn(),
+                _ctrlBtn(
+                  widget.state.isFullscreen()
+                      ? Icons.fullscreen_exit_rounded
+                      : Icons.fullscreen_rounded,
+                  widget.state.isFullscreen() ? '退出全屏' : '全屏',
+                  widget.state.toggleFullscreen,
+                ),
               ],
             ),
-          ),
-          padding: const EdgeInsets.fromLTRB(10, 24, 10, 6),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              SliderTheme(
-                data: SliderThemeData(
-                  trackHeight: 3,
-                  // 滑块平时藏起来，只在拖动时露头
-                  thumbShape: const RoundSliderThumbShape(
-                    enabledThumbRadius: 6,
-                  ),
-                  overlayShape: SliderComponentShape.noOverlay,
-                  activeTrackColor: Colors.white,
-                  inactiveTrackColor: Colors.white24,
-                  thumbColor: Colors.white,
-                ),
-                child: Slider(
-                  value: dur.inMilliseconds == 0
-                      ? 0
-                      : pos.inMilliseconds
-                          .clamp(0, dur.inMilliseconds)
-                          .toDouble(),
-                  // 时长还没读到时给 1，避免 max=0 让 Slider 断言失败
-                  max: dur.inMilliseconds < 1
-                      ? 1.0
-                      : dur.inMilliseconds.toDouble(),
-                  onChanged: (v) => player.seek(
-                    Duration(milliseconds: v.round()),
-                  ),
-                ),
-              ),
-              Row(
-                children: [
-                  _ctrlBtn(
-                    _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                    _playing ? '暂停' : '播放',
-                    () => unawaited(_toggle()),
-                  ),
-                  _volumeControl(player, vol),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${_fmt(pos)} / ${_fmt(dur)}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const Spacer(),
-                  _speedBtn(),
-                  _ctrlBtn(
-                    widget.state.isFullscreen()
-                        ? Icons.fullscreen_exit_rounded
-                        : Icons.fullscreen_rounded,
-                    widget.state.isFullscreen() ? '退出全屏' : '全屏',
-                    widget.state.toggleFullscreen,
-                  ),
-                ],
-              ),
-            ],
-          ),
+          ],
         );
       },
     );
