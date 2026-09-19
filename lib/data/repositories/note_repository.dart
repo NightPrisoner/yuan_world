@@ -259,8 +259,20 @@ class NoteRepository {
         where.add('notes_fts MATCH ?');
         args.add('"${q.replaceAll('"', '""')}"');
       } else {
-        where.add('(n.title LIKE ? OR n.excerpt LIKE ?)');
-        args..add('%$q%')..add('%$q%');
+        where.add('(n.title LIKE ? ESCAPE ? OR n.excerpt LIKE ? ESCAPE ?)');
+        // **必须转义 % 和 _**。这两个字符在 LIKE 里是通配符，
+        // 不转义的话搜一个 "%" 会把整库都匹配出来，搜 "a_b" 也会命中
+        // "axb" —— 用户的感受是"搜什么都出一堆"。
+        final esc = q
+            .replaceAll(r'\', r'\\')
+            .replaceAll('%', r'\%')
+            .replaceAll('_', r'\_');
+        final pat = '%$esc%';
+        args
+          ..add(pat)
+          ..add(r'\')
+          ..add(pat)
+          ..add(r'\');
       }
     }
 
