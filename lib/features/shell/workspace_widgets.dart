@@ -569,82 +569,59 @@ class _NavRowState extends State<_NavRow> {
             top: 7,
             bottom: 7,
           ),
-          // 底色分成**两层**画：悬停一层（淡），选中一层（强调色）。
-          //
-          // 选中那层带一点"弹进来"：切换功能时旧的那块缩着淡出、新的
-          // 那块弹着出现，切换这件事就有了反馈。**只动底色，不碰文字** ——
-          // 文字跟着缩放会在非整数比例下重新栅格化（列表那边已经吃过一次亏）。
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: AnimatedOpacity(
-                  opacity: _hover && !widget.selected ? 1 : 0,
-                  duration: AppMotion.fast,
-                  curve: AppMotion.enter,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: c.fill,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: AnimatedScale(
-                  scale: widget.selected ? 1 : 0.94,
+          // **底色画在容器自己身上**（不是里面的 Positioned.fill）：
+          // 放进 Stack 的话，那两层只能铺满"内边距以内"的区域，
+          // 整块高亮会缩一圈，行看起来又小又扁 —— 用户一眼就看出来了。
+          decoration: BoxDecoration(
+            color: widget.selected
+                ? accent.withValues(alpha: c.isDark ? 0.22 : 0.13)
+                : (_hover ? c.fill : Colors.transparent),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          // 内容层：图标与文字的颜色**插值**过渡，而不是"啪"地换色。
+          // 这里只动颜色不动几何 —— 文字跟着缩放会重新栅格化。
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: widget.selected ? 1 : 0),
+            duration: AppMotion.fast,
+            curve: AppMotion.enter,
+            builder: (context, t, child) => Row(
+              children: [
+                // 收起/展开的小三角。**只有真的有子文件夹时才显示**，
+                // 否则叶子节点前面挂个三角，点下去没反应，很困惑。
+                if (widget.hasChildren)
+                  _CollapseToggle(
+                    collapsed: widget.collapsed,
+                    color: Color.lerp(c.tertiaryLabel, accent, t)!,
+                    onTap: widget.onToggleCollapse,
+                  )
+                else if (widget.indent)
+                  // 没子级的补一块等宽占位，让同级的名字左对齐
+                  const SizedBox(width: 15),
+                // 图标是图形，弹一下不会让字形重排 —— 切换时那点"活气"
+                // 就放在这里（选中后轻轻弹到 1，走 pop 曲线）
+                AnimatedScale(
+                  scale: widget.selected ? 1 : 0.9,
                   duration: AppMotion.fast,
                   curve: AppMotion.pop,
-                  alignment: Alignment.centerLeft,
-                  child: AnimatedOpacity(
-                    opacity: widget.selected ? 1 : 0,
-                    duration: AppMotion.fast,
-                    curve: AppMotion.enter,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: c.isDark ? 0.22 : 0.13),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                  child: Icon(
+                    widget.icon,
+                    size: 17,
+                    color: Color.lerp(c.secondaryLabel, accent, t)!,
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.footnote.copyWith(
+                      color: Color.lerp(c.label, accent, t)!,
+                      fontWeight:
+                          widget.selected ? FontWeight.w600 : FontWeight.w400,
                     ),
                   ),
                 ),
-              ),
-              // 内容层：图标与文字的颜色也淡入淡出，而不是"啪"地换色
-              TweenAnimationBuilder<double>(
-                tween: Tween<double>(end: widget.selected ? 1 : 0),
-                duration: AppMotion.fast,
-                curve: AppMotion.enter,
-                builder: (context, t, child) => Row(
-                  children: [
-                    // 收起/展开的小三角。**只有真的有子文件夹时才显示**，
-                    // 否则叶子节点前面挂个三角，点下去没反应，很困惑。
-                    if (widget.hasChildren)
-                      _CollapseToggle(
-                        collapsed: widget.collapsed,
-                        color: Color.lerp(c.tertiaryLabel, accent, t)!,
-                        onTap: widget.onToggleCollapse,
-                      )
-                    else if (widget.indent)
-                      // 没子级的补一块等宽占位，让同级的名字左对齐
-                      const SizedBox(width: 15),
-                    Icon(
-                      widget.icon,
-                      size: 17,
-                      color: Color.lerp(c.secondaryLabel, accent, t)!,
-                    ),
-                    const SizedBox(width: 9),
-                    Expanded(
-                      child: Text(
-                        widget.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppText.footnote.copyWith(
-                          color: Color.lerp(c.label, accent, t)!,
-                          fontWeight: widget.selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                        ),
-                      ),
-                    ),
                     if (widget.pinned)
                       Padding(
                         padding: const EdgeInsets.only(left: 5),
@@ -664,17 +641,16 @@ class _NavRowState extends State<_NavRow> {
                         ),
                       ),
                     if (widget.count != null && widget.count! > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: Text(
-                      '${widget.count}',
-                      style: AppText.caption1.copyWith(color: c.tertiaryLabel),
-                    ),
-                  ),
-                  ],
-                ),
-              ),
-            ],
+                      Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Text(
+                          '${widget.count}',
+                          style:
+                              AppText.caption1.copyWith(color: c.tertiaryLabel),
+                        ),
+                      ),
+              ],
+            ),
           ),
         ),
       ),
