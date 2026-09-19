@@ -14,7 +14,6 @@ import 'package:path/path.dart' as p;
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/importer/media_refs.dart';
-import 'package:yuan_world/data/importer/txt_importer.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
 
 void main() {
