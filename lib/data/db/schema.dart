@@ -271,6 +271,17 @@ const List<String> kCreateStatements = <String>[
   'CREATE INDEX idx_note_tags_tag ON note_tags(tag_id)',
 
   // ── 图片 ──────────────────────────────────────────────────────────────
+  //
+  // ⚠️ **这张表目前没有任何代码在读写，是历史遗留。**
+  //
+  // 图片信息实际存在两个地方：`notes.image_count`（计数）和磁盘上的
+  // `images/<noteId>/`（文件本身），正文里的相对路径就是索引。
+  // 当初设想的"图片元信息表"没有落地。
+  //
+  // **没有删它，是刻意的**：删表要写迁移，而迁移是唯一会动用户数据的
+  // 地方 —— 为了一张空表去冒数据风险不值得。留着的代价只是 schema 里
+  // 多一段。但**别再往上加东西**：新功能要存图片元信息的话，
+  // 先想清楚和磁盘目录谁是权威，而不是顺手用它。
   '''
   CREATE TABLE note_images (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
