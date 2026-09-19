@@ -5,6 +5,15 @@
 ///
 /// 播放器是**懒创建**的：正文里可能有多个视频，一进笔记就为每个都建一个
 /// 解码器，内存和句柄都吃不消。点播放才建。
+///
+/// ## 控制条什么时候出现（很重要的一处交互）
+///
+///   · 鼠标不在画面上 → 什么都不显示，只有画面本身
+///   · 暂停 / 播完 → 画面**正中央一个大按钮**（播放 / 重播），
+///     鼠标移上去才额外露出底部控制条（要拖进度、改倍速）
+///   · 播放中且鼠标在画面上 → 显示底部控制条
+///   · 播放中鼠标停在画面上**不动**超过 [kControlsIdleHide] → 控制条自动收起
+///     （全屏看片时它一直压着画面最烦人），动一下鼠标又出来
 library;
 
 import 'dart:async';
@@ -18,6 +27,7 @@ import 'package:path/path.dart' as p;
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_menu.dart';
+import 'video_controls_visibility.dart';
 
 class MediaCard extends StatefulWidget {
   const MediaCard({
@@ -44,18 +54,6 @@ class _MediaCardState extends State<MediaCard> {
   Player? _player;
   VideoController? _controller;
 
-  /// 是否正在播放。决定显示"播放按钮"还是"完整控件"。
-  bool _playing = false;
-  StreamSubscription<bool>? _playingSub;
-
-  /// 当前倍速。
-  double _rate = 1.0;
-
-  /// 支持的倍速档位。
-  ///
-  /// 只到 2×：再快人耳已经听不清，对看视频没帮助。
-  static const List<double> _rates = <double>[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
-
   bool get _exists => File(widget.path).existsSync();
 
   @override
@@ -68,7 +66,6 @@ class _MediaCardState extends State<MediaCard> {
 
   @override
   void dispose() {
-    _playingSub?.cancel();
     _player?.dispose();
     super.dispose();
   }
@@ -77,9 +74,6 @@ class _MediaCardState extends State<MediaCard> {
     final player = Player();
     final controller = VideoController(player);
     player.open(Media(Uri.file(widget.path).toString()), play: play);
-    _playingSub = player.stream.playing.listen((v) {
-      if (mounted && v != _playing) setState(() => _playing = v);
-    });
     _player = player;
     _controller = controller;
   }
@@ -93,38 +87,6 @@ class _MediaCardState extends State<MediaCard> {
     // 理论上不会走到这，留个兜底
     setState(() => _open(play: true));
   }
-
-  /// 选播放速度。
-  ///
-  /// [btnCtx] 是那个按钮自己的 context —— 拿它当锚点，菜单才会贴着按钮弹。
-  /// 不传的话会退化成"上一次菜单的位置"，飘到页面别处去。
-  Future<void> _pickRate(BuildContext btnCtx) async {
-    final player = _player;
-    if (player == null) return;
-
-    final picked = await showAppMenu<double>(
-      btnCtx,
-      anchor: AppMenuAnchor(context: btnCtx),
-      header: '播放速度',
-      items: <AppMenuItem<double>>[
-        for (final r in _rates)
-          AppMenuItem(
-            value: r,
-            label: r == 1.0 ? '正常 1×' : '${formatRate(r)}×',
-            icon: _rate == r ? Icons.check_circle_rounded : Icons.speed_rounded,
-            color: _rate == r ? btnCtx.colors.tint : null,
-          ),
-      ],
-    );
-    if (picked == null || !mounted) return;
-
-    await player.setRate(picked);
-    if (mounted) setState(() => _rate = picked);
-  }
-
-  /// 1.0 → "1"，0.75 → "0.75"。别显示成 "1.0×" 那种别扭写法。
-  static String formatRate(double r) =>
-      r == r.roundToDouble() ? r.toStringAsFixed(0) : '$r';
 
   @override
   Widget build(BuildContext context) {
@@ -150,19 +112,10 @@ class _MediaCardState extends State<MediaCard> {
             child: AspectRatio(
               // 播放器需要确定的高度；16:9 是最常见的视频比例
               aspectRatio: 16 / 9,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  // 未播放时这里就是**第一帧画面**，当作预览图。
-                  //
-                  // 控件用自己写的 `_controls` 而不是内置 AdaptiveVideoControls:
-                  // 内置那套**加不了按钮**，而倍速必须和暂停/音量/全屏同一行。
-                  Video(
-                    controller: _controller!,
-                    controls: _controls,
-                    fill: Colors.black,
-                  ),
-                ],
+              child: Video(
+                controller: _controller!,
+                controls: _controls,
+                fill: Colors.black,
               ),
             ),
           ),
@@ -172,6 +125,15 @@ class _MediaCardState extends State<MediaCard> {
       ),
     );
   }
+
+  /// 控件层单独做成一个 StatefulWidget，而不是这里的方法。
+  ///
+  /// 硬理由：全屏时 media_kit 会 **push 一个新路由**，并用同一个
+  /// `controls` 构造器重建一个 `Video`。挂在 MediaCard 上的状态
+  /// （悬停、控制条显隐）**不会让新路由里的控件重建** —— 结果就是全屏下
+  /// 悬停失灵，控制条永远不出现，连退出全屏都点不到。
+  /// 状态放进控件层自己身上，两个实例各自独立工作。
+  Widget _controls(VideoState state) => _VideoControls(state: state);
 
   Widget _shell(
     AppColors c, {
@@ -262,7 +224,232 @@ class _MediaCardState extends State<MediaCard> {
     );
   }
 
-  // ── 自定义控件条 ────────────────────────────────────────────────────────
+  /// 视频下面那一行：图标 + 文件名。
+  ///
+  /// 这一行**始终显示**：它是笔记里唯一能看出"这是哪个文件"的地方
+  /// （正文里的路径是不渲染成文字的）。它也不压在画面上，和播放控件
+  /// 那套"鼠标进来才出现"的规则是两回事。
+  Widget _caption(AppColors c) => Row(
+    children: [
+      Icon(Icons.movie_outlined, size: 12, color: c.quaternaryLabel),
+      const SizedBox(width: 5),
+      Expanded(
+        child: Text(
+          widget.index == null
+              ? widget.relPath
+              : '第 ${widget.index} 个 · ${widget.relPath}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+        ),
+      ),
+    ],
+  );
+}
+
+/// 播放器控件层。
+///
+/// 结构（Stack 自下而上）：
+///   1. 整块可点区域 —— 点画面任意处播放/暂停
+///   2. 画面正中的大按钮 —— 未播放/播完时显示
+///   3. 底部控制条 —— 鼠标在画面上时显示，静止 [kControlsIdleHide] 后收起
+///
+/// 最外层套 [MouseRegion]：悬停检测必须在**这一层**里，才能跟着全屏路由走。
+class _VideoControls extends StatefulWidget {
+  const _VideoControls({required this.state});
+
+  final VideoState state;
+
+  @override
+  State<_VideoControls> createState() => _VideoControlsState();
+}
+
+class _VideoControlsState extends State<_VideoControls> {
+  /// 控制条显隐规则。真正的判断在 [VideoControlsVisibility] 里（单独测过）。
+  late final VideoControlsVisibility _vis = VideoControlsVisibility(
+    // 显隐变了才重绘：鼠标移动事件非常密集
+    onChanged: () {
+      if (mounted) setState(() {});
+    },
+  );
+
+  bool _playing = false;
+  bool _completed = false;
+  double _rate = 1.0;
+
+  /// 支持的倍速档位。只到 2×：再快人耳已经听不清，对看视频没帮助。
+  static const List<double> _rates = <double>[0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
+  final List<StreamSubscription<dynamic>> _subs =
+      <StreamSubscription<dynamic>>[];
+
+  Player get _player => widget.state.widget.controller.player;
+
+  @override
+  void initState() {
+    super.initState();
+    final player = _player;
+    _playing = player.state.playing;
+    _rate = player.state.rate;
+    _completed = player.state.completed;
+    _vis.setPlaying(_playing);
+
+    _subs.add(
+      player.stream.playing.listen((v) {
+        if (!mounted || v == _playing) return;
+        setState(() => _playing = v);
+        _vis.setPlaying(v);
+      }),
+    );
+    _subs.add(
+      player.stream.completed.listen((v) {
+        if (mounted && v != _completed) setState(() => _completed = v);
+      }),
+    );
+    // 倍速从 player 读，而不是自己存一份：全屏那个新实例也就能显示对
+    _subs.add(
+      player.stream.rate.listen((v) {
+        if (mounted && v != _rate) setState(() => _rate = v);
+      }),
+    );
+  }
+
+  @override
+  void dispose() {
+    _vis.dispose();
+    for (final s in _subs) {
+      s.cancel();
+    }
+    super.dispose();
+  }
+
+  // ── 播放控制 ────────────────────────────────────────────────────────────
+
+  /// 点画面 / 中间那个大按钮：播放 ⇄ 暂停。
+  ///
+  /// 播完后再点必须**先回到开头**：media_kit 停在结尾时 `play()` 什么都不会
+  /// 发生，用户点了没反应。
+  void _toggle() {
+    final player = _player;
+    if (_playing) {
+      player.pause();
+      return;
+    }
+    if (_completed) {
+      player.seek(Duration.zero);
+      setState(() => _completed = false);
+    }
+    player.play();
+  }
+
+  /// 选播放速度。
+  ///
+  /// [btnCtx] 是那个按钮自己的 context —— 拿它当锚点，菜单才会贴着按钮弹。
+  Future<void> _pickRate(BuildContext btnCtx) async {
+    final picked = await showAppMenu<double>(
+      btnCtx,
+      anchor: AppMenuAnchor(context: btnCtx),
+      header: '播放速度',
+      items: <AppMenuItem<double>>[
+        for (final r in _rates)
+          AppMenuItem(
+            value: r,
+            label: r == 1.0 ? '正常 1×' : '${_formatRate(r)}×',
+            icon: _rate == r ? Icons.check_circle_rounded : Icons.speed_rounded,
+            color: _rate == r ? btnCtx.colors.tint : null,
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    await _player.setRate(picked);
+  }
+
+  /// 1.0 → "1"，0.75 → "0.75"。别显示成 "1.0×" 那种别扭写法。
+  static String _formatRate(double r) =>
+      r == r.roundToDouble() ? r.toStringAsFixed(0) : '$r';
+
+  @override
+  Widget build(BuildContext context) {
+    final player = _player;
+    final barVisible = _vis.barVisible;
+
+    return MouseRegion(
+      onEnter: (_) => _vis.enter(),
+      onExit: (_) => _vis.exit(),
+      // 只要鼠标动就"续命"：倒计时重新开始，控制条重新亮出来
+      onHover: (_) => _vis.hover(),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // 1) 点画面任意处播放/暂停。控制条上的按钮在它上面，
+          //    所以拖进度条、点倍速都不会被这里截走。
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggle,
+            child: const SizedBox.expand(),
+          ),
+
+          // 2) 正中央的大按钮：未播放或播完时显示。
+          //    不管鼠标在不在画面里都显示 —— 这就是"待播"状态的默认样子，
+          //    否则用户看到一张静止画面，不知道该怎么放。
+          if (!_playing)
+            Center(
+              child: _centerButton(
+                icon: _completed
+                    ? Icons.replay_rounded
+                    : Icons.play_arrow_rounded,
+                tip: _completed ? '重新播放' : '播放',
+              ),
+            ),
+
+          // 3) 底部控制条
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: IgnorePointer(
+              // 收起来的时候**不能留着可点区域**，
+              // 否则看不见的进度条会吃掉画面上的点击
+              ignoring: !barVisible,
+              child: AnimatedOpacity(
+                opacity: barVisible ? 1 : 0,
+                duration: AppMotion.fast,
+                child: _controlBar(player),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 画面正中的播放/重播按钮。
+  Widget _centerButton({required IconData icon, required String tip}) =>
+      MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Tooltip(
+          message: tip,
+          child: Pressable(
+            onTap: _toggle,
+            scale: 0.94,
+            child: Container(
+              width: 58,
+              height: 58,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.42),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  width: 2,
+                ),
+              ),
+              // 播放三角形的视觉重心偏左，往右挪一点才像"居中"
+              child: Icon(icon, size: 34, color: Colors.white),
+            ),
+          ),
+        ),
+      );
+
+  // ── 底部控制条 ──────────────────────────────────────────────────────────
   //
   // [暂停] [音量]  00:31 / 04:29        [1×] [全屏]
   // ————————————— 进度条 —————————————
@@ -271,100 +458,89 @@ class _MediaCardState extends State<MediaCard> {
   // 而倍速天然属于播放器控制 —— 和暂停/音量/全屏是一类东西，
   // 放到画面外面既不符合直觉，菜单锚点也会乱飘。
 
-  Widget _controls(VideoState state) {
-    final player = state.widget.controller.player;
+  Widget _controlBar(Player player) {
+    return StreamBuilder<Duration>(
+      // position 一直在推，进度条才会动
+      stream: player.stream.position,
+      initialData: player.state.position,
+      builder: (context, posSnap) {
+        final pos = posSnap.data ?? Duration.zero;
+        final dur = player.state.duration;
+        final vol = player.state.volume;
 
-    return StreamBuilder<bool>(
-      stream: player.stream.playing,
-      initialData: player.state.playing,
-      builder: (context, playingSnap) {
-        final playing = playingSnap.data ?? false;
-        return StreamBuilder<Duration>(
-          // position 一直在推，进度条才会动
-          stream: player.stream.position,
-          initialData: player.state.position,
-          builder: (context, posSnap) {
-            final pos = posSnap.data ?? Duration.zero;
-            final dur = player.state.duration;
-            final vol = player.state.volume;
-
-            return Container(
-              // 底部压一层渐变，白底视频上控件也看得清
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Colors.black.withValues(alpha: 0.55),
-                  ],
+        return Container(
+          // 底部压一层渐变，白底视频上控件也看得清
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.transparent,
+                Colors.black.withValues(alpha: 0.55),
+              ],
+            ),
+          ),
+          padding: const EdgeInsets.fromLTRB(10, 24, 10, 6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              SliderTheme(
+                data: SliderThemeData(
+                  trackHeight: 3,
+                  // 滑块平时藏起来，只在拖动时露头
+                  thumbShape: const RoundSliderThumbShape(
+                    enabledThumbRadius: 6,
+                  ),
+                  overlayShape: SliderComponentShape.noOverlay,
+                  activeTrackColor: Colors.white,
+                  inactiveTrackColor: Colors.white24,
+                  thumbColor: Colors.white,
+                ),
+                child: Slider(
+                  value: dur.inMilliseconds == 0
+                      ? 0
+                      : pos.inMilliseconds
+                          .clamp(0, dur.inMilliseconds)
+                          .toDouble(),
+                  // 时长还没读到时给 1，避免 max=0 让 Slider 断言失败
+                  max: dur.inMilliseconds < 1
+                      ? 1.0
+                      : dur.inMilliseconds.toDouble(),
+                  onChanged: (v) => player.seek(
+                    Duration(milliseconds: v.round()),
+                  ),
                 ),
               ),
-              padding: const EdgeInsets.fromLTRB(10, 24, 10, 6),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
+              Row(
                 children: [
-                  SliderTheme(
-                    data: SliderThemeData(
-                      trackHeight: 3,
-                      // 滑块平时藏起来，只在拖动时露头
-                      thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 6,
-                      ),
-                      overlayShape: SliderComponentShape.noOverlay,
-                      activeTrackColor: Colors.white,
-                      inactiveTrackColor: Colors.white24,
-                      thumbColor: Colors.white,
-                    ),
-                    child: Slider(
-                      value: dur.inMilliseconds == 0
-                          ? 0
-                          : pos.inMilliseconds
-                              .clamp(0, dur.inMilliseconds)
-                              .toDouble(),
-                      // 时长还没读到时给 1，避免 max=0 让 Slider 断言失败
-                      max: dur.inMilliseconds < 1
-                          ? 1.0
-                          : dur.inMilliseconds.toDouble(),
-                      onChanged: (v) => player.seek(
-                        Duration(milliseconds: v.round()),
-                      ),
+                  _ctrlBtn(
+                    _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    _playing ? '暂停' : '播放',
+                    () => _playing ? player.pause() : player.play(),
+                  ),
+                  _volumeControl(player, vol),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_fmt(pos)} / ${_fmt(dur)}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-                  Row(
-                    children: [
-                      _ctrlBtn(
-                        playing
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded,
-                        playing ? '暂停' : '播放',
-                        () => playing ? player.pause() : player.play(),
-                      ),
-                      _volumeControl(player, vol),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${_fmt(pos)} / ${_fmt(dur)}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const Spacer(),
-                      _speedBtn(state.context),
-                      _ctrlBtn(
-                        state.isFullscreen()
-                            ? Icons.fullscreen_exit_rounded
-                            : Icons.fullscreen_rounded,
-                        state.isFullscreen() ? '退出全屏' : '全屏',
-                        state.toggleFullscreen,
-                      ),
-                    ],
+                  const Spacer(),
+                  _speedBtn(),
+                  _ctrlBtn(
+                    widget.state.isFullscreen()
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                    widget.state.isFullscreen() ? '退出全屏' : '全屏',
+                    widget.state.toggleFullscreen,
                   ),
                 ],
               ),
-            );
-          },
+            ],
+          ),
         );
       },
     );
@@ -420,7 +596,7 @@ class _MediaCardState extends State<MediaCard> {
   );
 
   /// 倍速按钮 —— 和暂停、音量、全屏**在同一行**。
-  Widget _speedBtn(BuildContext anchorCtx) => Builder(
+  Widget _speedBtn() => Builder(
     builder: (btnCtx) => Tooltip(
       message: '播放速度',
       child: Pressable(
@@ -434,7 +610,7 @@ class _MediaCardState extends State<MediaCard> {
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
-            '${formatRate(_rate)}×',
+            '${_formatRate(_rate)}×',
             style: TextStyle(
               color: Colors.white,
               fontSize: 12,
@@ -455,22 +631,4 @@ class _MediaCardState extends State<MediaCard> {
     final s = d.inSeconds.remainder(60);
     return h > 0 ? '$h:${two(m)}:${two(s)}' : '${two(m)}:${two(s)}';
   }
-
-  /// 视频下面那一行：图标 + 文件名。
-  Widget _caption(AppColors c) => Row(
-    children: [
-      Icon(Icons.movie_outlined, size: 12, color: c.quaternaryLabel),
-      const SizedBox(width: 5),
-      Expanded(
-        child: Text(
-          widget.index == null
-              ? widget.relPath
-              : '第 ${widget.index} 个 · ${widget.relPath}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: AppText.caption2.copyWith(color: c.quaternaryLabel),
-        ),
-      ),
-    ],
-  );
 }
