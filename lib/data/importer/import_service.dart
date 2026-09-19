@@ -12,9 +12,11 @@ import 'dart:isolate';
 import 'package:path/path.dart' as p;
 
 import '../db/app_database.dart';
+import '../media/media_importer.dart';
 import '../repositories/note_repository.dart';
 import '../../core/utils/text_stats.dart';
 import 'docx_importer.dart';
+import 'media_refs.dart';
 import 'txt_importer.dart';
 
 /// 导入进度回调。
@@ -179,8 +181,7 @@ class ImportService {
 
         var idx = 0;
         String? cover;
-        final rewritten = parsed.markdown;
-        var content = rewritten;
+        var content = parsed.markdown;
         for (final img in parsed.images) {
           idx++;
           final fileName = '$idx.${_ext(img.placeholder)}';
@@ -191,6 +192,25 @@ class ImportService {
 
           // 把占位 images/N.ext 换成真实相对路径
           content = content.replaceAll(img.placeholder, '$relDir/$fileName');
+        }
+
+        // 3b) 正文里**按相对路径**引用的本地图片/视频，一并搬进来。
+        //
+        // docx 内嵌的图上面已经处理了；这里补的是另一种形态：文档旁边
+        // （或同级的 assets/、xxx_files/）躺着文件，正文里写着它的相对路径。
+        // 不处理的话笔记里会留一个打不开的路径，用户以为图丢了。
+        //
+        // 走的是**同一条落盘逻辑**（同一个目录、同一个序号、同一次替换），
+        // 所以图片和视频在笔记里的表现和内嵌图完全一致。
+        for (final ref in resolveLocalMedia(parsed.markdown, file.parent)) {
+          idx++;
+          final ext = MediaImporter.extensionOf(ref.fileName);
+          final fileName = '$idx.$ext';
+          final target = File(p.join(dir.path, fileName));
+          await target.writeAsBytes(ref.bytes, flush: false);
+          summary.images++;
+          cover ??= '$relDir/$fileName';
+          content = content.replaceAll(ref.reference, '$relDir/$fileName');
         }
 
         // 4) 回写正文与统计
