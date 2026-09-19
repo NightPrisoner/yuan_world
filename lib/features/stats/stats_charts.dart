@@ -131,6 +131,13 @@ class TrendChart extends StatelessWidget {
 
   bool get _multi => series.length > 1;
 
+  /// X 轴两端各留的余量（单位是"一个刻度"）。
+  ///
+  /// 数据点是有半径的圆点/圆角柱：X 轴正好收在首尾点上时，**最后一个点会被
+  /// 画在边界上、裁掉一半** —— 用户看到的就是"最后一个数据点显示不全"。
+  /// 留一点余量，两端的点也能完整画出来。
+  double get _padX => points.length <= 1 ? 0 : 0.35;
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
@@ -223,6 +230,9 @@ class TrendChart extends StatelessWidget {
           alignment: BarChartAlignment.spaceAround,
           barTouchData: BarTouchData(
             touchTooltipData: BarTouchTooltipData(
+              // 两端的柱子一悬停，气泡也会顶出图表被裁掉
+              fitInsideHorizontally: true,
+              fitInsideVertically: true,
               getTooltipColor: (_) => c.isDark
                   ? const Color(0xFF2C2C2E)
                   : const Color(0xFF1C1C1E),
@@ -314,13 +324,17 @@ class TrendChart extends StatelessWidget {
               LineChartData(
                 minY: y.lo,
                 maxY: y.hi,
-                minX: 0,
-                maxX: math.max(1, points.length - 1).toDouble(),
+                minX: -_padX,
+                maxX: math.max(1, points.length - 1) + _padX,
                 lineTouchData: LineTouchData(
                   // **悬停容差给大一点**：按年/按季这种稀疏数据点与点隔得远，
                   // 默认容差下必须精确压中那个点才出提示，用户会觉得"移到图上没反应"。
                   touchSpotThreshold: 40,
                   touchTooltipData: LineTouchTooltipData(
+                    // 气泡要**收在图内**：默认是不收的，靠右边的点一悬停，
+                    // 气泡就顶出图表、被裁掉半截（用户截图里就是这样）
+                    fitInsideHorizontally: true,
+                    fitInsideVertically: true,
                     getTooltipColor: (_) => c.isDark
                         ? const Color(0xFF2C2C2E)
                         : const Color(0xFF1C1C1E),
@@ -409,12 +423,15 @@ class TrendChart extends StatelessWidget {
       LineChartData(
         minY: y.lo,
         maxY: y.hi,
-        minX: 0,
-        maxX: math.max(1, points.length - 1).toDouble(),
+        minX: -_padX,
+        maxX: math.max(1, points.length - 1) + _padX,
         lineTouchData: LineTouchData(
           // 稀疏数据下要放宽容差，否则必须精确压中数据点才出提示
           touchSpotThreshold: 40,
           touchTooltipData: LineTouchTooltipData(
+            // 靠右边的点一悬停，气泡会顶出图表被裁掉 —— 收在图内
+            fitInsideHorizontally: true,
+            fitInsideVertically: true,
             getTooltipColor: (_) => c.isDark
                 ? const Color(0xFF2C2C2E)
                 : const Color(0xFF1C1C1E),
@@ -1075,6 +1092,8 @@ class HourlyChart extends StatelessWidget {
           alignment: BarChartAlignment.spaceAround,
           barTouchData: BarTouchData(
             touchTooltipData: BarTouchTooltipData(
+              fitInsideHorizontally: true,
+              fitInsideVertically: true,
               getTooltipColor: (_) => c.isDark
                   ? const Color(0xFF2C2C2E)
                   : const Color(0xFF1C1C1E),
@@ -1247,6 +1266,8 @@ class LengthHistogram extends StatelessWidget {
           alignment: BarChartAlignment.spaceAround,
           barTouchData: BarTouchData(
             touchTooltipData: BarTouchTooltipData(
+              fitInsideHorizontally: true,
+              fitInsideVertically: true,
               getTooltipColor: (_) => c.isDark
                   ? const Color(0xFF2C2C2E)
                   : const Color(0xFF1C1C1E),
