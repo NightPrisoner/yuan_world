@@ -1009,95 +1009,99 @@ class _NoteListRowState extends State<_NoteListRow> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      // 悬停时整行轻轻抬起 1px：幅度比网格卡片更小 ——
-      // 列表是"一行行读"的，抬多了会晃眼
-      child: HoverLift(
-        dy: -1,
-        scale: 1.002,
-        child: Pressable(
-          onTap: widget.onTap,
-          onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
-          scale: 0.99,
-          opacity: 0.85,
-          child: AnimatedContainer(
-            duration: AppMotion.fast,
-            curve: AppMotion.enter,
-            margin: const EdgeInsets.only(bottom: 4),
-            padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
-            decoration: BoxDecoration(
-              color: widget.selected
-                  ? c.tint.withValues(alpha: c.isDark ? 0.20 : 0.12)
-                  : (_hover ? c.secondaryBackground : Colors.transparent),
-              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-              border: Border.all(
-                // 悬停时描一道极淡的边，把"抬起来"这件事说清楚
-                color: _hover && !widget.selected
-                    ? c.separator.withValues(alpha: c.isDark ? 0.7 : 0.5)
-                    : Colors.transparent,
-                width: 0.5,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+      // **列表行的悬停只做"淡色"变化，不放任何高饱和色块。**
+      //
+      // 两版教训都记在这：
+      //   1. 加过 1px 上浮 + 1.002 缩放 → 文字在非整数缩放下反复重新
+      //      栅格化，一行行变模糊；
+      //   2. 加过一条纯色的蓝色小竖条（还带过冲曲线）→ 鼠标上下扫过时
+      //      一行行弹进弹出，用户看到的是"很快的颜色变动"，刺眼。
+      // 列表是文字为主、又要一行行扫读的地方：反馈用**低对比度的底色
+      // 渐变**就够了，任何饱和元素都会变成闪烁源。
+      child: Pressable(
+        onTap: widget.onTap,
+        onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
+        scale: 0.99,
+        opacity: 0.85,
+        child: AnimatedContainer(
+          // **进快、出慢**：鼠标快速划过一排时，离场是慢慢淡出的，
+          // 不会"啪"地一下弹回原色 —— 那种一行行开关式的明暗跳变
+          // 就是用户说的"很快的颜色变动 / 闪眼"。
+          duration: _hover ? AppMotion.instant : AppMotion.normal,
+          curve: AppMotion.enter,
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
+          decoration: BoxDecoration(
+            // 悬停底色用**极低透明度**的墨色/白色薄薄一层：
+            // 以前用 secondaryBackground（一整块面板色），明暗差太大，
+            // 鼠标扫过一排就是一遍明暗闪烁。反馈还在，但只是"掠过"的量级。
+            color: widget.selected
+                ? c.tint.withValues(alpha: c.isDark ? 0.20 : 0.12)
+                : (_hover
+                    ? c.label.withValues(alpha: c.isDark ? 0.07 : 0.04)
+                    : Colors.transparent),
+            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (n.isPinned)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Icon(Icons.push_pin, size: 11, color: c.tint),
-                      ),
-                    Expanded(
-                      child: Text(
-                        n.title.isEmpty ? '无标题笔记' : n.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppText.footnote.copyWith(
-                          color: n.title.isEmpty ? c.tertiaryLabel : c.label,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    if (n.isFavorite)
-                      Icon(Icons.star_rounded, size: 12, color: c.palette[7]),
-                    // 悬停时露出操作入口，避免只能靠右键才发现。
-                    // 用 AnimatedSwitcher：不在悬停态时树里**真的没有**它，
-                    // 出现时是淡入+轻微放大的。
-                    AnimatedSwitcher(
-                      duration: AppMotion.fast,
-                      switchInCurve: AppMotion.pop,
-                      switchOutCurve: AppMotion.exit,
-                      transitionBuilder: (child, anim) => FadeTransition(
-                        opacity: anim,
-                        child: ScaleTransition(
-                          scale: Tween<double>(begin: 0.8, end: 1).animate(anim),
-                          child: child,
-                        ),
-                      ),
-                      child: _hover
-                          ? Builder(
-                              key: const ValueKey<String>('row-actions'),
-                              builder: (btnCtx) => GestureDetector(
-                                onTap: () => widget.onActions(
-                                  AppMenuAnchor(context: btnCtx),
-                                ),
-                                behavior: HitTestBehavior.opaque,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(left: 6),
-                                  child: Icon(
-                                    Icons.more_horiz_rounded,
-                                    size: 15,
-                                    color: c.tertiaryLabel,
-                                  ),
-                                ),
-                              ),
-                            )
-                          : const SizedBox.shrink(
-                              key: ValueKey<String>('row-actions-none'),
+                    Row(
+                      children: [
+                        if (n.isPinned)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(Icons.push_pin, size: 11, color: c.tint),
+                          ),
+                        Expanded(
+                          child: Text(
+                            n.title.isEmpty ? '无标题笔记' : n.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.footnote.copyWith(
+                              color: n.title.isEmpty
+                                  ? c.tertiaryLabel
+                                  : c.label,
+                              fontWeight: FontWeight.w600,
                             ),
+                          ),
+                        ),
+                        if (n.isFavorite)
+                          Icon(Icons.star_rounded,
+                              size: 12, color: c.palette[7]),
+                        // **给 ⋯ 预留固定宽度**（21px），悬停时只做淡入。
+                        //
+                        // 以前是"出现时才占位"，于是鼠标扫过时标题会被
+                        // 挤窄一下再弹回来 —— 一行行地挤，看起来就是闪。
+                        // 位置恒定的槽位 + 只改透明度，标题一个字都不会动。
+                        SizedBox(
+                          width: 21,
+                          child: _hover
+                              ? _FadePopIn(
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: Builder(
+                                      builder: (btnCtx) => GestureDetector(
+                                        onTap: () => widget.onActions(
+                                          AppMenuAnchor(context: btnCtx),
+                                        ),
+                                        behavior: HitTestBehavior.opaque,
+                                        child: Icon(
+                                          Icons.more_horiz_rounded,
+                                          size: 15,
+                                          color: c.tertiaryLabel,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
               if (n.excerpt.isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text(
@@ -1139,9 +1143,11 @@ class _NoteListRowState extends State<_NoteListRow> {
                   ),
                 ],
               ),
+                  ],
+                ),
+              ),
             ],
           ),
-        ),
         ),
       ),
     );
