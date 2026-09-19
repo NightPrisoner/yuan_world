@@ -165,7 +165,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
         ),
         const AppMenuItem(
           value: 'export',
-          label: '导出为文件',
+          label: '导出为压缩包',
           icon: Icons.download_rounded,
         ),
         const AppMenuItem(
@@ -247,14 +247,10 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
   /// 区别只是每篇的 path 换成它自己在文集树里的位置。
   Future<void> _exportCollection(Collection col) async {
     final state = context.read<AppState>();
-    final ids = <int>[
-      col.id,
-      ...state.repo.descendantCollectionIds(col.id),
-    ];
-    final notes = <Note>[
-      for (final id in ids)
-        ...state.repo.listNotes(NoteFilter(collectionId: id, includeDescendants: false)),
-    ];
+    // 必须走 notesForExport —— 它会把正文一起取出来。
+    // listNotes 走的是不含 content 列的轻量查询，直接拿它的结果去导出，
+    // 出来的 docx 全是空壳（正文一个字都没有），用户报的正是这个问题。
+    final notes = state.repo.notesForExport(collectionId: col.id);
     if (!mounted) return;
     if (notes.isEmpty) {
       _toast('「${col.name}」里还没有笔记');
@@ -281,9 +277,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
     if (format == null || !mounted) return;
 
     final state = context.read<AppState>();
-    final notes = <Note>[
-      for (final id in ids) ?state.repo.getNote(id),
-    ];
+    final notes = state.repo.notesForExport(ids: ids);
     if (notes.isEmpty) return;
 
     // **批量导出打包成一个 zip**，而不是往文件夹里撒一堆散文件。

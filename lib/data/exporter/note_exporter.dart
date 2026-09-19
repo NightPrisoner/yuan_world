@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 
 import '../../core/utils/text_stats.dart';
 import '../../core/utils/toc.dart';
+import '../media/media_importer.dart';
 import '../models.dart';
 
 /// 支持的导出格式。
@@ -59,6 +60,12 @@ class _DocxImage {
 class NoteExporter {
   const NoteExporter._();
 
+  /// 单个视频进压缩包的上限。超过就不打包，只在正文里说明。
+  ///
+  /// 压缩包是在内存里拼好的，用户库里真有 258 MiB 的视频；
+  /// 上限给得比较宽松，是为了不让正常大小的录屏被挡在外面。
+  static const int kMaxPackedVideoBytes = 512 * 1024 * 1024;
+
   /// 把多篇笔记打成**一个压缩包**（包里每篇一个文件）。
   ///
   /// [items] 里的 `path` 是**包内的目录层级**（不含文件名），空表示放根目录。
@@ -69,17 +76,16 @@ class NoteExporter {
     required List<({List<String> path, Note note})> items,
     ExportFormat format = ExportFormat.docx,
     String? imageRoot,
+    /// 单个视频进包的上限，默认 [kMaxPackedVideoBytes]。
+    /// 测试里压到 1 字节就能造出"超大视频"的场景，不用真写几百 MB 的文件。
+    int? maxVideoBytes,
   }) {
+    final videoLimit = maxVideoBytes ?? kMaxPackedVideoBytes;
     final archive = Archive();
     final used = <String>{};
 
     for (final item in items) {
       final note = item.note;
-      final bytes = format.isBinary
-          ? renderDocxBytes(note, imageRoot: imageRoot)
-          : Uint8List.fromList(
-              utf8.encode(render(note, format, imageRoot: imageRoot)),
-            );
 
       final dirs = <String>[
         for (final seg in item.path)
@@ -94,7 +100,52 @@ class NoteExporter {
         full = <String>[...dirs, '$base ($k).${format.ext}'].join('/');
         k++;
       }
+      // 视频目录名跟着**最终**文件名走（含去重后的序号），
+      // 否则 docx 正文里写的是 `笔记.files`、包里实际叫 `笔记 (2).files`。
+      final stem = full.substring(0, full.length - format.ext.length - 1);
+      final videoFolder = '$stem.files';
+
+      // 先算出哪些视频能进包，再渲染正文 ——
+      // 正文里那句"该文件已随导出放入 xxx.files"必须和包里真实存在的东西一致，
+      // 否则就是在骗人（这正是之前"视频不见了"的同类问题）。
+      final packed = <String>[];
+      final oversized = <String>[];
+      for (final rel in videoRelsOf(note)) {
+        final file = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+        if (!file.existsSync()) continue;
+        // 整包是在内存里拼出来的（`ZipEncoder().encodeBytes`），
+        // 一个几 GB 的视频会把内存吃光，最后连整个导出都失败 ——
+        // 宁可这一条不打包并在正文里说明，也不要整个文件夹导不出来。
+        if (file.lengthSync() > videoLimit) {
+          oversized.add(rel);
+        } else {
+          packed.add(rel);
+        }
+      }
+
+      final bytes = format.isBinary
+          ? renderDocxBytes(
+              note,
+              imageRoot: imageRoot,
+              videoFolder: videoFolder,
+              oversizedVideos: oversized,
+            )
+          : Uint8List.fromList(
+              utf8.encode(render(note, format, imageRoot: imageRoot)),
+            );
       archive.addFile(ArchiveFile(full, bytes.length, bytes));
+
+      // 视频本体跟着一起打包。
+      // docx 放 `<笔记名>.files/`（和正文里那行说明对上）；
+      // markdown/html 里写的就是原始相对路径，所以原地放，链接才不断。
+      for (final rel in packed) {
+        final file = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+        final data = file.readAsBytesSync();
+        final target =
+            format.isBinary ? '$videoFolder/${p.basename(rel)}' : rel;
+        if (!used.add(target)) continue;
+        archive.addFile(ArchiveFile(target, data.length, data));
+      }
     }
 
     return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
@@ -142,15 +193,26 @@ class NoteExporter {
   //   [Content_Types].xml 里声明 png/jpeg 的默认类型
   // 少任何一样，Word 都会报"文件已损坏"或者图片变成红叉。
 
-  static Uint8List renderDocxBytes(Note note, {String? imageRoot}) {
+  static Uint8List renderDocxBytes(
+    Note note, {
+    String? imageRoot,
+    String? videoFolder,
+    List<String> oversizedVideos = const <String>[],
+  }) {
     final blocks = parseContent(note.content);
 
-    // 先把正文里引用到的图片收集起来，编号从 1 开始（rId 也一样）
+    // 先把正文里引用到的图片收集起来，编号从 1 开始（rId 也一样）。
+    //
+    // **视频必须在这里摘出去**：数据库里视频块和图片块是同一个 type
+    // （导入时就按 image 存的，界面靠扩展名区分），所以不做区分的话
+    // mp4 会被 readAsBytes 当成图片塞进 word/media，Word 里就是红叉/
+    // 什么都不显示 —— 用户看到的现象就是"笔记导出后视频不见了"。
     final images = <_DocxImage>[];
     for (final block in blocks) {
       if (block.type != ContentBlockType.image) continue;
       final rel = _imagePathOf(block.text.trim());
       if (rel.isEmpty) continue;
+      if (MediaImporter.isVideoPath(rel)) continue;
 
       final file = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
       if (!file.existsSync()) continue;
@@ -199,7 +261,9 @@ class NoteExporter {
         '</Relationships>',
       ))
       ..addFile(ArchiveFile.string('word/styles.xml', _stylesXml()))
-      ..addFile(ArchiveFile.string('word/document.xml', _documentXml(note, blocks, images)));
+      ..addFile(ArchiveFile.string('word/document.xml',
+          _documentXml(note, blocks, images,
+              videoFolder: videoFolder, oversizedVideos: oversizedVideos)));
 
     // **document.xml.rels 要无条件生成**：以前只在有图片时才写，
     // 而没有 styles 关系的话 Word 也不会去读 styles.xml。
@@ -277,8 +341,10 @@ class NoteExporter {
   static String _documentXml(
     Note note,
     List<ContentBlock> blocks,
-    List<_DocxImage> images,
-  ) {
+    List<_DocxImage> images, {
+    String? videoFolder,
+    List<String> oversizedVideos = const <String>[],
+  }) {
     var imgIndex = 0;
     final b = StringBuffer()      ..write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
       ..write('<w:document '
@@ -369,20 +435,31 @@ class NoteExporter {
 
       if (block.type == ContentBlockType.image) {
         final rel = _imagePathOf(block.text.trim());
-        _DocxImage? img;
-        for (final candidate in images) {
-          if (candidate.sourceRel == rel) {
-            img = candidate;
-            break;
-          }
-        }
-        if (img == null) {
-          // 图片文件找不到（可能被删了），退化成一行文字说明，
-          // 总比整篇导出失败强
-          b.write(_para('[图片] $rel'));
+        // 视频：Word 没有可移植的"内嵌可播放视频"做法（在线视频要能联网的
+        // URL，OLE 对象要 Word 原生支持且换台机器就失效），所以正文里留一行
+        // 能看见的说明，真正的视频文件由 zipBytes 放进制表同名 .files 目录。
+        if (MediaImporter.isVideoPath(rel)) {
+          b.write(_para(_videoNote(
+            rel,
+            videoFolder ?? _videoFolderOf(note),
+            skipped: oversizedVideos.contains(rel),
+          )));
         } else {
-          imgIndex++;
-          b.write(_imageXml(img, imgIndex));
+          _DocxImage? img;
+          for (final candidate in images) {
+            if (candidate.sourceRel == rel) {
+              img = candidate;
+              break;
+            }
+          }
+          if (img == null) {
+            // 图片文件找不到（可能被删了），退化成一行文字说明，
+            // 总比整篇导出失败强
+            b.write(_para('[图片] $rel'));
+          } else {
+            imgIndex++;
+            b.write(_imageXml(img, imgIndex));
+          }
         }
       } else {
         // 标题要带上书签，目录才跳得过来；编号按正文里出现的顺序走
@@ -583,7 +660,12 @@ class NoteExporter {
     final text = block.text.trim();
     switch (block.type) {
       case ContentBlockType.image:
-        return _para('[图片] ${_imagePathOf(block.text.trim())}');
+        final rel = _imagePathOf(text);
+        return _para(
+          MediaImporter.isVideoPath(rel)
+              ? '[视频] ${p.basename(rel)}'
+              : '[图片] $rel',
+        );
       case ContentBlockType.divider:
         return _para('————————');
       case ContentBlockType.heading:
@@ -733,7 +815,12 @@ class NoteExporter {
       final text = stripInlineMarkers(block.text.trim());
       switch (block.type) {
         case ContentBlockType.image:
-          b.writeln('[图片] ${_imagePathOf(block.text.trim())}');
+          // 视频块和图片块在正文里是同一个 type，纯文本里也要分开写，
+          // 否则导出后的 txt/html 会把 mp4 说成"图片"
+          final rel = _imagePathOf(block.text.trim());
+          b.writeln(
+            MediaImporter.isVideoPath(rel) ? '[视频] $rel' : '[图片] $rel',
+          );
         case ContentBlockType.divider:
           b.writeln('-' * 40);
         case ContentBlockType.heading:
@@ -812,6 +899,13 @@ class NoteExporter {
     switch (block.type) {
       case ContentBlockType.image:
         final rel = _imagePathOf(text);
+        // 视频不能走 `_dataUri`：那是把文件 base64 塞进 HTML，
+        // 一段 mp4 能撑出几十 MB 的 html，而且 `<img>` 也放不出来。
+        // 交给浏览器原生播放器，src 用相对路径（视频文件随包一起导出）。
+        if (MediaImporter.isVideoPath(rel)) {
+          return '<video controls preload="metadata" src="${_esc(rel)}" '
+              'style="max-width:100%;border-radius:12px;"></video>';
+        }
         return '<img src="${_esc(_dataUri(rel, imageRoot))}" alt="">';
       case ContentBlockType.divider:
         return '<hr>';
@@ -908,6 +1002,70 @@ class NoteExporter {
     var path = (m?.group(1) ?? line).trim();
     if (path.startsWith('images/')) path = path.substring('images/'.length);
     return path;
+  }
+
+  // ── 视频 ────────────────────────────────────────────────────────────────
+  //
+  // Word 文档里**放不了可播放的视频**，这一点没有绕过办法：
+  //   · "在线视频" 需要公网 URL，而且要 Word 2013+ 联网；
+  //   · OLE 嵌入的对象换台机器/换个阅读器就失效。
+  // 所以导出的做法是：正文里留一行看得见的 `[视频] 文件名` 说明，
+  // 视频文件本身跟着压缩包一起走，放在同名 `.files` 目录里。
+
+  /// 这篇笔记的视频在压缩包里放的目录名（相对该笔记文件所在目录）。
+  static String videoFolderOf(Note note) => _videoFolderOf(note);
+
+  static String _videoFolderOf(Note note) =>
+      '${_safeSegment(suggestedName(note))}.files';
+
+  static String _videoNote(String rel, String folder, {bool skipped = false}) {
+    final name = p.basename(rel);
+    if (skipped) {
+      // **不能写"已放入 xxx 文件夹"** —— 这个文件因为太大没进包，
+      // 那样写就是在骗人。宁可说清楚"没打包、原文件在哪"。
+      return '[视频] $name（文件超过 '
+          '${NoteExporter.kMaxPackedVideoBytes ~/ (1024 * 1024)} MB，'
+          '未随导出打包；原文件在应用的媒体目录里）';
+    }
+    return folder.isEmpty
+        ? '[视频] $name'
+        : '[视频] $name（Word 不能内嵌视频，该文件已随导出放入「$folder」文件夹）';
+  }
+
+  /// 正文里引用到的所有视频文件（相对路径，去重、保持出现顺序）。
+  static List<String> videoRelsOf(Note note) {
+    final out = <String>[];
+    for (final block in parseContent(note.content)) {
+      if (block.type != ContentBlockType.image) continue;
+      final rel = _imagePathOf(block.text.trim());
+      if (rel.isEmpty || !MediaImporter.isVideoPath(rel)) continue;
+      if (!out.contains(rel)) out.add(rel);
+    }
+    return out;
+  }
+
+  /// 单篇导出后，把正文里的视频**拷到 docx 旁边**的同名 `.files` 目录里。
+  /// 单篇导出走的是「选保存位置」这条路，没有压缩包可放视频 ——
+  /// 而 docx 正文里已经写了"视频放在 XXX.files 文件夹"，
+  /// 不把文件夹真的建出来，那句话就是骗人的。
+  ///
+  /// 返回拷了几个文件。
+  static int copyVideosNextTo(
+    String docxPath,
+    Note note, {
+    String? imageRoot,
+  }) {
+    final savedBase = p.basenameWithoutExtension(docxPath);
+    final dir = Directory(p.join(p.dirname(docxPath), '$savedBase.files'));
+    var count = 0;
+    for (final rel in videoRelsOf(note)) {
+      final src = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+      if (!src.existsSync()) continue;
+      dir.createSync(recursive: true);
+      src.copySync(p.join(dir.path, p.basename(rel)));
+      count++;
+    }
+    return count;
   }
 
   // ── 落盘 ────────────────────────────────────────────────────────────────

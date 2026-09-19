@@ -312,6 +312,12 @@ class NoteRepository {
     }
   }
 
+  /// 给笔记补上标签。
+  ///
+  /// **必须逐个字段抄过来。** 这里漏过 `deletedAt`：回收站里的笔记
+  /// 读出来 `deletedAt` 是 null，看起来和活着的笔记一模一样 ——
+  /// 凡是"靠 deletedAt 判断是否已删"的地方（导出、去重、恢复）
+  /// 都会判错。新增字段时记得同步这里。
   Note _withTags(Note n, List<String> tags) => Note(
     id: n.id,
     title: n.title,
@@ -330,12 +336,49 @@ class NoteRepository {
     isFavorite: n.isFavorite,
     isArchived: n.isArchived,
     isHidden: n.isHidden,
+    deletedAt: n.deletedAt,
     sortIndex: n.sortIndex,
     coverImage: n.coverImage,
     collectionName: n.collectionName,
     collectionColor: n.collectionColor,
     tags: tags,
   );
+
+  /// 导出用：把指定的笔记（或整个文集及其子文集）**连正文**一起取出来。
+  ///
+  /// 为什么单独开一个方法，而不是让调用方自己拼 `listNotes` + `getNote`：
+  /// `listNotes` 走的是不含 `content` 列的轻量查询（列表页只要摘要，
+  /// 每行都拖着正文太贵），**拿它的结果直接去导出，出来的 docx 全是空壳**
+  /// —— 用户报的"文件夹导出但是没有实际笔记内容"就是这么来的。
+  /// 把"导出必须补正文"这件事收在这一个地方，别处就不会再漏。
+  ///
+  /// [collectionId] 给定时含所有子孙文集；[ids] 给定时按给定顺序取。
+  /// 已删除/回收站里的笔记不导出。
+  List<Note> notesForExport({int? collectionId, List<int>? ids}) {
+    final wanted = <int>[];
+    if (ids != null) {
+      wanted.addAll(ids);
+    } else if (collectionId != null) {
+      final scope = <int>[collectionId, ...descendantCollectionIds(collectionId)];
+      for (final row in _d.select(
+        'SELECT id FROM notes WHERE collection_id IN '
+        '(${List.filled(scope.length, '?').join(',')}) '
+        'AND ${liveNote('notes')} ORDER BY sort_index, created_at',
+        scope,
+      )) {
+        wanted.add(row['id'] as int);
+      }
+    }
+
+    final out = <Note>[];
+    for (final id in wanted) {
+      final n = getNote(id);
+      // 回收站里的不导出：用户点"导出文件夹"时并不指望把删掉的也带走
+      if (n == null || n.deletedAt != null) continue;
+      out.add(n);
+    }
+    return out;
+  }
 
   /// 取完整笔记（含正文 content）。
   Note? getNote(int id) {

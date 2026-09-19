@@ -10,6 +10,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -157,6 +158,30 @@ Future<void> exportSingleNote(BuildContext context, Note note) async {
     return;
   }
   if (target == null || !context.mounted) return;
+
+  // docx 里的视频没法嵌进文档，正文只留一行"视频在 XXX.files 文件夹"的说明。
+  // 所以导出完要把视频真拷到文档旁边；用户如果改了文件名，正文也要跟着
+  // 重写一次，否则那句话指向的是一个不存在的目录。
+  if (format == ExportFormat.docx) {
+    final savedPath = target.toFilePath();
+    if (NoteExporter.videoRelsOf(full).isNotEmpty) {
+      final savedBase = savedPath
+          .split(RegExp(r'[\\/]'))
+          .last
+          .replaceAll(RegExp(r'\.[^.]+$'), '');
+      if (savedBase != NoteExporter.suggestedName(full)) {
+        File(savedPath).writeAsBytesSync(
+          NoteExporter.renderDocxBytes(
+            full,
+            imageRoot: imageRoot,
+            videoFolder: '$savedBase.files',
+          ),
+          flush: true,
+        );
+      }
+      NoteExporter.copyVideosNextTo(savedPath, full, imageRoot: imageRoot);
+    }
+  }
 
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
