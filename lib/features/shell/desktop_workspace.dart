@@ -488,7 +488,10 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
             children: [
               if (!fullscreenEditor) ...[
                 if (_navCollapsed)
-                  SizedBox(width: 56, child: _navRail(context, state))
+                  // 58 = 10 + 38 + 10：让收起后的功能键左边缘正好落在
+                  // 展开态那个 10px 的内边距上，两种状态同一竖线，
+                  // 收起来的时候整排图标不会横向跳一下
+                  SizedBox(width: 58, child: _navRail(context, state))
                 else ...[
                 SizedBox(width: _navWidth, child: _navPane(context, state)),
                 _PaneResizer(
@@ -690,6 +693,17 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        // **收起开关放在最上面，且两种状态同一个位置。**
+                        //
+                        // 以前它夹在"视图"和"文件夹"两组中间，而收起后的
+                        // 展开按钮在最顶上 —— 同一个开关点一下会跳到另一个
+                        // 高度，很难受。放到固定区第一个，两边 y 就一致了。
+                        _NavRow(
+                          icon: Icons.chevron_left_rounded,
+                          label: '收起侧栏',
+                          selected: false,
+                          onTap: () => setState(() => _navCollapsed = true),
+                        ),
                   _NavRow(
                     icon: Icons.article_rounded,
                     label: '全部笔记',
@@ -741,18 +755,6 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                   const SizedBox(height: 6),
 
                   // ── 固定：文件夹标题（新建按钮始终够得着） ──
-                  //
-                  // 收起按钮放在这一组的上方：它收的是**整栏**，
-                  // 放在某个分组里面会让人以为只收这一组。
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(10, 2, 10, 0),
-                    child: _NavRow(
-                      icon: Icons.chevron_left_rounded,
-                      label: '收起侧栏',
-                      selected: false,
-                      onTap: () => setState(() => _navCollapsed = true),
-                    ),
-                  ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     child: _NavGroupLabel(
