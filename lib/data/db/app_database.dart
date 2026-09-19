@@ -109,8 +109,15 @@ class AppDatabase {
     // 光靠版本号不可靠：曾经出现过"版本号写成了 7，但迁移其实是空的"，
     // 于是列不存在、迁移又永远不会再跑，启动就白屏。
     // 这里对关键列做一次存在性检查，缺了就补 —— 幂等，且不依赖版本号。
+    //
+    // **哪些列该进这个名单**：每次写入都会碰到、缺了整个功能就瘫掉的。
+    //   - deleted_at：所有查询都带 `deleted_at IS NULL`，缺了每条查询都报错
+    //   - sort_key：每次 insertNote 都写它（标题拼音序也靠它），缺了
+    //     **新建/导入全部失败**，比少一个筛选条件严重得多
+    // 只加不删、且都带默认值，所以对老库是安全的。
     _ensureColumn('notes', 'deleted_at', 'INTEGER');
     _ensureColumn('collections', 'deleted_at', 'INTEGER');
+    _ensureColumn('notes', 'sort_key', "TEXT NOT NULL DEFAULT ''");
   }
 
   /// 表里没有这一列就加上。已经有就什么都不做。
