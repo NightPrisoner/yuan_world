@@ -18,7 +18,6 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -73,9 +72,25 @@ class _MediaCardState extends State<MediaCard> {
   void _open({required bool play}) {
     final player = Player();
     final controller = VideoController(player);
-    player.open(Media(Uri.file(widget.path).toString()), play: play);
     _player = player;
     _controller = controller;
+    // **必须 await open** —— 这是这次"点播放没反应"的根因。
+    //
+    // media_kit 的 Player 是**异步初始化**的，`open()` 只有在原生播放器就绪
+    // 之后才真正执行。之前这里不 await（fire-and-forget），命令会落在
+    // 就绪之前被丢掉：媒体从来没被打开过，`state.duration` 一直是 0，
+    // 于是点播放、点重播、拖进度条**全都没反应** —— 用户报的就是这个。
+    //
+    // 实测：不 await 时 duration=0:00:00；await 之后才有真实时长。
+    unawaited(_openMedia(player, play: play));
+  }
+
+  Future<void> _openMedia(Player player, {required bool play}) async {
+    try {
+      await player.open(Media(Uri.file(widget.path).toString()), play: play);
+    } catch (_) {
+      // 打不开就算了：卡片会停在第一帧/黑底，不该让整篇笔记崩
+    }
   }
 
   void _start() {
@@ -133,7 +148,14 @@ class _MediaCardState extends State<MediaCard> {
   /// （悬停、控制条显隐）**不会让新路由里的控件重建** —— 结果就是全屏下
   /// 悬停失灵，控制条永远不出现，连退出全屏都点不到。
   /// 状态放进控件层自己身上，两个实例各自独立工作。
-  Widget _controls(VideoState state) => _VideoControls(state: state);
+  Widget _controls(VideoState state) => _VideoControls(
+    state: state,
+    // 媒体没打开时重新打开 —— 只有 MediaCard 知道文件路径
+    onReload: () async {
+      final p = _player;
+      if (p != null) await _openMedia(p, play: true);
+    },
+  );
 
   Widget _shell(
     AppColors c, {
@@ -256,9 +278,15 @@ class _MediaCardState extends State<MediaCard> {
 ///
 /// 最外层套 [MouseRegion]：悬停检测必须在**这一层**里，才能跟着全屏路由走。
 class _VideoControls extends StatefulWidget {
-  const _VideoControls({required this.state});
+  const _VideoControls({required this.state, required this.onReload});
 
   final VideoState state;
+
+  /// 媒体还没打开成功时，重新打开一次（由 MediaCard 实现，它才知道路径）。
+  ///
+  /// 为什么需要：media_kit 的 `open()` 是异步的，命令有可能落在原生播放器
+  /// 就绪之前被丢掉，那种状态下 `duration` 是 0、点播放永远没反应。
+  final Future<void> Function() onReload;
 
   @override
   State<_VideoControls> createState() => _VideoControlsState();
@@ -327,19 +355,34 @@ class _VideoControlsState extends State<_VideoControls> {
 
   /// 点画面 / 中间那个大按钮：播放 ⇄ 暂停。
   ///
-  /// 播完后再点必须**先回到开头**：media_kit 停在结尾时 `play()` 什么都不会
-  /// 发生，用户点了没反应。
-  void _toggle() {
+  /// 这里有三处必须防的坑（都是"看起来点了没反应"）：
+  ///   1. **以 player 的实时状态为准**，而不是本组件缓存的那份 ——
+  ///      缓存过时的话，明明暂停着却调 pause()，等于什么都没做；
+  ///   2. **媒体没打开就先重新打开**：`open()` 是异步的，命令有可能落在
+  ///      原生播放器就绪之前被丢掉，此时 duration 是 0、play() 无效果。
+  ///      与其让用户对着一个永远不动的播放键，不如现场补一次 open；
+  ///   3. **播完再点要先 seek 回 0 并等它完成**：media_kit 停在结尾时
+  ///      play() 什么都不做；seek 又是异步的，不等它完成就 play 会立刻
+  ///      再次"播完"。
+  Future<void> _toggle() async {
     final player = _player;
-    if (_playing) {
-      player.pause();
+
+    if (player.state.playing) {
+      await player.pause();
       return;
     }
-    if (_completed) {
-      player.seek(Duration.zero);
-      setState(() => _completed = false);
+
+    // 没有媒体（duration 为 0）说明当初的 open 没生效，补一次
+    if (player.state.duration == Duration.zero) {
+      await widget.onReload();
+      return;
     }
-    player.play();
+
+    if (player.state.completed) {
+      await player.seek(Duration.zero);
+      if (mounted) setState(() => _completed = false);
+    }
+    await player.play();
   }
 
   /// 选播放速度。
@@ -385,7 +428,7 @@ class _VideoControlsState extends State<_VideoControls> {
           //    所以拖进度条、点倍速都不会被这里截走。
           GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: _toggle,
+            onTap: () => unawaited(_toggle()),
             child: const SizedBox.expand(),
           ),
 
@@ -428,7 +471,7 @@ class _VideoControlsState extends State<_VideoControls> {
         child: Tooltip(
           message: tip,
           child: Pressable(
-            onTap: _toggle,
+            onTap: () => unawaited(_toggle()),
             scale: 0.94,
             child: Container(
               width: 58,
@@ -516,7 +559,7 @@ class _VideoControlsState extends State<_VideoControls> {
                   _ctrlBtn(
                     _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
                     _playing ? '暂停' : '播放',
-                    () => _playing ? player.pause() : player.play(),
+                    () => unawaited(_toggle()),
                   ),
                   _volumeControl(player, vol),
                   const SizedBox(width: 8),

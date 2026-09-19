@@ -515,63 +515,206 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
         child: Scaffold(
           backgroundColor: c.background,
           // 全屏编辑时把导航栏和列表栏都收起来，编辑器占满整窗
-          body: Row(
-            children: [
-              if (!fullscreenEditor) ...[
-                if (_navCollapsed)
-                  // 58 = 10 + 38 + 10：让收起后的功能键左边缘正好落在
-                  // 展开态那个 10px 的内边距上，两种状态同一竖线，
-                  // 收起来的时候整排图标不会横向跳一下
-                  SizedBox(width: 58, child: _navRail(context, state))
-                else ...[
-                SizedBox(width: _navWidth, child: _navPane(context, state)),
-                _PaneResizer(
-                  onDrag: (d) => setState(
-                    () => _navWidth = (_navWidth + d).clamp(_navMin, _navMax),
-                  ),
-                  onDragEnd: _saveWidths,
-                ),
-                ],
-              ],
-              if ((_section == _Section.notes || _section == _Section.archived) && !fullscreenEditor) ...[
-                // 列表栏：正文栏收起时它撑满剩余空间，不留下一条空白
-                if (_detailOpen)
-                  SizedBox(
-                    width: _listWidth,
-                    child: _listPane(context, state, notes),
-                  )
-                else
-                  Expanded(child: _listPane(context, state, notes)),
-
-                if (_detailOpen)
-                  _PaneResizer(
-                    onDrag: (d) => setState(
-                      () =>
-                          _listWidth = (_listWidth + d).clamp(_listMin, _listMax),
-                    ),
-                    onDragEnd: _saveWidths,
-                  ),
-
-                // 正文栏：收起时整块不存在
-                if (_detailOpen)
-                  Expanded(
-                    key: const ValueKey<String>('detail-pane'),
-                    child: _detailPane(context, state),
-                  ),
-              ] else
-                Expanded(
-                  // 给这一栏一个固定 key：全屏切换时 Row 的子项数量会变，
-                  // 有 key 才能让 Flutter 认出"还是同一个位置"，
-                  // 从而保住编辑器的 State（否则正在写的字会丢）。
-                  key: const ValueKey<String>('detail-pane'),
-                  child: fullscreenEditor
-                      ? _detailPane(context, state, fullscreen: true)
-                      : _sectionPage(state),
-                ),
-            ],
-          ),
+          body: _panes(context, state, notes, fullscreenEditor),
         ),
       ),
+    );
+  }
+
+  /// 三栏布局（导航 / 列表 / 正文），**两个动画都在这里**。
+  ///
+  /// 1. 正文栏：打开时从**右边滑进来**，收起时滑回右边。
+  ///    做法是把列表栏的宽度从"占满"补间到用户设的宽度，正文栏吃下剩下的
+  ///    空间；正文栏内容按**最终宽度**排版（OverflowBox）再被裁剪、
+  ///    并跟着动画淡入 —— 这样文字不会在动画过程中反复回流重排，
+  ///    观感是"面板从右侧推出来"，而不是"内容被压扁"。
+  ///
+  /// 2. 导航栏：收起/展开是宽度的补间（58 ↔ 用户设的宽度），
+  ///    内容交叉淡入（收起时只留一列图标）。同样用 OverflowBox 让
+  ///    面板按原宽度排版、被"帘子"一样裁掉，而不是挤成一团。
+  ///
+  /// 两者用同一个 [AppMotion.normal] 时长和 [AppMotion.enter] 曲线，
+  /// 和页面切换的节奏一致。
+  Widget _panes(
+    BuildContext context,
+    AppState state,
+    List<Note> notes,
+    bool fullscreenEditor,
+  ) {
+    // 收起态的导航栏宽度：10 + 38 + 10，让图标列和展开态同一条竖线
+    const double railWidth = 58;
+    const double resizerWidth = 8;
+    final showNotesSection =
+        _section == _Section.notes || _section == _Section.archived;
+
+    return LayoutBuilder(
+      builder: (context, box) {
+        final avail = box.maxWidth;
+
+        return TweenAnimationBuilder<double>(
+          tween: Tween<double>(end: _navCollapsed ? railWidth : _navWidth),
+          duration: AppMotion.normal,
+          curve: AppMotion.enter,
+          builder: (context, navW, _) {
+            // 0 = 完全收起，1 = 完全展开
+            final navT =
+                ((navW - railWidth) / math.max(1, _navWidth - railWidth))
+                    .clamp(0.0, 1.0);
+            final navPaneW = fullscreenEditor ? 0.0 : navW;
+
+            return TweenAnimationBuilder<double>(
+              // 正文栏：只有"笔记分栏 + 非全屏"才展开
+              tween: Tween<double>(
+                end: (_detailOpen && showNotesSection && !fullscreenEditor)
+                    ? 1.0
+                    : 0.0,
+              ),
+              duration: AppMotion.normal,
+              curve: AppMotion.enter,
+              builder: (context, t, _) {
+                // 分隔条也要算进宽度：**漏算就是 8px 溢出**（Row 里
+                // 每多一个分隔条就少 8px 可用宽度）
+                final navResW =
+                    (!fullscreenEditor && navT > 0.99) ? resizerWidth : 0.0;
+                final areaW = math.max(0.0, avail - navPaneW - navResW);
+                // 正文栏"该展开"的目标状态
+                final detailTarget =
+                    _detailOpen && showNotesSection && !fullscreenEditor;
+                // 关闭动画还在跑的时候**必须继续渲染**（否则没有滑出动画），
+                // 动画归零后立刻拆掉 —— 留一个 0 宽的编辑器在树里，
+                // 既浪费又会让"正文栏收起"这件事在语义上说不清。
+                //
+                // 全屏编辑时**立即**不渲染列表栏：那时 t 还在从 1 掉到 0，
+                // 若跟着 t 走，列表会在全屏的第一帧里闪一下。
+                final withDetail = !fullscreenEditor &&
+                    showNotesSection &&
+                    (_detailOpen || t > 0.001);
+                /// 这一栏渲染的是"正文/笔记内容"（而不是列表或统计页）
+                final isDetailPane = withDetail || fullscreenEditor;
+                final listResW =
+                    (withDetail && t > 0.001) ? resizerWidth : 0.0;
+
+                // 列表栏：从"占满"补间到用户设的宽度
+                var listW = (!withDetail) ? areaW : areaW * (1 - t) + _listWidth * t;
+                // 列表栏最多占到"剩余空间减去正文栏分隔条"，否则会挤爆
+                listW = listW.clamp(0.0, math.max(0.0, areaW - listResW));
+                final detailW =
+                    math.max(0.0, areaW - listW - listResW);
+                // 正文栏内容按**最终**宽度排版（动画过程中不回流重排）
+                final settledDetailW = math.max(
+                  0.0,
+                  areaW - _listWidth - resizerWidth,
+                );
+
+                return Row(
+                  children: [
+                    if (!fullscreenEditor)
+                      SizedBox(
+                        width: navW,
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (navT < 1)
+                                Opacity(
+                                  opacity: 1 - navT,
+                                  child: OverflowBox(
+                                    alignment: Alignment.centerLeft,
+                                    // minWidth 必须显式给 0：外面那个
+                                    // SizedBox 是**紧约束**，不覆盖的话
+                                    // 会出现 minWidth > maxWidth 的非法约束
+                                    // （动画途中直接抛 assertion）
+                                    minWidth: 0,
+                                    maxWidth: railWidth,
+                                    child: _navRail(context, state),
+                                  ),
+                                ),
+                              if (navT > 0)
+                                Opacity(
+                                  opacity: navT,
+                                  child: OverflowBox(
+                                    alignment: Alignment.centerLeft,
+                                    minWidth: 0,
+                                    maxWidth: _navWidth,
+                                    child: _navPane(context, state),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    // 展开态才给分隔条：收起时那 58px 没什么好拖的
+                    if (!fullscreenEditor && navT > 0.99)
+                      _PaneResizer(
+                        onDrag: (d) => setState(
+                          () => _navWidth =
+                              (_navWidth + d).clamp(_navMin, _navMax),
+                        ),
+                        onDragEnd: _saveWidths,
+                      ),
+
+                    if (withDetail) ...[
+                      SizedBox(
+                        width: listW,
+                        child: _listPane(context, state, notes),
+                      ),
+                      if (t > 0.001)
+                        _PaneResizer(
+                          onDrag: (d) => setState(
+                            () => _listWidth =
+                                (_listWidth + d).clamp(_listMin, _listMax),
+                          ),
+                          onDragEnd: _saveWidths,
+                        ),
+                    ],
+                    // **正文栏/内容栏只在这一处渲染。**
+                    //
+                    // 关键：不管"正文栏开着""全屏编辑""其它分栏"，这一段的
+                    // 包装层级（SizedBox → ClipRect → Opacity → OverflowBox）
+                    // 必须**完全一致**，只有宽度和内容不同。层级一旦不同，
+                    // Flutter 就认不出"还是那一栏"，切换全屏时编辑器会被
+                    // 重建 —— 正在写还没保存的内容就丢了。
+                    SizedBox(
+                      // key 区分"这一栏现在装的是正文还是列表"：
+                      // 内容不同就该是不同的 element；而"正文栏在笔记分栏
+                      // ↔ 全屏编辑之间切换"用的是同一个 key、同一套包装层级，
+                      // 于是编辑器的 State 会被复用（未保存的字不会丢）。
+                      key: isDetailPane
+                          ? const ValueKey<String>('detail-pane')
+                          : const ValueKey<String>('list-pane'),
+                      // **withDetail 而不是 isDetailPane**：detailW 只有在
+                      // "列表栏也在场"时才有意义；全屏编辑时列表不在场，
+                      // 用 detailW 会算出 0 宽（内容被推到屏幕左侧外面）
+                      width: withDetail ? detailW : areaW,
+                      child: ClipRect(
+                        child: Opacity(
+                          opacity: isDetailPane ? Curves.easeOut.transform(t) : 1,
+                          child: OverflowBox(
+                            // 内容按最终宽度排版、被右侧裁掉 ——
+                            // 观感就是"面板从右边推进来"，而不是被压扁重排
+                            alignment: Alignment.centerRight,
+                            minWidth: 0,
+                            maxWidth: withDetail ? settledDetailW : areaW,
+                            child: isDetailPane
+                                ? _detailPane(
+                                    context,
+                                    state,
+                                    fullscreen: fullscreenEditor,
+                                  )
+                                : showNotesSection
+                                    ? _listPane(context, state, notes)
+                                    : _sectionPage(state),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 

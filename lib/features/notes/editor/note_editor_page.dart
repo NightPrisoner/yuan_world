@@ -771,7 +771,16 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     final abs = p.join(root, seg.path);
 
     if (MediaImporter.isVideoPath(seg.path)) {
-      return MediaCard(path: abs, relPath: seg.path, index: index);
+      // **key 不能省**：编辑器的分段列表会因为"头参数开关""自动保存状态"
+      // 之类的原因整体重建，没有 key 的话 Flutter 按位置配对，位置一挪
+      // 视频卡片就被销毁重建 —— 播放器跟着重建，视频回到 00:00 暂停，
+      // 用户看到的就是"点播放没反应"。有 key 才能保住同一个播放器。
+      return MediaCard(
+        key: ValueKey<String>('media-${seg.path}'),
+        path: abs,
+        relPath: seg.path,
+        index: index,
+      );
     }
 
     return Padding(

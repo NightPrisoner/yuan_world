@@ -241,7 +241,13 @@ class ContentBlockView extends StatelessWidget {
         // 视频在正文里也写成 `![](路径)`，但按扩展名走播放卡片 ——
         // 丢给 Image.file 只会得到一个加载失败的灰块
         if (MediaImporter.isVideoPath(block.text)) {
-          return MediaCard(path: full, relPath: block.text);
+          // key 见编辑器那边的说明：列表重建时把播放器保住，
+          // 否则视频会被销毁重建、回到 00:00 暂停
+          return MediaCard(
+            key: ValueKey<String>('media-${block.text}'),
+            path: full,
+            relPath: block.text,
+          );
         }
         return Padding(
           padding: const EdgeInsets.only(bottom: 18),
