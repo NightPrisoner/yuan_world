@@ -33,10 +33,10 @@ class TocEntry {
 ///
 /// 正文渲染时 `**重点**` 会真的变粗，但目录是纯文本列表，
 /// 留着星号只会显得脏。
-String stripInlineMarkers(String s) => s
-    .replaceAll(RegExp(r'\*\*|__|~~'), '')
-    .replaceAll(RegExp(r'[*`_]'), '')
-    .trim();
+///
+/// 实现在 text_stats.dart —— 导出器也要用它（导出格式要和笔记一致），
+/// 但导出器不该为了一个剥标记的小函数去 import「目录」这个模块。
+String stripInlineMarkers(String s) => stripInline(s);
 
 /// 抽出全部标题。没有标题就返回空列表。
 List<TocEntry> extractToc(String markdown) {

@@ -1,4 +1,4 @@
-/// 导出的 docx 里，目录/大纲必须是**真的**能用。
+/// 导出的 docx 里，大纲必须是**真的**能用。
 ///
 /// 以前正文标题虽然写了 `w:pStyle w:val="Heading2"`，但整个包**没有
 /// styles.xml** —— 那个样式根本没定义。Word 除了把标题显示成普通文字，
@@ -9,7 +9,9 @@
 ///   2. [Content_Types].xml 里登记了它（不登记 Word 不认）
 ///   3. document.xml.rels 里有 styles 关系（没图片时以前连 rels 都没有）
 ///   4. 标题样式带 w:outlineLvl（Word 的导航窗格认的是它，不是字号）
-///   5. 正文前的目录是真超链接（w:hyperlink w:anchor），标题上有对应书签
+///
+/// **正文里不再写目录**（用户明确要求：导出的文档要和笔记长得一样，
+/// 第一行就该是正文）。导航靠上面的样式走 Word 自己的导航窗格。
 library;
 
 import 'dart:convert';
@@ -121,36 +123,31 @@ void main() {
     expect(doc, contains('小节 A'));
   });
 
-  test('每个标题都有书签，正文前的目录是能点的超链接', () {
+  test('正文里不写目录（用户要求导出即所见），导航靠 Word 自己的窗格', () {
     final doc = parts['word/document.xml']!;
-    // 4 个标题（1 个 H1、2 个 H2、1 个 H3）
-    final marks = RegExp(r'<w:bookmarkStart ').allMatches(doc).length;
-    expect(marks, 4, reason: '书签数应该等于标题数');
-    expect(doc, contains('w:name="ywHead1"'));
+    // 目录项是超链接 + 书签；两者都不该出现在正文里了
     expect(
-      RegExp(r'<w:bookmarkEnd ').allMatches(doc).length,
-      marks,
-      reason: '有开没关会让 Word 判定文件损坏',
+      RegExp(r'<w:hyperlink').allMatches(doc).length,
+      0,
+      reason: '正文里不该再有目录链接',
     );
-
-    final links = RegExp(r'<w:hyperlink w:anchor="(ywHead\d+)">')
-        .allMatches(doc)
-        .map((m) => m.group(1))
-        .toList();
-    expect(links.length, 4, reason: '目录项应该都是超链接');
-    expect(links.toSet().length, 4, reason: '锚点不能重复');
-    // 每个锚点都要有对应的书签，否则点了跳不过去
-    for (final a in links) {
-      expect(doc, contains('w:name="$a"'), reason: '$a 没有对应的书签');
-    }
+    expect(
+      RegExp(r'<w:bookmarkStart ').allMatches(doc).length,
+      0,
+      reason: '书签是给那份目录用的，目录没了书签也没用',
+    );
+    // 但标题必须仍是 Heading 样式（导航窗格认的是它，不是书签）
+    expect(doc, contains('<w:pStyle w:val="Heading1"/>'));
+    expect(doc, contains('<w:pStyle w:val="Heading2"/>'));
+    // 正文第一行就是标题，第二块就是正文
+    expect(doc.indexOf('第一节'), lessThan(doc.indexOf('正文一')));
   });
 
-  test('没有标题的笔记不生成空目录，也不报错', () {
+  test('没有标题的笔记照样导出，不报错', () {
     final p = unzip(NoteExporter.renderDocxBytes(noteWith('就是一段普通正文。')));
     final doc = p['word/document.xml']!;
     expect(doc, contains('就是一段普通正文。'));
     expect(doc, isNot(contains('<w:hyperlink')));
-    expect(doc, isNot(contains('<w:bookmarkStart')));
     // 样式包照样要有
     expect(p.keys, contains('word/styles.xml'));
   });

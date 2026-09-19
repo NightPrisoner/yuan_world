@@ -12,9 +12,9 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
 import '../../core/utils/text_stats.dart';
-import '../../core/utils/toc.dart';
 import '../media/media_importer.dart';
 import '../models.dart';
+import 'note_times.dart';
 
 /// 支持的导出格式。
 enum ExportFormat {
@@ -55,6 +55,17 @@ class _DocxImage {
 
   /// 正文里原始的相对路径，用来把 block 和图片对上。
   final String sourceRel;
+}
+
+/// 导出到 docx 时收集到的一个外部超链接。
+///
+/// Word 里 `w:hyperlink` 只有 `r:id`，真正的地址在
+/// `word/_rels/document.xml.rels` 里 —— 所以渲染正文时要把它带出来。
+class _DocxLink {
+  const _DocxLink({required this.relId, required this.target});
+
+  final String relId;
+  final String target;
 }
 
 class NoteExporter {
@@ -133,7 +144,12 @@ class NoteExporter {
           : Uint8List.fromList(
               utf8.encode(render(note, format, imageRoot: imageRoot)),
             );
-      archive.addFile(ArchiveFile(full, bytes.length, bytes));
+      archive.addFile(
+        ArchiveFile(full, bytes.length, bytes)
+          // 包内文件的时间 = 笔记最后修改时间，而不是打包那一刻。
+          // 不设的话解压出来 500 篇全是同一分钟，按时间排序等于没排。
+          ..lastModTime = epochSecondsOf(note.updatedAt),
+      );
 
       // 视频本体跟着一起打包。
       // docx 放 `<笔记名>.files/`（和正文里那行说明对上）；
@@ -144,7 +160,10 @@ class NoteExporter {
         final target =
             format.isBinary ? '$videoFolder/${p.basename(rel)}' : rel;
         if (!used.add(target)) continue;
-        archive.addFile(ArchiveFile(target, data.length, data));
+        archive.addFile(
+          ArchiveFile(target, data.length, data)
+            ..lastModTime = epochSecondsOf(note.updatedAt),
+        );
       }
     }
 
@@ -248,8 +267,17 @@ class NoteExporter {
       // **styles.xml 必须在这里登记**，否则 Word 根本不认它
       '<Override PartName="/word/styles.xml" '
       'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+      // core.xml（创建/修改时间、标题）同样要登记
+      '<Override PartName="/docProps/core.xml" '
+      'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+      // 列表定义也要登记
+      '<Override PartName="/word/numbering.xml" '
+      'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
       '</Types>',
     );
+
+    // 正文渲染过程中会把外链登记进来（Word 的链接地址不在正文里，在 rels 里）
+    final links = <_DocxLink>[];
 
     final archive = Archive()
       ..addFile(ArchiveFile.string('[Content_Types].xml', contentTypes.toString()))
@@ -258,12 +286,21 @@ class NoteExporter {
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
         '</Relationships>',
       ))
+      // 文档属性里带上笔记的创建/修改时间：Word 的「文件 → 信息」显示的就是它，
+      // 不写的话 Word 会当成"刚刚创建"，用户从属性里看不出这篇是什么时候写的
+      ..addFile(ArchiveFile.string('docProps/core.xml', _coreXml(note)))
       ..addFile(ArchiveFile.string('word/styles.xml', _stylesXml()))
+      // 列表要有 numbering.xml 才是**真列表**（Word 里能继续编号、
+      // 能调级别）；不写的话项目符号只能手打一个「·」，编号则完全丢失
+      ..addFile(ArchiveFile.string('word/numbering.xml', _numberingXml()))
       ..addFile(ArchiveFile.string('word/document.xml',
           _documentXml(note, blocks, images,
-              videoFolder: videoFolder, oversizedVideos: oversizedVideos)));
+              videoFolder: videoFolder,
+              oversizedVideos: oversizedVideos,
+              links: links)));
 
     // **document.xml.rels 要无条件生成**：以前只在有图片时才写，
     // 而没有 styles 关系的话 Word 也不会去读 styles.xml。
@@ -272,7 +309,10 @@ class NoteExporter {
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
       '<Relationship Id="rIdStyles" '
       'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
-      'Target="styles.xml"/>',
+      'Target="styles.xml"/>'
+      '<Relationship Id="rIdNumbering" '
+      'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" '
+      'Target="numbering.xml"/>',
     );
     for (final img in images) {
       rels.write(
@@ -284,12 +324,89 @@ class NoteExporter {
         ArchiveFile('word/media/${img.fileName}', img.bytes.length, img.bytes),
       );
     }
+    // 正文里的外链：TargetMode="External" 表示地址在文档外面（网址等）
+    for (final link in links) {
+      rels.write(
+        '<Relationship Id="${link.relId}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+        'Target="${_xesc(link.target)}" TargetMode="External"/>',
+      );
+    }
     rels.write('</Relationships>');
     archive.addFile(
       ArchiveFile.string('word/_rels/document.xml.rels', rels.toString()),
     );
 
     return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
+  }
+
+  /// `word/numbering.xml`：项目符号（numId=1）和数字编号（numId=2）各一套，
+  /// 每套给 5 个级别，对应正文里最多 5 层的缩进。
+  ///
+  /// 为什么要费这个劲，而不是继续手打「· 」：
+  ///   · 有序列表**编号直接丢失**（`1. 2. 3.` 全变成普通段落），正文里
+  ///     那段"第一步/第二步"看起来就是一堆散句；
+  ///   · 项目符号手打的 `·` 不随级别缩进，嵌套结构看不出来；
+  ///   · Word 里没法继续编号（回车不会自动接上）。
+  static String _numberingXml() {
+    const indent = <int>[420, 840, 1260, 1680, 2100];
+    final b = StringBuffer(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+    );
+
+    // abstractNum 0：项目符号
+    b.write('<w:abstractNum w:abstractNumId="0">');
+    for (var i = 0; i < indent.length; i++) {
+      b.write(
+        '<w:lvl w:ilvl="$i"><w:start w:val="1"/>'
+        '<w:numFmt w:val="bullet"/><w:lvlText w:val="•"/>'
+        '<w:lvlJc w:val="left"/>'
+        '<w:pPr><w:ind w:left="${indent[i]}" w:hanging="420"/></w:pPr>'
+        '</w:lvl>',
+      );
+    }
+    b.write('</w:abstractNum>');
+
+    // abstractNum 1：阿拉伯数字，层级用 1. / 1.1 / 1.1.1 这种写法
+    b.write('<w:abstractNum w:abstractNumId="1">');
+    for (var i = 0; i < indent.length; i++) {
+      final pattern = List<String>.generate(i + 1, (k) => '%${k + 1}').join('.');
+      b.write(
+        '<w:lvl w:ilvl="$i"><w:start w:val="1"/>'
+        '<w:numFmt w:val="decimal"/><w:lvlText w:val="$pattern."/>'
+        '<w:lvlJc w:val="left"/>'
+        '<w:pPr><w:ind w:left="${indent[i]}" w:hanging="420"/></w:pPr>'
+        '</w:lvl>',
+      );
+    }
+    b.write('</w:abstractNum>');
+
+    // numId 只是"实例"，指向 abstractNum
+    b.write('<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>');
+    b.write('<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>');
+    b.write('</w:numbering>');
+    return b.toString();
+  }
+
+  /// `docProps/core.xml`：文档属性（标题 + 创建/修改时间）。
+  ///
+  /// 时间取笔记自己的 `createdAt` / `updatedAt`，**不是导出时刻** ——
+  /// 用户从 Word 的「文件 → 信息」或资源管理器里看到的应当是他写这篇的时间。
+  static String _coreXml(Note note) {
+    final created = w3cDate(note.createdAt);
+    final modified = w3cDate(note.updatedAt);
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<cp:coreProperties '
+        'xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        'xmlns:dcterms="http://purl.org/dc/terms/" '
+        'xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        '<dc:title>${_xesc(note.title.trim())}</dc:title>'
+        '<dcterms:created xsi:type="dcterms:W3CDTF">$created</dcterms:created>'
+        '<dcterms:modified xsi:type="dcterms:W3CDTF">$modified</dcterms:modified>'
+        '</cp:coreProperties>';
   }
 
   /// `word/styles.xml`：定义 Normal 和 Heading1~6。
@@ -344,6 +461,7 @@ class NoteExporter {
     List<_DocxImage> images, {
     String? videoFolder,
     List<String> oversizedVideos = const <String>[],
+    List<_DocxLink>? links,
   }) {
     var imgIndex = 0;
     final b = StringBuffer()      ..write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
@@ -362,60 +480,20 @@ class NoteExporter {
           '<w:r><w:t xml:space="preserve">${_xesc(note.title.trim())}</w:t></w:r></w:p>');
     }
 
-    // 给正文里每个标题排个书签，正文前的目录就能点着跳过去。
+    // **正文前面不写目录。**
     //
-    // **按出现顺序编号**，并且和目录项**按文字配对**（同一个标题文字可能
-    // 出现多次，所以按顺序逐个消费，不能简单用 Map）。
-    final headingBookmarks = <String>[]; // 与 headings 一一对应
-    final headings = <ContentBlock>[];
-    for (final blk in blocks) {
-      if (blk.type == ContentBlockType.heading) {
-        headings.add(blk);
-        headingBookmarks.add('ywHead${headings.length}');
-      }
-    }
-    var bookmarkCursor = 0;
-    String? takeBookmark(String text) {
-      for (var k = bookmarkCursor; k < headings.length; k++) {
-        if (stripInlineMarkers(headings[k].text).trim() == text) {
-          bookmarkCursor = k + 1;
-          return headingBookmarks[k];
-        }
-      }
-      return null;
-    }
-
-    // 目录写在正文之前 —— 长文拿到 docx 之后不用一路滚到底
-    final toc = tocOf(note);
-    if (toc.isNotEmpty) {
-      b.write(_para('目录'));
-      final minLevel =
-          toc.map((e) => e.level).reduce((a, b) => a < b ? a : b);
-      for (final e in toc) {
-        // 缩进用 twips：360 twips = 0.25 英寸
-        final indent = (e.level - minLevel) * 360;
-        final label = _xesc(stripInlineMarkers(e.text).trim());
-        final anchor = takeBookmark(stripInlineMarkers(e.text).trim());
-        if (anchor == null) {
-          // 配不上书签（标题被改过、或目录里混进了非标题项）就退回纯文字，
-          // 总比导出一个点了没反应的东西强
-          b.write('<w:p><w:pPr><w:ind w:left="$indent"/></w:pPr>'
-              '<w:r><w:t xml:space="preserve">$label</w:t></w:r></w:p>');
-          continue;
-        }
-        // **真超链接**：Word 里点一下直接跳到那一节
-        b.write('<w:p><w:pPr><w:ind w:left="$indent"/></w:pPr>'
-            '<w:hyperlink w:anchor="$anchor">'
-            '<w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>'
-            '<w:t xml:space="preserve">$label</w:t></w:r>'
-            '</w:hyperlink></w:p>');
-      }
-    }
+    // 以前这里会插一份带超链接的目录，理由是"导出的文件离开了应用，
+    // 阅读器里没有那个目录面板"。用户的反馈是不要：导出的文档应该和笔记
+    // 长得一样，正文第一行就该是正文，而不是先看一遍标题清单。
+    //
+    // 导航并没有因此丢失：标题用的是 Word 内置的 Heading 样式 +
+    // `w:outlineLvl`，Word 的**导航窗格**照样能列出大纲并跳转，
+    // 想要正文里带目录的话用「引用 → 目录」自己插一份（那是 Word 的正确做法，
+    // 标题改了它会跟着更新，而我们手写的那份是死的）。
 
     // 连续的 Markdown 表格行要合成一个**真正的 Word 表格**。
     // 不合成的话，往返一趟表格就退化成一行行带竖线的文字。
     var i = 0;
-    var headingSeq = 0;
     while (i < blocks.length) {
       final block = blocks[i];
 
@@ -462,31 +540,13 @@ class NoteExporter {
           }
         }
       } else {
-        // 标题要带上书签，目录才跳得过来；编号按正文里出现的顺序走
-        if (block.type == ContentBlockType.heading) {
-          final n = headingSeq++;
-          b.write(
-            _paragraphXml(
-              block,
-              bookmark: n < headingBookmarks.length ? headingBookmarks[n] : null,
-            ),
-          );
-        } else {
-          b.write(_paragraphXml(block));
-        }
+        b.write(_paragraphXml(block, links));
       }
       i++;
     }
 
     b.write('<w:sectPr/></w:body></w:document>');
     return b.toString();
-  }
-
-  /// 书签名 → 整数 id。Word 要求 `w:id` 是数字且互不相同；
-  /// 名字是我们自己按 `ywHead<N>` 生成的，取数字部分即可。
-  static int _bookmarkId(String name) {
-    final m = RegExp(r'(\d+)$').firstMatch(name);
-    return m == null ? 0 : (int.tryParse(m.group(1)!) ?? 0);
   }
 
   /// 这一块是不是 Markdown 表格的一行。
@@ -625,13 +685,40 @@ class NoteExporter {
   /// 行内标记 → 一组带格式的 run。
   ///
   /// 之前整段当一个 run 输出，**加粗斜体全丢了**。
-  static String _runs(String text) {
+  ///
+  /// [links] 非空时，`[文字](地址)` 和裸网址会登记成**可真点的超链接**
+  /// （Word 的外链要靠 document.xml.rels 里的关系，所以要往外带）。
+  static String _runs(String text, [List<_DocxLink>? links]) {
+    // 段落里的软换行要变成 `<w:br/>`：`w:t` 里的 `\n` 在 Word 里
+    // **不是换行**，会被直接吞掉，多行正文挤成一坨
+    return text
+        .split('\n')
+        .map((line) => _runsLine(line, links))
+        .join('<w:r><w:br/></w:r>');
+  }
+
+  static String _runsLine(String text, List<_DocxLink>? links) {
     final out = StringBuffer();
-    final re = RegExp(r'(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?://\S+)');
+    final re = RegExp(
+      r'(\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|https?://\S+)',
+    );
     var last = 0;
     void plain(String s) {
       if (s.isEmpty) return;
       out.write('<w:r><w:t xml:space="preserve">${_xesc(s)}</w:t></w:r>');
+    }
+
+    void link(String label, String target) {
+      if (links == null) {
+        plain(label);
+        return;
+      }
+      final id = 'rIdLink${links.length + 1}';
+      links.add(_DocxLink(relId: id, target: target));
+      out.write('<w:hyperlink r:id="$id">'
+          '<w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>'
+          '<w:t xml:space="preserve">${_xesc(label)}</w:t></w:r>'
+          '</w:hyperlink>');
     }
 
     for (final m in re.allMatches(text)) {
@@ -640,12 +727,19 @@ class NoteExporter {
       if (t.startsWith('**')) {
         out.write('<w:r><w:rPr><w:b/></w:rPr>'
             '<w:t xml:space="preserve">${_xesc(t.substring(2, t.length - 2))}</w:t></w:r>');
+      } else if (t.startsWith('~~')) {
+        out.write('<w:r><w:rPr><w:strike/></w:rPr>'
+            '<w:t xml:space="preserve">${_xesc(t.substring(2, t.length - 2))}</w:t></w:r>');
       } else if (t.startsWith('`')) {
         out.write('<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'
             '<w:shd w:val="clear" w:fill="F2F2F7"/></w:rPr>'
             '<w:t xml:space="preserve">${_xesc(t.substring(1, t.length - 1))}</w:t></w:r>');
+      } else if (t.startsWith('[')) {
+        final md = RegExp(r'^\[([^\]]+)\]\(([^)]+)\)$').firstMatch(t)!;
+        link(md.group(1)!, md.group(2)!);
       } else if (t.startsWith('http')) {
-        out.write('<w:r><w:t xml:space="preserve">${_xesc(t)}</w:t></w:r>');
+        // 裸网址也做成可点的 —— 笔记里贴链接是常态，导出后点不动很别扭
+        link(t, t);
       } else {
         out.write('<w:r><w:rPr><w:i/></w:rPr>'
             '<w:t xml:space="preserve">${_xesc(t.substring(1, t.length - 1))}</w:t></w:r>');
@@ -656,7 +750,7 @@ class NoteExporter {
     return out.toString();
   }
 
-  static String _paragraphXml(ContentBlock block, {String? bookmark}) {
+  static String _paragraphXml(ContentBlock block, [List<_DocxLink>? links]) {
     final text = block.text.trim();
     switch (block.type) {
       case ContentBlockType.image:
@@ -670,34 +764,39 @@ class NoteExporter {
         return _para('————————');
       case ContentBlockType.heading:
         final level = block.level.clamp(1, 6);
-        final headingText = stripInlineMarkers(text);
-        // 书签：正文前的目录靠它跳转。**必须包着标题文字**，
-        // 落在段落外面的话 Word 会认为锚点无效。
-        final bm = bookmark;
-        final mark = bm == null
-            ? ''
-            : '<w:bookmarkStart w:id="${_bookmarkId(bm)}" w:name="$bm"/>';
-        final markEnd =
-            bm == null ? '' : '<w:bookmarkEnd w:id="${_bookmarkId(bm)}"/>';
+        // 标题用 Word 内置的 Heading 样式：导航窗格认的是它（样式里带
+        // `w:outlineLvl`），行内标记要清掉，否则标题里会露出 `**`
         return '<w:p><w:pPr><w:pStyle w:val="Heading$level"/></w:pPr>'
-            '$mark<w:r><w:t xml:space="preserve">${_xesc(headingText)}</w:t></w:r>'
-            '$markEnd</w:p>';
+            '${_runs(stripInline(text))}</w:p>';
       case ContentBlockType.bullet:
-        return '<w:p><w:r><w:t xml:space="preserve">· </w:t></w:r>'
-            '${_runs(text)}</w:p>';
+        return _listXml(text, level: block.level, numId: 1, links: links);
       case ContentBlockType.ordered:
-        return '<w:p>${_runs(text)}</w:p>';
+        return _listXml(text, level: block.level, numId: 2, links: links);
       case ContentBlockType.quote:
         // 引用加个左边框，Word 里看得出是引文
         return '<w:p><w:pPr><w:pBdr><w:left w:val="single" w:sz="18" '
             'w:space="8" w:color="3B82F6"/></w:pBdr>'
-            '<w:ind w:left="240"/></w:pPr>${_runs(text)}</w:p>';
+            '<w:ind w:left="240"/></w:pPr>${_runs(text, links)}</w:p>';
       case ContentBlockType.code:
         return '<w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/></w:rPr>'
             '<w:t xml:space="preserve">${_xesc(text)}</w:t></w:r></w:p>';
       case ContentBlockType.paragraph:
-        return '<w:p>${_runs(text)}</w:p>';
+        return '<w:p>${_runs(text, links)}</w:p>';
     }
+  }
+
+  /// 列表项：交给 Word 的编号机制（numbering.xml），
+  /// 编号/项目符号和缩进都由它算，而不是我们手打进正文。
+  static String _listXml(
+    String text, {
+    required int level,
+    required int numId,
+    List<_DocxLink>? links,
+  }) {
+    final ilvl = level.clamp(0, 4);
+    return '<w:p><w:pPr><w:numPr><w:ilvl w:val="$ilvl"/>'
+        '<w:numId w:val="$numId"/></w:numPr></w:pPr>'
+        '${_runs(text, links)}</w:p>';
   }
 
   /// 普通段落。`xml:space="preserve"` 不能省，否则 Word 会吃掉首尾空格。
@@ -715,65 +814,19 @@ class NoteExporter {
 
   // ── 目录 ────────────────────────────────────────────────────────────────
   //
-  // 导出的文件是**离开这个应用**的，阅读器里不会再有那个可拖动的目录面板。
-  // 所以长文必须把目录写进文件本身，否则拿到 docx 的人只能一路滚到底。
+  // **导出的正文里不再有目录。** 以前会在正文前插一份（docx 里还是真超链接），
+  // 理由是"文件离开了应用、阅读器里没有目录面板"；用户的反馈是不要：
+  // 导出的文档应当和笔记本身长得一样，第一行就该是正文。
+  //
+  // 导航能力没有丢：docx 用 Word 内置 Heading 样式 + `w:outlineLvl`，
+  // Word 的导航窗格照常列出大纲并能跳；正文里想要目录就用「引用 → 目录」，
+  // 那是 Word 的正确做法（标题改了会跟着更新，我们手写的那份是死的）。
+  // 应用内的目录面板也还在，那是阅读时用的，和导出无关。
 
-  /// 抽目录。条目太少或只有一层时不生成 —— 那种"目录"只是把标题
-  /// 又抄了一遍，纯属噪音。
-  static List<TocEntry> tocOf(Note note) {
-    final entries = extractToc(note.content);
-    if (entries.length < 3) return const <TocEntry>[];
-    final levels = entries.map((e) => e.level).toSet();
-    // 只有一层且条目不多：不值得单独列一份
-    if (levels.length < 2 && entries.length < 6) return const <TocEntry>[];
-    return entries;
-  }
-
-  /// Markdown 目录：带锚点链接，多数 Markdown 阅读器能直接跳。
-  static String _tocMarkdown(List<TocEntry> entries) {
-    final b = StringBuffer()
-      ..writeln('## 目录')
-      ..writeln();
-    final minLevel = entries.map((e) => e.level).reduce((a, b) => a < b ? a : b);
-    for (final e in entries) {
-      final indent = '  ' * (e.level - minLevel);
-      final text = stripInlineMarkers(e.text).trim();
-      b.writeln('$indent- [$text](#${_slug(text)})');
-    }
-    b.writeln();
-    return b.toString();
-  }
-
-  /// 网页目录：带 id 的锚点，点一下直接跳。
-  static String _tocHtml(List<TocEntry> entries) {
-    final b = StringBuffer('<nav class="toc"><div class="toc-title">目录</div>');
-    final minLevel = entries.map((e) => e.level).reduce((a, b) => a < b ? a : b);
-    for (final e in entries) {
-      final depth = e.level - minLevel;
-      b.writeln(
-        '<div style="margin-left:${depth * 18}px">'
-        '<a href="#${_slug(e.text)}">${_esc(stripInlineMarkers(e.text).trim())}</a></div>',
-      );
-    }
-    b.write('</nav>');
-    return b.toString();
-  }
-
-  /// 纯文本目录：没有链接可点，靠缩进表达层级。
-  static String _tocText(List<TocEntry> entries) {
-    final b = StringBuffer()
-      ..writeln('目录')
-      ..writeln('-' * 20);
-    final minLevel = entries.map((e) => e.level).reduce((a, b) => a < b ? a : b);
-    for (final e in entries) {
-      b.writeln('${'    ' * (e.level - minLevel)}'
-          '${stripInlineMarkers(e.text).trim()}');
-    }
-    b.writeln();
-    return b.toString();
-  }
-
-  static String _slug(String raw) => stripInlineMarkers(raw)
+  /// 标题文字 → HTML 锚点 id。
+  ///
+  /// 标题的 id 保留：用户自己在笔记里写 `[跳过去](#某标题)` 时要能落地。
+  static String _slug(String raw) => stripInline(raw)
       .trim()
       .toLowerCase()
       .replaceAll(RegExp(r'[^\w\u4e00-\u9fa5]+'), '-')
@@ -787,8 +840,6 @@ class NoteExporter {
       b.writeln('# ${note.title.trim()}');
       b.writeln();
     }
-    final toc = tocOf(note);
-    if (toc.isNotEmpty) b.write(_tocMarkdown(toc));
     b.write(note.content);
     if (!note.content.endsWith('\n')) b.writeln();
     return b.toString();
@@ -807,12 +858,15 @@ class NoteExporter {
       b.writeln();
     }
 
-    final toc = tocOf(note);
-    if (toc.isNotEmpty) b.write(_tocText(toc));
-
+    // 有序列表的序号要自己数：block 里只有文字（`1. ` 在解析时就剥掉了）。
+    // 之前 txt 里所有列表项都写成 `  xxx`，序号全丢 —— 步骤类的笔记
+    // 导出成 txt 就再也看不出先后了。
+    var orderedSeq = 0;
     for (final block in parseContent(note.content)) {
       // 关键：block.text 是**原始 Markdown**，直接写出去 txt 里就还是一堆星号
-      final text = stripInlineMarkers(block.text.trim());
+      final text = stripInline(block.text.trim());
+      final indent = '  ' * (block.level + 1);
+      if (block.type != ContentBlockType.ordered) orderedSeq = 0;
       switch (block.type) {
         case ContentBlockType.image:
           // 视频块和图片块在正文里是同一个 type，纯文本里也要分开写，
@@ -829,13 +883,14 @@ class NoteExporter {
             ..writeln(text)
             ..writeln('-' * text.runes.length);
         case ContentBlockType.bullet:
-          b.writeln('  · $text');
+          b.writeln('$indent· $text');
         case ContentBlockType.ordered:
-          b.writeln('  $text');
+          orderedSeq++;
+          b.writeln('$indent$orderedSeq. $text');
         case ContentBlockType.quote:
-          b.writeln('  > $text');
+          b.writeln('$indent> $text');
         case ContentBlockType.code:
-          b.writeln('    $text');
+          b.writeln('$indent  $text');
         case ContentBlockType.paragraph:
           b
             ..writeln(text)
@@ -881,11 +936,25 @@ class NoteExporter {
     }
     b.writeln('<div class="meta">${_esc(_metaLine(note))}</div>');
 
-    final toc = tocOf(note);
-    if (toc.isNotEmpty) b.writeln(_tocHtml(toc));
-
-    for (final block in parseContent(note.content)) {
-      b.writeln(_htmlBlock(block, imageRoot));
+    final blocks = parseContent(note.content);
+    // 连续的列表项要合进同一个 <ul>/<ol>：一个 <li> 包一个 <ul> 的话，
+    // 序号会各自从 1 重新开始，浏览器给的缩进也会乱
+    var i = 0;
+    while (i < blocks.length) {
+      final type = blocks[i].type;
+      if (type == ContentBlockType.bullet || type == ContentBlockType.ordered) {
+        final ordered = type == ContentBlockType.ordered;
+        final tag = ordered ? 'ol' : 'ul';
+        b.writeln('<$tag>');
+        while (i < blocks.length && blocks[i].type == type) {
+          b.writeln('<li>${_inline(blocks[i].text.trim())}</li>');
+          i++;
+        }
+        b.writeln('</$tag>');
+        continue;
+      }
+      b.writeln(_htmlBlock(blocks[i], imageRoot));
+      i++;
     }
 
     b
@@ -914,8 +983,8 @@ class NoteExporter {
         // 带 id 才能被目录里的锚点跳到
         return '<h$level id="${_slug(text)}">${_inline(text)}</h$level>';
       case ContentBlockType.bullet:
-        return '<p>· ${_inline(text)}</p>';
       case ContentBlockType.ordered:
+        // 列表项在 _html 里成组合并，这里只是单个 block 的兜底
         return '<p>${_inline(text)}</p>';
       case ContentBlockType.quote:
         return '<blockquote>${_inline(text)}</blockquote>';
@@ -941,6 +1010,11 @@ class NoteExporter {
     out = out.replaceAllMapped(
       RegExp(r'`([^`]+)`'),
       (m) => '<code>${m.group(1)}</code>',
+    );
+    // 删除线（要在 ** 之后处理，否则 ~~ 里的内容会被当普通文字）
+    out = out.replaceAllMapped(
+      RegExp(r'~~([^~]+)~~'),
+      (m) => '<del>${m.group(1)}</del>',
     );
     // 链接：先标记转换，再处理裸链接
     out = out.replaceAllMapped(
@@ -1092,6 +1166,11 @@ class NoteExporter {
         flush: true,
       );
     }
+    applyNoteTimes(
+      file.path,
+      created: note.createdAt,
+      modified: note.updatedAt,
+    );
   }
 
   /// 建议的文件名（不含扩展名），给保存对话框做默认值。
@@ -1123,6 +1202,12 @@ class NoteExporter {
             flush: true,
           );
         }
+        // 落盘后把创建/修改时间改回笔记的时间
+        applyNoteTimes(
+          file.path,
+          created: note.createdAt,
+          modified: note.updatedAt,
+        );
         written++;
       } catch (_) {
         // 一篇写不出去不该让整批失败

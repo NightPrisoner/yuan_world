@@ -15,6 +15,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -91,6 +92,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   final List<MarkdownEditingController> _segControllers = [];
   final List<FocusNode> _segFocus = [];
   int? _focusedSegment;
+
+  /// 是否正有文件悬停在编辑区上方（画那层"松手即插入"的蒙层用）。
+  bool _dragging = false;
 
   /// 工具栏该作用在哪个输入框上。
   ///
@@ -326,8 +330,6 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   /// 只有「插入」这一个动作，因为这是用户唯一合理的期望：
   /// 他选了文件，就该看到东西出现在正文里。
   Future<void> _insertMedia(MediaKind kind) async {
-    final state = context.read<AppState>();
-
     PlatformFile? picked;
     try {
       picked = await FilePicker.pickFile(
@@ -344,25 +346,37 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     final src = picked?.path;
     if (src == null || !mounted) return;
 
-    String rel;
-    try {
-      rel = MediaImporter.import(
-        source: File(src),
-        noteId: widget.noteId,
-        imageRoot: state.db.imageRoot.path,
-      );
-    } catch (e) {
-      _toast('导入失败：$e');
-      return;
-    }
+    final r = _importAndInsert(<String>[src]);
+    if (r.failed.isNotEmpty && r.ok == 0) _toast('导入失败：${r.failed.first}');
+  }
 
-    _withBody(
-      () => MarkdownEditing.insertBlock(_activeBody, '![]($rel)'),
-    );
+  /// 把本地文件导入笔记目录，并在**光标处**各插一行 `![](相对路径)`。
+  ///
+  /// 「插入图片/视频」按钮和"拖文件进来"都走这里。
+  /// 两条路径各写一遍的话，迟早有一边漏掉 `_rebuildSegments()` ——
+  /// 用户的感受就是"弄进去了但什么都没出现"。
+  ({int ok, List<String> failed}) _importAndInsert(List<String> paths) {
+    final state = context.read<AppState>();
+    var ok = 0;
+    final failed = <String>[];
+    for (final path in paths) {
+      try {
+        final rel = MediaImporter.import(
+          source: File(path),
+          noteId: widget.noteId,
+          imageRoot: state.db.imageRoot.path,
+        );
+        _withBody(() => MarkdownEditing.insertBlock(_activeBody, '![]($rel)'));
+        ok++;
+      } catch (_) {
+        failed.add(p.basename(path));
+      }
+    }
     // insertBlock 改的是文字，而图片/视频段是**另外渲染**的，
     // 必须重建分段才会真的显示出来 —— 只改文字的话用户看到的是一行路径
     _rebuildSegments();
     if (mounted) setState(() {});
+    return (ok: ok, failed: failed);
   }
 
   void _toast(String msg) {
@@ -370,6 +384,105 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), duration: const Duration(seconds: 3)),
     );
+  }
+
+  // ── 拖入媒体 ────────────────────────────────────────────────────────────
+  //
+  // 和工具栏的「插入图片/视频」走**同一段导入 + 插入逻辑**：
+  // 两条路径各写一遍的话，迟早有一边漏掉 `_rebuildSegments()`，
+  // 用户的感受就是"拖进去了但什么都没出现"。
+  //
+  // 拖拽只有桌面端有（desktop_drop 在手机上不产生事件），
+  // 所以不额外做平台判断 —— 没有事件就没有入口，也不需要提示。
+
+  /// 包一层拖放区。**整页都是落点**：用户不会瞄准某一个输入框去拖。
+  Widget _wrapDrop(Widget child, AppColors c) => DropTarget(
+    onDragEntered: (_) {
+      if (mounted) setState(() => _dragging = true);
+    },
+    onDragExited: (_) {
+      if (mounted) setState(() => _dragging = false);
+    },
+    onDragDone: _onDropFiles,
+    child: Stack(
+      children: [
+        child,
+        if (_dragging) _dropOverlay(c),
+      ],
+    ),
+  );
+
+  /// 悬停蒙层。**不能吃事件**（IgnorePointer），
+  /// 否则鼠标一进入蒙层，DropTarget 就收不到后续消息，松手时反而不触发。
+  Widget _dropOverlay(AppColors c) => Positioned.fill(
+    child: IgnorePointer(
+      child: Container(
+        color: c.tint.withValues(alpha: 0.08),
+        alignment: Alignment.center,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 20),
+          decoration: BoxDecoration(
+            color: c.secondaryBackground,
+            borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
+            border: Border.all(color: c.tint, width: 2),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.add_photo_alternate_outlined, size: 34, color: c.tint),
+              const SizedBox(height: 10),
+              Text(
+                '松开即可插入到笔记里',
+                style: AppText.callout.copyWith(
+                  color: c.tint,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '支持图片和视频，可一次拖多个',
+                style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Future<void> _onDropFiles(DropDoneDetails details) async {
+    if (mounted) setState(() => _dragging = false);
+
+    // 认不认这个文件由 MediaImporter 判断（纯函数、单独测过）
+    final split = MediaImporter.splitMediaPaths(
+      details.files.map((f) => f.path),
+    );
+    final accepted = split.media;
+    final skipped = split.others
+        .map((path) => p.basename(path))
+        .toList(growable: false);
+
+    if (accepted.isEmpty) {
+      // 说清楚该去哪儿，否则用户只知道"拖不进去"
+      _toast(skipped.isEmpty
+          ? '没有识别到文件'
+          : '只能拖入图片或视频；${skipped.first} 这类文档请到「导入」页拖入');
+      return;
+    }
+
+    final r = _importAndInsert(accepted);
+
+    if (r.ok > 0) {
+      final extra = <String>[
+        if (skipped.isNotEmpty) '${skipped.length} 个不是图片/视频，已跳过',
+        if (r.failed.isNotEmpty) '${r.failed.length} 个导入失败',
+      ];
+      _toast(extra.isEmpty
+          ? '已插入 ${r.ok} 个'
+          : '已插入 ${r.ok} 个（${extra.join('；')}）');
+    } else if (r.failed.isNotEmpty) {
+      _toast('导入失败：${r.failed.first}');
+    }
   }
 
   void _withBody(void Function() action) {
@@ -425,7 +538,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
             )
           : content;
 
-      return CallbackShortcuts(
+      return _wrapDrop(
+        CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
           // Esc：从最外层往里退 —— 先退窗口全屏，再退占满页面，最后退编辑
           const SingleActivator(LogicalKeyboardKey.escape): () {
@@ -515,10 +629,13 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
             ],
           ),
         ),
+        ),
+        c,
       );
     }
 
-    return Scaffold(
+    return _wrapDrop(
+      Scaffold(
       backgroundColor: c.background,
       appBar: AppBar(
         backgroundColor: c.background,
@@ -548,7 +665,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
             toolbar,
           ],
         ),
+        ),
       ),
+      c,
     );
   }
 

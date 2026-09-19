@@ -167,6 +167,16 @@ String makeExcerpt(String markdown, {int maxLength = 120}) {
   return '${s.substring(0, maxLength)}…';
 }
 
+/// 去掉一段文字里的行内 Markdown 标记（`**`、`*`、`_`、`~~`、`` ` ``）。
+///
+/// 用在"只想要纯文字"的地方：导出目录、纯文本导出、标题。
+/// 放在这里而不是 toc.dart：导出器和正文渲染都要用它，
+/// 它们不该为了一个剥标记的小函数去依赖「目录」模块。
+String stripInline(String s) => s
+    .replaceAll(RegExp(r'\*\*|__|~~'), '')
+    .replaceAll(RegExp(r'[*`_]'), '')
+    .trim();
+
 /// 把正文（Markdown）拆成「段落 + 图片」的结构，供自定义渲染使用。
 ///
 /// 之所以不直接用 flutter_markdown，是因为我们要在图文混排上做
@@ -184,6 +194,18 @@ class ContentBlock {
 }
 
 enum ContentBlockType { heading, paragraph, quote, bullet, ordered, code, image, divider }
+
+/// 列表项的缩进 → 层级（0 起，最深 4 级）。
+///
+/// 制表符按 2 个空格算；`~/ 2` 是"两个空格一级"这个约定，
+/// 和 Word/编辑器里按 Tab 缩进的观感一致。
+int _listLevel(String indent) {
+  var width = 0;
+  for (final r in indent.runes) {
+    width += r == 0x09 ? 2 : 1;
+  }
+  return (width ~/ 2).clamp(0, 4);
+}
 
 List<ContentBlock> parseContent(String markdown) {
   final blocks = <ContentBlock>[];
@@ -235,17 +257,28 @@ List<ContentBlock> parseContent(String markdown) {
       continue;
     }
 
-    final bullet = RegExp(r'^\s{0,3}[-*+]\s+(.*)$').firstMatch(line);
+    // 缩进决定列表的层级：2 个空格（或一个 Tab）算一级。
+    // 以前正则只认 0~3 个空格，**4 个空格缩进的子项会掉进普通段落**，
+    // 导出成 docx 时那一项就变成了没头没尾的一行文字。
+    final bullet = RegExp(r'^(\s*)[-*+]\s+(.*)$').firstMatch(line);
     if (bullet != null) {
       flush();
-      blocks.add(ContentBlock(type: ContentBlockType.bullet, text: bullet.group(1)!.trim()));
+      blocks.add(ContentBlock(
+        type: ContentBlockType.bullet,
+        text: bullet.group(2)!.trim(),
+        level: _listLevel(bullet.group(1)!),
+      ));
       continue;
     }
 
-    final ordered = RegExp(r'^\s{0,3}\d+\.\s+(.*)$').firstMatch(line);
+    final ordered = RegExp(r'^(\s*)\d+\.\s+(.*)$').firstMatch(line);
     if (ordered != null) {
       flush();
-      blocks.add(ContentBlock(type: ContentBlockType.ordered, text: ordered.group(1)!.trim()));
+      blocks.add(ContentBlock(
+        type: ContentBlockType.ordered,
+        text: ordered.group(2)!.trim(),
+        level: _listLevel(ordered.group(1)!),
+      ));
       continue;
     }
 

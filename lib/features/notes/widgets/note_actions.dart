@@ -21,6 +21,7 @@ import '../../../app_state.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_menu.dart';
 import '../../../data/exporter/note_exporter.dart';
+import '../../../data/exporter/note_times.dart';
 import '../../../data/models.dart';
 import '../../collections/collection_sheets.dart';
 import 'cover_picker.dart';
@@ -181,6 +182,18 @@ Future<void> exportSingleNote(BuildContext context, Note note) async {
       }
       NoteExporter.copyVideosNextTo(savedPath, full, imageRoot: imageRoot);
     }
+  }
+
+  // 时间戳跟随笔记：保存框写出来的文件默认是"刚刚"，用户在资源管理器里
+  // 按时间找不到这篇，得手动改一遍。这里直接改成笔记的创建/修改时间。
+  try {
+    applyNoteTimes(
+      target.toFilePath(),
+      created: full.createdAt,
+      modified: full.updatedAt,
+    );
+  } catch (_) {
+    // 时间戳失败不影响"文件已经导出成功"这个事实
   }
 
   ScaffoldMessenger.of(context).showSnackBar(

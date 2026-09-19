@@ -47,6 +47,34 @@ class MediaImporter {
   static String extensionOf(String path) =>
       p.extension(path).toLowerCase().replaceFirst('.', '');
 
+  /// 这个路径能不能直接进笔记正文（图片或视频）。
+  static bool isMediaPath(String path) =>
+      isImagePath(path) || isVideoPath(path);
+
+  /// 把一批拖进来的路径分成"能插入正文的媒体"和"其它的"。
+  ///
+  /// 抽成纯函数是为了能直接测：拖入这条路径没有别的入口可以验证
+  /// （系统拖拽事件在测试里造不出来），所以"认不认这个文件"这件事
+  /// 必须能单独测。
+  static ({List<String> media, List<String> others}) splitMediaPaths(
+    Iterable<String> paths,
+  ) {
+    final media = <String>[];
+    final others = <String>[];
+    for (final path in paths) {
+      if (path.isEmpty) continue;
+      // 文件夹在笔记里放不了，归到"其它"
+      if (FileSystemEntity.typeSync(path) == FileSystemEntityType.directory) {
+        others.add(path);
+      } else if (isMediaPath(path)) {
+        media.add(path);
+      } else {
+        others.add(path);
+      }
+    }
+    return (media: media, others: others);
+  }
+
   /// 把 [source] 复制进 `<imageRoot>/<noteId>/`，返回**相对 imageRoot 的路径**。
   ///
   /// 返回值就是正文里 `![](…)` 要写的东西。

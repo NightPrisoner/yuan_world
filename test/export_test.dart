@@ -152,59 +152,48 @@ void main() {
       expect(out, contains('9/没有这张.png'));
     });
 
-    test('各级标题用对应标签，并带 id 供目录锚点跳转', () {
+    test('各级标题用对应标签，并带 id 供站内锚点跳转', () {
       final id = add('t', '# 一\n\n## 二\n\n### 三');
       final out = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-      // id 不能省：目录里的链接就是靠它跳的
+      // id 不能省：笔记里自己写的 `[跳到某节](#某节)` 靠它落地
       expect(out, contains('<h1 id="一">一</h1>'));
       expect(out, contains('<h2 id="二">二</h2>'));
       expect(out, contains('<h3 id="三">三</h3>'));
     });
   });
 
-  group('目录导出', () {
-    // 目录写进文件本身：导出的文件离开了应用，阅读器里不会再有那个面板。
-    // 正文用**有辨识度的词**，否则在 XML 里搜单个字母会撞上标签名。
+  group('导出不带正文目录', () {
+    // 用户的原话：「笔记导出后目录不需要出现在正文上面」。
+    // 导出的文档要和笔记本身长得一样 —— 第一行就是正文。
+    // 导航能力不受影响：docx 靠 Word 内置 Heading 样式走导航窗格。
     const longDoc = '# 一号标题\n\n正文甲\n\n## 二号标题\n\n正文乙\n\n'
         '### 三号标题\n\n正文丙\n\n## 四号标题\n\n正文丁';
 
-    test('条目太少时不生成目录', () {
-      final id = add('t', '没有标题\n\n就一段正文');
-      final md = NoteExporter.render(repo.getNote(id)!, ExportFormat.markdown);
-      expect(md.contains('## 目录'), isFalse, reason: '没标题就别硬凑一份目录');
-      expect(NoteExporter.tocOf(repo.getNote(id)!), isEmpty);
-    });
-
-    test('Markdown 目录带锚点链接', () {
+    test('Markdown 直接从正文开始', () {
       final id = add('t', longDoc);
       final md = NoteExporter.render(repo.getNote(id)!, ExportFormat.markdown);
 
-      expect(md, contains('## 目录'));
-      expect(md, contains('[一号标题](#一号标题)'));
-      expect(md, contains('[二号标题](#二号标题)'));
-      // 目录要排在正文前面
-      expect(md.indexOf('## 目录'), lessThan(md.indexOf('正文乙')));
+      expect(md.contains('## 目录'), isFalse);
+      // 标题本身当然还在，只是不再有一份清单排在前面
+      expect(md.indexOf('一号标题'), lessThan(md.indexOf('正文甲')));
+      expect(md.indexOf('正文甲'), lessThan(md.indexOf('二号标题')));
     });
 
-    test('网页目录的锚点能对上标题的 id', () {
+    test('HTML 里没有目录导航块', () {
       final id = add('t', longDoc);
       final html = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-
-      expect(html, contains('<nav class="toc">'));
-      expect(html, contains('href="#二号标题"'));
-      expect(html, contains('id="二号标题"'), reason: '有链接就必须有对应的落点');
+      expect(html.contains('<nav class="toc">'), isFalse);
+      expect(html.indexOf('正文甲'), lessThan(html.indexOf('二号标题')));
     });
 
-    test('txt 目录靠缩进表达层级', () {
+    test('纯文本直接从正文开始', () {
       final id = add('t', longDoc);
       final txt = NoteExporter.render(repo.getNote(id)!, ExportFormat.text);
-
-      expect(txt, contains('目录'));
-      expect(txt, contains('一号标题'));
-      expect(txt, contains('    三号标题'), reason: '三级标题要比一级缩进更多');
+      expect(txt.startsWith('t\n'), isTrue, reason: '第一行是标题，第二行就该进正文');
+      expect(txt.indexOf('正文甲'), lessThan(txt.indexOf('二号标题')));
     });
 
-    test('docx 目录跟着一起导出', () {
+    test('docx 正文里没有目录段落，标题仍是大纲级别', () {
       final id = add('t', longDoc);
       final bytes = NoteExporter.renderDocxBytes(repo.getNote(id)!);
       final xml = utf8.decode(
@@ -213,19 +202,15 @@ void main() {
             .content as List<int>,
       );
 
-      expect(xml, contains('目录'));
-      expect(xml, contains('<w:ind w:left="360"/>'), reason: '子级要缩进');
-      // 目录在正文之前
-      expect(xml.indexOf('目录'), lessThan(xml.indexOf('正文甲')));
+      expect(xml.contains('<w:hyperlink'), isFalse, reason: '目录项才是超链接');
+      expect(xml.indexOf('正文甲'), lessThan(xml.indexOf('二号标题')));
+      // 导航窗格靠的是样式，不是正文里的目录
+      expect(xml, contains('<w:pStyle w:val="Heading2"/>'));
     });
 
-    test('目录里的行内标记会被清掉', () {
-      final id = add(
-        't',
-        '# **加粗**的标题\n\n正文甲\n\n## 另一个\n\n正文乙\n\n## 再来\n\n正文丙',
-      );
+    test('标题里的行内标记会被清掉（不能露出 ** ）', () {
+      final id = add('t', '# **加粗**的标题\n\n正文甲');
       final txt = NoteExporter.render(repo.getNote(id)!, ExportFormat.text);
-      // 目录里留着 ** 就太难看了
       expect(txt, contains('加粗的标题'));
       expect(txt.contains('**'), isFalse);
     });
