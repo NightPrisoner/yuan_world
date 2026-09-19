@@ -1570,12 +1570,8 @@ class _StatsPageState extends State<StatsPage> {
   ///
   /// 两个都得裁：只裁轴的话序列还是全长，多线模式下 `spots` 的下标 0
   /// 就成了全量的开头，画出来是窗口外的数据。
-  ///
-  /// **Y 轴范围由 [_fullYRange] 用完整数据单独算**，不跟窗口走：
-  /// 以前是把裁完的这段交给 TrendChart 自己定 Y 范围，于是每拖动一下
-  /// Y 轴都重新定范围、整条曲线跟着上下跳还被重新拉伸 —— 用户的原话是
-  /// "横轴放大后一拖动，那个曲线图一直在变化，感觉怪怪的"。
-  /// 拖动本该只是移动视窗。
+  /// 裁完交给 TrendChart，Y 轴范围自然跟着窗口重算 ——
+  /// 放大到某几个月时，那几个月之间的高低差才撑得开。
   ({List<TrendPoint> axis, List<TrendSeries> series}) _windowTrend(
     List<TrendPoint> axisAll,
     List<TrendSeries> seriesAll,
@@ -1594,21 +1590,6 @@ class _StatsPageState extends State<StatsPage> {
       ],
     );
   }
-
-  /// **完整数据**算出来的 Y 轴范围。缩放/拖动时传它，比例尺就不动了。
-  ({double lo, double hi}) _fullYRange(
-    List<TrendPoint> axisAll,
-    List<TrendSeries> seriesAll,
-    TrendMetric metric, {
-    bool zeroBase = false,
-  }) => trendYRange(
-    <double>[
-      for (final p in axisAll) p.valueOf(metric).toDouble(),
-      for (final s in seriesAll)
-        for (final p in s.points) p.valueOf(metric).toDouble(),
-    ],
-    forceZeroBase: zeroBase,
-  );
 
   /// 图表下方的**横轴**控制条。
   ///
@@ -1852,9 +1833,6 @@ class _StatsPageState extends State<StatsPage> {
                     style: _trendStyle,
                     // 选了多个文件夹时画多条线
                     series: win.series,
-                    // **Y 范围用完整数据算**：缩放/拖动只动横轴窗口，
-                    // 比例尺不动，曲线不会跟着跳
-                    yRange: _fullYRange(_trend, _trendSeries, _metric),
                     showDots: _showDots,
                     smooth: _smooth,
                     showGrid: _showGrid,
@@ -1959,9 +1937,6 @@ class _StatsPageState extends State<StatsPage> {
               metric: _cumMetric,
               style: _cumStyle,
               series: win.series,
-              // 同上：Y 范围用**完整**累计曲线算。累计是单调递增的，
-              // 按窗口算的话每拖一下基线都变，曲线会整体上下跳
-              yRange: _fullYRange(cumPoints, _cumulativeSeries, _cumMetric),
               showDots: _showDots,
               smooth: _smooth,
               showGrid: _showGrid,

@@ -109,8 +109,6 @@ class TrendChart extends StatelessWidget {
     this.showDots = true,
     this.smooth = true,
     this.showGrid = true,
-    this.yRange,
-    this.forceZeroBase = false,
   });
 
   final List<TrendPoint> points;
@@ -131,18 +129,6 @@ class TrendChart extends StatelessWidget {
 
   final bool showGrid;
 
-  /// **Y 轴范围（可选）。传了就用它，不再自己按数据算。**
-  ///
-  /// 为什么需要：Y 轴以前是照着"收到的这段数据"算的，而横轴缩放/拖动
-  /// 恰恰是**换一段数据**喂进来 —— 于是每拖一下 Y 轴都重新定范围，
-  /// 整条曲线跟着上下跳、还被重新拉伸，看起来就像"图一直在变"。
-  /// 拖动本该只是"移动视窗"，比例尺不该跟着动。
-  /// 缩放时调用方传**完整数据**算出来的范围，拖动时它就固定不变了。
-  final ({double lo, double hi})? yRange;
-
-  /// 柱状图必须从 0 起（柱长就是语义），折线/面积按 [trendYRange] 自己判断。
-  final bool forceZeroBase;
-
   bool get _multi => series.length > 1;
 
   @override
@@ -152,13 +138,12 @@ class TrendChart extends StatelessWidget {
 
     // 多线模式下 Y 轴要按**所有线**定范围，否则某条会被截断。
     // 到底从 0 起还是贴着数据，由 trendYRange 自己判断
-    final y = yRange ??
-        trendYRange(<double>[
-          ...values,
-          if (_multi)
-            for (final s in series)
-              for (final p in s.points) p.valueOf(metric).toDouble(),
-        ], forceZeroBase: style == TrendStyle.bar || forceZeroBase);
+    final y = trendYRange(<double>[
+      ...values,
+      if (_multi)
+        for (final s in series)
+          for (final p in s.points) p.valueOf(metric).toDouble(),
+    ]);
 
     // 点位太密时只画一部分标签，否则轴会糊成一片
     final labelStep = points.length > 18 ? (points.length / 8).ceil() : 1;
