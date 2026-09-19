@@ -229,37 +229,63 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
     return _MoveTarget(picked == 'none' ? null : int.tryParse(picked));
   }
 
-  Future<void> _exportNotes(List<int> ids) async {
-    final dir = await FilePicker.getDirectoryPath(
-      dialogTitle: '选择导出到哪个文件夹',
-    );
-    if (dir == null || !mounted) return;
+  /// 导出整个文集（含子文件夹）为压缩包。
+  ///
+  /// 包内保留目录层级：`文集/子文件夹/标题.docx`。
+  /// 用的是和批量导出**同一个** [NoteExporter.zipBytes]，
+  /// 区别只是每篇的 path 换成它自己在文集树里的位置。
+  Future<void> _exportCollection(Collection col) async {
+    final state = context.read<AppState>();
+    final ids = <int>[
+      col.id,
+      ...state.repo.descendantCollectionIds(col.id),
+    ];
+    final notes = <Note>[
+      for (final id in ids)
+        ...state.repo.listNotes(NoteFilter(collectionId: id, includeDescendants: false)),
+    ];
+    if (!mounted) return;
+    if (notes.isEmpty) {
+      _toast('「${col.name}」里还没有笔记');
+      return;
+    }
 
-    final format = await showAppMenu<ExportFormat>(
+    final format = await pickExportFormat(context, header: '导出格式');
+    if (format == null || !mounted) return;
+
+    await exportZip(
       context,
-      header: '导出格式',
-      items: <AppMenuItem<ExportFormat>>[
-        for (final f in ExportFormat.values)
-          AppMenuItem(
-            value: f,
-            label: '${f.label}（.${f.ext}）',
-            icon: Icons.description_outlined,
-          ),
+      items: <({List<String> path, Note note})>[
+        for (final n in notes)
+          (path: collectionPathOf(n, state.collections), note: n),
       ],
+      format: format,
+      // 压缩包名用文集名，用户一眼知道这是哪一包
+      zipName: '${NoteExporter.safeZipName(col.name)}.zip',
     );
+  }
+
+  Future<void> _exportNotes(List<int> ids) async {
+    final format = await pickExportFormat(context, header: '导出格式');
     if (format == null || !mounted) return;
 
     final state = context.read<AppState>();
     final notes = <Note>[
       for (final id in ids) ?state.repo.getNote(id),
     ];
-    final n = NoteExporter.exportToDirectory(
-      notes: notes,
+    if (notes.isEmpty) return;
+
+    // **批量导出打包成一个 zip**，而不是往文件夹里撒一堆散文件。
+    // 包内按文集层级放，解压出来和左栏看到的目录结构一致。
+    await exportZip(
+      context,
+      items: <({List<String> path, Note note})>[
+        for (final n in notes)
+          (path: collectionPathOf(n, state.collections), note: n),
+      ],
       format: format,
-      dir: dir,
-      imageRoot: state.db.imageRoot.path,
+      zipName: '元世界导出 ${notes.length} 篇.zip',
     );
-    _toast('已导出 $n 篇到 $dir');
   }
 
   Future<bool> _confirmBatchDelete(int count) async {
@@ -1449,6 +1475,11 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
           icon: Icons.drive_file_rename_outline,
         ),
         const AppMenuItem(
+          value: 'export',
+          label: '导出为压缩包',
+          icon: Icons.folder_zip_outlined,
+        ),
+        const AppMenuItem(
           value: 'hide',
           label: '移入隐私空间',
           icon: Icons.visibility_off_outlined,
@@ -1469,6 +1500,8 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
         await state.refresh();
       case 'rename':
         await showCollectionEditor(context, existing: col);
+      case 'export':
+        await _exportCollection(col);
       case 'sub':
         final created = await showCollectionEditor(context, parentId: col.id);
         if (created != null) await state.refresh();

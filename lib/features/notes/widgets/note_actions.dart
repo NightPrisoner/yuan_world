@@ -38,6 +38,84 @@ enum NoteAction {
   deleted,
 }
 
+/// 算出一篇笔记在文集树里的路径（外层在前）。
+///
+/// 用来在压缩包里还原目录结构。找不到所属文集就返回空表 = 放包根目录。
+/// 加了 `seen` 防环：数据万一有循环父子关系，这里不能死循环。
+List<String> collectionPathOf(Note note, List<Collection> all) {
+  final byId = <int, Collection>{for (final c in all) c.id: c};
+  final out = <String>[];
+  final seen = <int>{};
+  var cur = note.collectionId;
+  while (cur != null && seen.add(cur)) {
+    final c = byId[cur];
+    if (c == null) break;
+    out.insert(0, c.name);
+    cur = c.parentId;
+  }
+  return out;
+}
+
+/// 多篇/整个文集导出：打成**一个压缩包**。
+///
+/// [items] 的 `path` 是包内目录层级（文集路径），空表示放根目录。
+/// 直接调 [NoteExporter.zipBytes]，这个函数只负责"弹保存框 + 报结果"，
+/// 和 [exportSingleNote] 保持同一套交互（都用 saveFile 传字节）。
+Future<void> exportZip(
+  BuildContext context, {
+  required List<({List<String> path, Note note})> items,
+  required ExportFormat format,
+  required String zipName,
+}) async {
+  if (items.isEmpty || !context.mounted) return;
+  final state = context.read<AppState>();
+
+  final bytes = NoteExporter.zipBytes(
+    items: items,
+    format: format,
+    imageRoot: state.db.imageRoot.path,
+  );
+
+  Uri? target;
+  try {
+    target = await FilePicker.saveFile(
+      dialogTitle: '导出压缩包到',
+      fileName: zipName,
+      bytes: bytes,
+      type: FileType.custom,
+      allowedExtensions: <String>['zip'],
+    );
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('导出失败：$e')));
+    return;
+  }
+  if (target == null || !context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text('已导出 ${items.length} 篇：${target.toFilePath()}'),
+      duration: const Duration(seconds: 4),
+    ),
+  );
+}
+
+/// 弹一个格式选择菜单。单篇和批量共用，免得两处选项对不上。
+Future<ExportFormat?> pickExportFormat(
+  BuildContext context, {
+  String header = '导出为',
+}) => showAppMenu<ExportFormat>(
+  context,
+  header: header,
+  items: <AppMenuItem<ExportFormat>>[
+    for (final f in ExportFormat.values)
+      AppMenuItem(
+        value: f,
+        label: '${f.label}（.${f.ext}）',
+        icon: Icons.description_outlined,
+      ),
+  ],
+);
+
 /// 单篇导出：选格式 → 选保存位置 → 写文件。
 ///
 /// 单独做成顶层函数，是为了让**笔记菜单**和别处都能直接调 ——
@@ -47,18 +125,7 @@ Future<void> exportSingleNote(BuildContext context, Note note) async {
   if (!context.mounted) return;
   final state = context.read<AppState>();
 
-  final format = await showAppMenu<ExportFormat>(
-    context,
-    header: '导出为',
-    items: <AppMenuItem<ExportFormat>>[
-      for (final f in ExportFormat.values)
-        AppMenuItem(
-          value: f,
-          label: '${f.label}（.${f.ext}）',
-          icon: Icons.description_outlined,
-        ),
-    ],
-  );
+  final format = await pickExportFormat(context);
   if (format == null || !context.mounted) return;
 
   final full = state.repo.getNote(note.id) ?? note;

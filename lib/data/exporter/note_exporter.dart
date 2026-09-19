@@ -59,6 +59,67 @@ class _DocxImage {
 class NoteExporter {
   const NoteExporter._();
 
+  /// 把多篇笔记打成**一个压缩包**（包里每篇一个文件）。
+  ///
+  /// [items] 里的 `path` 是**包内的目录层级**（不含文件名），空表示放根目录。
+  /// 导出整个文集时把文集层级填进来，解压出来就和应用里看到的目录结构一致
+  /// —— 这是"文件夹导出"和"批量导出"唯一的区别，所以合成一个函数，
+  /// 免得两处各写一遍、然后有一处漏了层级。
+  static Uint8List zipBytes({
+    required List<({List<String> path, Note note})> items,
+    ExportFormat format = ExportFormat.docx,
+    String? imageRoot,
+  }) {
+    final archive = Archive();
+    final used = <String>{};
+
+    for (final item in items) {
+      final note = item.note;
+      final bytes = format.isBinary
+          ? renderDocxBytes(note, imageRoot: imageRoot)
+          : Uint8List.fromList(
+              utf8.encode(render(note, format, imageRoot: imageRoot)),
+            );
+
+      final dirs = <String>[
+        for (final seg in item.path)
+          if (_safeSegment(seg).isNotEmpty) _safeSegment(seg),
+      ];
+
+      final base = suggestedName(note);
+      var full = <String>[...dirs, '$base.${format.ext}'].join('/');
+      // 同名笔记（比如两篇都叫「无题」）加序号，否则后面会把前面覆盖掉
+      var k = 2;
+      while (!used.add(full)) {
+        full = <String>[...dirs, '$base ($k).${format.ext}'].join('/');
+        k++;
+      }
+      archive.addFile(ArchiveFile(full, bytes.length, bytes));
+    }
+
+    return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
+  }
+
+  /// 压缩包名。文集名可能带 `/ : *` 这些，直接当文件名会存不下来。
+  static String safeZipName(String raw) {
+    final t = _safeSegment(raw);
+    return t.isEmpty ? '元世界导出' : t;
+  }
+
+  /// 目录/文件名里不能出现的字符换成下划线。
+  ///
+  /// 文集名是用户随手起的，`斜杠/反斜杠`、`: * ? " < > |` 这些一旦进了
+  /// 压缩包的路径，解压时要么报错、要么被当成层级 —— 名字里带 `/`
+  /// 会凭空多出一层目录。
+  static String _safeSegment(String s) {
+    var t = s.trim().replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_');
+    // Windows 上以点或空格结尾的名字建不出来
+    t = t.replaceAll(RegExp(r'[. ]+$'), '');
+    if (t.isEmpty) return '';
+    // 太长的话有些解压工具会失败
+    return t.length > 80 ? t.substring(0, 80) : t;
+  }
+
   /// 渲染单篇。[imageRoot] 用于 HTML 里把图片写成绝对路径。
   static String render(
     Note note,
@@ -122,6 +183,9 @@ class NoteExporter {
     contentTypes.write(
       '<Override PartName="/word/document.xml" '
       'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      // **styles.xml 必须在这里登记**，否则 Word 根本不认它
+      '<Override PartName="/word/styles.xml" '
+      'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
       '</Types>',
     );
 
@@ -134,28 +198,80 @@ class NoteExporter {
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
         '</Relationships>',
       ))
+      ..addFile(ArchiveFile.string('word/styles.xml', _stylesXml()))
       ..addFile(ArchiveFile.string('word/document.xml', _documentXml(note, blocks, images)));
 
-    if (images.isNotEmpty) {
-      final rels = StringBuffer(
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    // **document.xml.rels 要无条件生成**：以前只在有图片时才写，
+    // 而没有 styles 关系的话 Word 也不会去读 styles.xml。
+    final rels = StringBuffer(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      '<Relationship Id="rIdStyles" '
+      'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+      'Target="styles.xml"/>',
+    );
+    for (final img in images) {
+      rels.write(
+        '<Relationship Id="${img.relId}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+        'Target="media/${img.fileName}"/>',
       );
-      for (final img in images) {
-        rels.write(
-          '<Relationship Id="${img.relId}" '
-          'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
-          'Target="media/${img.fileName}"/>',
-        );
-        archive.addFile(ArchiveFile('word/media/${img.fileName}', img.bytes.length, img.bytes));
-      }
-      rels.write('</Relationships>');
       archive.addFile(
-        ArchiveFile.string('word/_rels/document.xml.rels', rels.toString()),
+        ArchiveFile('word/media/${img.fileName}', img.bytes.length, img.bytes),
       );
     }
+    rels.write('</Relationships>');
+    archive.addFile(
+      ArchiveFile.string('word/_rels/document.xml.rels', rels.toString()),
+    );
 
     return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
+  }
+
+  /// `word/styles.xml`：定义 Normal 和 Heading1~6。
+  ///
+  /// **这是"Word 导航窗格能看到目录"的关键。** 之前正文标题虽然写了
+  /// `w:pStyle w:val="Heading2"`，但整个包**没有 styles.xml** ——
+  /// 那个样式根本没定义，Word 除了显示成普通文字，也拿不到大纲级别，
+  /// 于是侧栏里空空如也。用户的原话就是"在 word 文档里侧栏看不到目录"。
+  ///
+  /// 两点必须给对：
+  ///   1. `w:outlineLvl`（0 起）—— Word 的导航窗格认的是它，不是字号
+  ///   2. `w:name` 用 Word 内置名（`heading 1`…）—— 这样"引用→目录"
+  ///      那些内置功能也能识别，而且在别的阅读器里一样有层级
+  static String _stylesXml() {
+    const sizes = <int>[36, 32, 28, 26, 24, 22]; // 半磅：18/16/14/13/12/11pt
+    final b = StringBuffer(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      '<w:docDefaults><w:rPrDefault><w:rPr>'
+      '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="宋体" w:cs="Calibri"/>'
+      '<w:sz w:val="21"/><w:szCs w:val="21"/>'
+      '</w:rPr></w:rPrDefault>'
+      '<w:pPrDefault><w:pPr>'
+      '<w:spacing w:after="120" w:line="360" w:lineRule="auto"/>'
+      '</w:pPr></w:pPrDefault></w:docDefaults>'
+      '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+      '<w:name w:val="Normal"/><w:qFormat/></w:style>'
+      '<w:style w:type="character" w:styleId="Hyperlink">'
+      '<w:name w:val="Hyperlink"/><w:qFormat/>'
+      '<w:rPr><w:color w:val="3B82F6"/><w:u w:val="single"/></w:rPr></w:style>',
+    );
+    for (var i = 0; i < 6; i++) {
+      final lvl = i + 1;
+      b.write(
+        '<w:style w:type="paragraph" w:styleId="Heading$lvl">'
+        '<w:name w:val="heading $lvl"/><w:basedOn w:val="Normal"/>'
+        '<w:next w:val="Normal"/><w:qFormat/>'
+        '<w:pPr><w:keepNext/>'
+        '<w:spacing w:before="${240 - i * 20}" w:after="120"/>'
+        '<w:outlineLvl w:val="$i"/></w:pPr>'
+        '<w:rPr><w:b/><w:sz w:val="${sizes[i]}"/>'
+        '<w:szCs w:val="${sizes[i]}"/></w:rPr></w:style>',
+      );
+    }
+    b.write('</w:styles>');
+    return b.toString();
   }
 
   static String _documentXml(
@@ -180,6 +296,29 @@ class NoteExporter {
           '<w:r><w:t xml:space="preserve">${_xesc(note.title.trim())}</w:t></w:r></w:p>');
     }
 
+    // 给正文里每个标题排个书签，正文前的目录就能点着跳过去。
+    //
+    // **按出现顺序编号**，并且和目录项**按文字配对**（同一个标题文字可能
+    // 出现多次，所以按顺序逐个消费，不能简单用 Map）。
+    final headingBookmarks = <String>[]; // 与 headings 一一对应
+    final headings = <ContentBlock>[];
+    for (final blk in blocks) {
+      if (blk.type == ContentBlockType.heading) {
+        headings.add(blk);
+        headingBookmarks.add('ywHead${headings.length}');
+      }
+    }
+    var bookmarkCursor = 0;
+    String? takeBookmark(String text) {
+      for (var k = bookmarkCursor; k < headings.length; k++) {
+        if (stripInlineMarkers(headings[k].text).trim() == text) {
+          bookmarkCursor = k + 1;
+          return headingBookmarks[k];
+        }
+      }
+      return null;
+    }
+
     // 目录写在正文之前 —— 长文拿到 docx 之后不用一路滚到底
     final toc = tocOf(note);
     if (toc.isNotEmpty) {
@@ -189,15 +328,28 @@ class NoteExporter {
       for (final e in toc) {
         // 缩进用 twips：360 twips = 0.25 英寸
         final indent = (e.level - minLevel) * 360;
+        final label = _xesc(stripInlineMarkers(e.text).trim());
+        final anchor = takeBookmark(stripInlineMarkers(e.text).trim());
+        if (anchor == null) {
+          // 配不上书签（标题被改过、或目录里混进了非标题项）就退回纯文字，
+          // 总比导出一个点了没反应的东西强
+          b.write('<w:p><w:pPr><w:ind w:left="$indent"/></w:pPr>'
+              '<w:r><w:t xml:space="preserve">$label</w:t></w:r></w:p>');
+          continue;
+        }
+        // **真超链接**：Word 里点一下直接跳到那一节
         b.write('<w:p><w:pPr><w:ind w:left="$indent"/></w:pPr>'
-            '<w:r><w:t xml:space="preserve">'
-            '${_xesc(stripInlineMarkers(e.text).trim())}</w:t></w:r></w:p>');
+            '<w:hyperlink w:anchor="$anchor">'
+            '<w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>'
+            '<w:t xml:space="preserve">$label</w:t></w:r>'
+            '</w:hyperlink></w:p>');
       }
     }
 
     // 连续的 Markdown 表格行要合成一个**真正的 Word 表格**。
     // 不合成的话，往返一趟表格就退化成一行行带竖线的文字。
     var i = 0;
+    var headingSeq = 0;
     while (i < blocks.length) {
       final block = blocks[i];
 
@@ -233,13 +385,31 @@ class NoteExporter {
           b.write(_imageXml(img, imgIndex));
         }
       } else {
-        b.write(_paragraphXml(block));
+        // 标题要带上书签，目录才跳得过来；编号按正文里出现的顺序走
+        if (block.type == ContentBlockType.heading) {
+          final n = headingSeq++;
+          b.write(
+            _paragraphXml(
+              block,
+              bookmark: n < headingBookmarks.length ? headingBookmarks[n] : null,
+            ),
+          );
+        } else {
+          b.write(_paragraphXml(block));
+        }
       }
       i++;
     }
 
     b.write('<w:sectPr/></w:body></w:document>');
     return b.toString();
+  }
+
+  /// 书签名 → 整数 id。Word 要求 `w:id` 是数字且互不相同；
+  /// 名字是我们自己按 `ywHead<N>` 生成的，取数字部分即可。
+  static int _bookmarkId(String name) {
+    final m = RegExp(r'(\d+)$').firstMatch(name);
+    return m == null ? 0 : (int.tryParse(m.group(1)!) ?? 0);
   }
 
   /// 这一块是不是 Markdown 表格的一行。
@@ -409,7 +579,7 @@ class NoteExporter {
     return out.toString();
   }
 
-  static String _paragraphXml(ContentBlock block) {
+  static String _paragraphXml(ContentBlock block, {String? bookmark}) {
     final text = block.text.trim();
     switch (block.type) {
       case ContentBlockType.image:
@@ -419,8 +589,17 @@ class NoteExporter {
       case ContentBlockType.heading:
         final level = block.level.clamp(1, 6);
         final headingText = stripInlineMarkers(text);
+        // 书签：正文前的目录靠它跳转。**必须包着标题文字**，
+        // 落在段落外面的话 Word 会认为锚点无效。
+        final bm = bookmark;
+        final mark = bm == null
+            ? ''
+            : '<w:bookmarkStart w:id="${_bookmarkId(bm)}" w:name="$bm"/>';
+        final markEnd =
+            bm == null ? '' : '<w:bookmarkEnd w:id="${_bookmarkId(bm)}"/>';
         return '<w:p><w:pPr><w:pStyle w:val="Heading$level"/></w:pPr>'
-            '<w:r><w:t xml:space="preserve">${_xesc(headingText)}</w:t></w:r></w:p>';
+            '$mark<w:r><w:t xml:space="preserve">${_xesc(headingText)}</w:t></w:r>'
+            '$markEnd</w:p>';
       case ContentBlockType.bullet:
         return '<w:p><w:r><w:t xml:space="preserve">· </w:t></w:r>'
             '${_runs(text)}</w:p>';
