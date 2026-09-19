@@ -577,9 +577,6 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                 final navResW =
                     (!fullscreenEditor && navT > 0.99) ? resizerWidth : 0.0;
                 final areaW = math.max(0.0, avail - navPaneW - navResW);
-                // 正文栏"该展开"的目标状态
-                final detailTarget =
-                    _detailOpen && showNotesSection && !fullscreenEditor;
                 // 关闭动画还在跑的时候**必须继续渲染**（否则没有滑出动画），
                 // 动画归零后立刻拆掉 —— 留一个 0 宽的编辑器在树里，
                 // 既浪费又会让"正文栏收起"这件事在语义上说不清。

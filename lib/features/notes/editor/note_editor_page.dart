@@ -26,6 +26,7 @@ import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/text_stats.dart';
+import '../../../core/widgets/app_menu.dart';
 import '../../../data/media/media_importer.dart';
 import 'body_segments.dart';
 import 'markdown_controller.dart';
@@ -33,8 +34,75 @@ import 'markdown_editing.dart';
 import '../widgets/field_blocks.dart';
 import '../widgets/media_card.dart';
 
-class NoteEditorPage extends StatefulWidget {
-  const NoteEditorPage({
+/// 媒体块外面套的悬停壳：鼠标进来才把删除键露出来。
+///
+/// 单独做成 widget（而不是在编辑器里存一个"当前悬停的是谁"）：
+/// 正文里可能有几十个媒体，用编辑器的 State 记悬停目标会让**整篇**
+/// 每次都重建；各自的悬停各自管，只有被指到的那一个会重绘。
+class _MediaHover extends StatefulWidget {
+  const _MediaHover({
+    super.key,
+    required this.builder,
+    this.alwaysShowButton = false,
+  });
+
+  final Widget Function(bool hovering) builder;
+
+  /// 触屏端没有 hover：直接常显，否则删不掉。
+  final bool alwaysShowButton;
+
+  @override
+  State<_MediaHover> createState() => _MediaHoverState();
+}
+
+class _MediaHoverState extends State<_MediaHover> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) {
+        if (!_hovering) setState(() => _hovering = true);
+      },
+      onExit: (_) {
+        if (_hovering) setState(() => _hovering = false);
+      },
+      child: widget.builder(widget.alwaysShowButton || _hovering),
+    );
+  }
+}
+
+/// 媒体块右上角的删除键（毛玻璃小圆钮）。
+class _MediaDeleteButton extends StatelessWidget {
+  const _MediaDeleteButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Tooltip(
+      message: '从笔记里移除',
+      child: Pressable(
+        onTap: onTap,
+        scale: 0.9,
+        child: Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: c.secondaryBackground.withValues(alpha: 0.92),
+            shape: BoxShape.circle,
+            border: Border.all(color: c.separator, width: 0.5),
+          ),
+          child: Icon(Icons.delete_outline_rounded, size: 17, color: c.destructive),
+        ),
+      ),
+    );
+  }
+}
+
+class NoteEditorPage extends StatefulWidget {  const NoteEditorPage({
     super.key,
     required this.noteId,
     this.embedded = false,
@@ -377,6 +445,80 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _rebuildSegments();
     if (mounted) setState(() {});
     return (ok: ok, failed: failed);
+  }
+
+  /// 给正文里的媒体（图片/视频）套一层删除入口。
+  ///
+  /// 交互和别处一致：**鼠标移上去才露出**删除键，平时不干扰阅读；
+  /// 移动端没有 hover，则常驻显示（否则手机上根本删不掉）。
+  Widget _deletableMedia(
+    AppColors c, {
+    required String key,
+    required VoidCallback onDelete,
+    required Widget child,
+  }) {
+    return _MediaHover(
+      key: ValueKey<String>('wrap-$key'),
+      // 桌面端靠悬停，触屏端没有 hover 事件，直接常显
+      alwaysShowButton: !isDesktopPlatform(),
+      builder: (hovering) => Stack(
+        children: [
+          child,
+          if (hovering)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: _MediaDeleteButton(
+                onTap: () => _confirmDeleteMedia(onDelete),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 删除前确认一次：正文里的媒体是**用户看得见的内容**，
+  /// 误点一下就没了（虽然有撤销，但没人知道能撤销）。
+  Future<void> _confirmDeleteMedia(VoidCallback onDelete) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('从笔记里移除这个文件？'),
+        content: const Text('只会去掉正文里的这一行，磁盘上的文件会保留，'
+            '需要的话可以重新插入。'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: context.colors.destructive),
+            child: const Text('移除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    onDelete();
+  }
+
+  /// 删掉一个媒体段：从分段列表里去掉它，再拼回正文。
+  ///
+  /// 走 [joinBodySegments] 而不是自己去字符串里找那一行 ——
+  /// 分段和拼回是**严格互逆**的一对（单独测过），
+  /// 手写字符串替换早晚会多删/少删一个换行。
+  void _deleteSegment(ImageSegment seg) {
+    final next = <BodySegment>[
+      for (final s in _segments)
+        if (!identical(s, seg)) s,
+    ];
+    _undoStack.add(TextEditingValue(text: _body.text));
+    _redoStack.clear();
+    _body.text = joinBodySegments(ensureTextSegment(next));
+    _rebuildSegments();
+    _scheduleSave();
+    if (mounted) setState(() {});
   }
 
   void _toast(String msg) {
@@ -770,19 +912,30 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     final root = context.read<AppState>().db.imageRoot.path;
     final abs = p.join(root, seg.path);
 
-    if (MediaImporter.isVideoPath(seg.path)) {
-      // **key 不能省**：编辑器的分段列表会因为"头参数开关""自动保存状态"
-      // 之类的原因整体重建，没有 key 的话 Flutter 按位置配对，位置一挪
-      // 视频卡片就被销毁重建 —— 播放器跟着重建，视频回到 00:00 暂停，
-      // 用户看到的就是"点播放没反应"。有 key 才能保住同一个播放器。
-      return MediaCard(
-        key: ValueKey<String>('media-${seg.path}'),
-        path: abs,
-        relPath: seg.path,
-        index: index,
-      );
-    }
+    // 图片和视频都要能删：以前正文里的媒体**没有任何删除入口**，
+    // 插错了只能去源码里找那一行删掉。统一套一层"悬停出删除键"。
+    return _deletableMedia(
+      c,
+      key: 'media-${seg.path}',
+      onDelete: () => _deleteSegment(seg),
+      child: MediaImporter.isVideoPath(seg.path)
+          ?
+            // **key 不能省**：编辑器的分段列表会因为"头参数开关""自动保存状态"
+            // 之类的原因整体重建，没有 key 的话 Flutter 按位置配对，位置一挪
+            // 视频卡片就被销毁重建 —— 播放器跟着重建，视频回到 00:00 暂停，
+            // 用户看到的就是"点播放没反应"。有 key 才能保住同一个播放器。
+            MediaCard(
+              key: ValueKey<String>('media-${seg.path}'),
+              path: abs,
+              relPath: seg.path,
+              index: index,
+            )
+          : _imageOnly(c, abs, seg, index),
+    );
+  }
 
+  /// 图片那一路的渲染（视频走 [MediaCard]）。
+  Widget _imageOnly(AppColors c, String abs, ImageSegment seg, int index) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Column(

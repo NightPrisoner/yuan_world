@@ -53,6 +53,11 @@ class _MediaCardState extends State<MediaCard> {
   Player? _player;
   VideoController? _controller;
 
+  /// 打开/播放失败的原因。非空时直接在卡片上显示 —— 静默失败的
+  /// 表现就是"点播放没反应"，用户和我都无从下手。
+  String? _error;
+  StreamSubscription<String>? _errorSub;
+
   bool get _exists => File(widget.path).existsSync();
 
   @override
@@ -65,6 +70,7 @@ class _MediaCardState extends State<MediaCard> {
 
   @override
   void dispose() {
+    _errorSub?.cancel();
     _player?.dispose();
     super.dispose();
   }
@@ -74,22 +80,30 @@ class _MediaCardState extends State<MediaCard> {
     final controller = VideoController(player);
     _player = player;
     _controller = controller;
-    // **必须 await open** —— 这是这次"点播放没反应"的根因。
+    // 打开失败要让用户**看得见**，不能只是"点了没反应"：
+    // 之前这里把异常吞了，卡片就变成一个永远按不动的播放键。
+    _errorSub = player.stream.error.listen((e) {
+      if (mounted) setState(() => _error = e);
+    });
+    // **必须 await open** —— 这是"点播放没反应"的根因。
     //
     // media_kit 的 Player 是**异步初始化**的，`open()` 只有在原生播放器就绪
     // 之后才真正执行。之前这里不 await（fire-and-forget），命令会落在
     // 就绪之前被丢掉：媒体从来没被打开过，`state.duration` 一直是 0，
-    // 于是点播放、点重播、拖进度条**全都没反应** —— 用户报的就是这个。
-    //
-    // 实测：不 await 时 duration=0:00:00；await 之后才有真实时长。
+    // 于是点播放、点重播、拖进度条**全都没反应**。
     unawaited(_openMedia(player, play: play));
   }
 
-  Future<void> _openMedia(Player player, {required bool play}) async {
+  Future<void> _openMedia(
+    Player player, {
+    required bool play,
+    bool hard = false,
+  }) async {
     try {
+      if (hard) await player.stop();
       await player.open(Media(Uri.file(widget.path).toString()), play: play);
-    } catch (_) {
-      // 打不开就算了：卡片会停在第一帧/黑底，不该让整篇笔记崩
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
     }
   }
 
@@ -135,11 +149,35 @@ class _MediaCardState extends State<MediaCard> {
             ),
           ),
           const SizedBox(height: 5),
+          if (_error != null) _errorLine(c),
           _caption(c),
         ],
       ),
     );
   }
+
+  /// 播放失败时把原因写在卡片下面。
+  ///
+  /// **不能让失败无声无息**：之前异常被吞掉，卡片就是一个永远按不动的
+  /// 播放键，用户只能反馈"点了没反应"，谁也不知道卡在哪一步。
+  Widget _errorLine(AppColors c) => Padding(
+    padding: const EdgeInsets.only(bottom: 3),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.error_outline_rounded, size: 13, color: c.destructive),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            '这个视频播放失败：$_error',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: AppText.caption2.copyWith(color: c.destructive),
+          ),
+        ),
+      ],
+    ),
+  );
 
   /// 控件层单独做成一个 StatefulWidget，而不是这里的方法。
   ///
@@ -150,10 +188,12 @@ class _MediaCardState extends State<MediaCard> {
   /// 状态放进控件层自己身上，两个实例各自独立工作。
   Widget _controls(VideoState state) => _VideoControls(
     state: state,
-    // 媒体没打开时重新打开 —— 只有 MediaCard 知道文件路径
-    onReload: () async {
+    // 媒体没打开时重新打开 —— 只有 MediaCard 知道文件路径。
+    // hard=true 时先 stop() 再 open：原生播放器状态卡住时，
+    // 只有整个重来一次才拉得动。
+    onReload: ({bool hard = false}) async {
       final p = _player;
-      if (p != null) await _openMedia(p, play: true);
+      if (p != null) await _openMedia(p, play: true, hard: hard);
     },
   );
 
@@ -286,7 +326,8 @@ class _VideoControls extends StatefulWidget {
   ///
   /// 为什么需要：media_kit 的 `open()` 是异步的，命令有可能落在原生播放器
   /// 就绪之前被丢掉，那种状态下 `duration` 是 0、点播放永远没反应。
-  final Future<void> Function() onReload;
+  /// [hard] 为 true 时先 stop 再 open（原生状态卡死时的兜底）。
+  final Future<void> Function({bool hard}) onReload;
 
   @override
   State<_VideoControls> createState() => _VideoControlsState();
@@ -375,6 +416,7 @@ class _VideoControlsState extends State<_VideoControls> {
     // 没有媒体（duration 为 0）说明当初的 open 没生效，补一次
     if (player.state.duration == Duration.zero) {
       await widget.onReload();
+      _watchdog(player);
       return;
     }
 
@@ -383,6 +425,21 @@ class _VideoControlsState extends State<_VideoControls> {
       if (mounted) setState(() => _completed = false);
     }
     await player.play();
+    _watchdog(player);
+  }
+
+  /// 点完播放后**确认它真的动起来了**，没动就硬重启一次。
+  ///
+  /// media_kit 偶尔会出现"命令收下了但原生播放器没动"（位置和状态都不变），
+  /// 表现就是用户说的"点了没反应"。与其让他反复点，不如自己救一次。
+  /// 只在"还在开头 + 没在播"时才救：用户自己暂停（位置 > 0）不该被重启。
+  void _watchdog(Player player) {
+    Future<void>.delayed(const Duration(milliseconds: 900), () {
+      if (!mounted) return;
+      if (player.state.playing) return;
+      if (player.state.position > Duration.zero) return;
+      unawaited(widget.onReload(hard: true));
+    });
   }
 
   /// 选播放速度。
