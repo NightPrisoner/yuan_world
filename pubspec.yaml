@@ -82,8 +82,11 @@ flutter:
 
   # 彩蛋图库。往里丢图片/GIF 就会被随机抽到，不用改代码
   # （运行时用 AssetManifest 列目录）。
+  # branding/ 是应用内的 logo（侧栏左上角那个标），
+  # 和 windows/runner/resources/app_icon.ico 同源。
   assets:
     - assets/egg/
+    - assets/branding/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

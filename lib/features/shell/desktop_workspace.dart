@@ -53,6 +53,16 @@ part 'workspace_widgets.dart';
 
 enum _Section { notes, archived, todos, stats, trash, settings }
 
+/// 品牌头的内边距。**展开态和收起态共用**。
+///
+/// 收起态的轨道里必须留出同样高度的头部，两边的"收起/展开"开关才会
+/// 落在同一条水平线上 —— 以前收起态开头只有一个 `SizedBox(height: 10)`，
+/// 而展开态开关上面压着 56px 的品牌头，点一下开关它自己会往上跳 48px。
+const EdgeInsets _kBrandPad = EdgeInsets.fromLTRB(18, 18, 18, 12);
+
+/// logo 标的边长。
+const double _kBrandMarkSize = 26;
+
 class DesktopWorkspace extends StatefulWidget {
   const DesktopWorkspace({super.key});
 
@@ -617,29 +627,45 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
     _Section.notes || _Section.archived => const SizedBox.shrink(),
   };
 
+  /// 品牌标。用**真 logo 资源**，不再是手画的渐变色块。
+  ///
+  /// 以前这里是一个 `LinearGradient` 色块 + `Icons.auto_awesome` 的占位图，
+  /// 和 exe 图标（`assets/branding/logo.png` 生成的那套）长得完全不一样 ——
+  /// 用户看到的是一个紫色小方块，而不是自己给的 logo。
+  ///
+  /// 资源读不出来时退回那个占位色块：侧栏左上角空一块比图标不精致更糟。
+  Widget _brandMark(AppColors c) => Image.asset(
+    'assets/branding/logo.png',
+    width: _kBrandMarkSize,
+    height: _kBrandMarkSize,
+    // logo 自带圆角和透明外角，直接用就好，不用再裁
+    fit: BoxFit.cover,
+    filterQuality: FilterQuality.medium,
+    errorBuilder: (_, _, _) => Container(
+      width: _kBrandMarkSize,
+      height: _kBrandMarkSize,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [c.palette[0], c.palette[4]],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Icon(Icons.auto_awesome, size: 15, color: Colors.white),
+    ),
+  );
+
   /// 左栏顶部的标识。隐私空间里换成醒目的提示 + 退出按钮 ——
   /// 「现在看的是哪一套数据」必须一眼可见，否则容易误操作。
   Widget _brandHeader(AppColors c, AppState state) {
     if (!state.privacyMode) {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
+        padding: _kBrandPad,
         child: Row(
           children: [
-            Container(
-              width: 26,
-              height: 26,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [c.palette[0], c.palette[4]],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.auto_awesome,
-                  size: 16, color: Colors.white),
-            ),
+            _brandMark(c),
             const SizedBox(width: 9),
             Text('元世界', style: AppText.title3.copyWith(color: c.label)),
           ],
@@ -993,24 +1019,51 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
       child: SafeArea(
         child: Column(
           children: [
-            const SizedBox(height: 10),
+            // ── 头部：只留 logo 标，**高度和展开态一模一样** ──
+            //
+            // 这是"收起/展开开关同一条水平线"的关键。以前这里只有
+            // `SizedBox(height: 10)`，而展开态开关上面压着整个品牌头
+            // （18 + 26 + 12 = 56），于是点一下开关，它自己往上跳 48px。
+            // 留出同样高度的头部之后，两种状态下开关的 y 就一致了。
+            Padding(
+              // 不能 const：常量对象上取不到 .top（Dart 的常量求值限制）
+              padding: EdgeInsets.only(
+                top: _kBrandPad.top,
+                bottom: _kBrandPad.bottom,
+              ),
+              child: SizedBox(
+                height: _kBrandMarkSize,
+                child: Center(child: _brandMark(c)),
+              ),
+            ),
             Tooltip(
               message: '展开侧栏',
               child: Pressable(
                 onTap: () => setState(() => _navCollapsed = false),
                 scale: 0.9,
                 child: Container(
-                  width: 38,
-                  height: 38,
-                  alignment: Alignment.center,
-                  child: Icon(
-                    Icons.chevron_right_rounded,
-                    size: 20,
-                    color: c.secondaryLabel,
+                  // **和展开态那个 _NavRow 用同一套 margin + padding**。
+                  //
+                  // 只对齐外框是不够的：展开态的箭头是包在
+                  // `margin 1 + padding 7` 里的行内图标，收起态原来是个
+                  // 光秃秃的 38px 方块 —— 外框差了 8px，图标中心也跟着差。
+                  // 补齐这两层之后，两边的箭头中心才落在同一条水平线上。
+                  margin: const EdgeInsets.symmetric(vertical: 1),
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: SizedBox(
+                    width: 38,
+                    child: Center(
+                      child: Icon(
+                        Icons.chevron_right_rounded,
+                        size: 16,
+                        color: c.secondaryLabel,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
+            // 展开态里开关下面紧跟着第一项，这里也留同样的间距
             const SizedBox(height: 6),
             item(Icons.article_rounded, '全部笔记',
                 _section == _Section.notes && f.collectionId == null &&

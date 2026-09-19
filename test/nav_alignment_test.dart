@@ -114,4 +114,81 @@ void main() {
     // 能打开就够了 —— 这里只防"改了布局把它点没了"
     expect(tester.takeException(), isNull);
   });
+
+  /// 「收起侧栏」和「展开侧栏」必须落在**同一条水平线上**。
+  ///
+  /// 这是用户连着报两次的问题：开关本身在两种状态间会跳动。
+  /// 第一次只把开关挪进了固定区，但收起态的轨道顶部**没有头部**，
+  /// 而展开态开关上面压着 56px 的品牌头 —— 点一下它自己往上跳 48px。
+  testWidgets('收起和展开开关在同一水平线上', (tester) async {
+    await pumpWide(tester);
+
+    // **比箭头图标的中心**，不是比外框 —— 用户看到的就是那个箭头。
+    // 比外框的话，两边 margin/padding 不同也会"看起来对齐"，实际是歪的。
+    //
+    // 图标和文字在同一个 Row 里是**兄弟**，所以要先定位那个 Row，
+    // 不能拿 find.text 当祖先去找。
+    final row = find
+        .ancestor(of: find.text('收起侧栏'), matching: find.byType(Row))
+        .first;
+    final expandedY = tester
+        .getCenter(
+          find.descendant(
+            of: row,
+            matching: find.byIcon(Icons.chevron_left_rounded),
+          ),
+        )
+        .dy;
+
+    await tester.tap(find.text('收起侧栏'));
+    await tester.pumpAndSettle();
+
+    final expandBtn = find.byTooltip('展开侧栏');
+    expect(expandBtn, findsOneWidget, reason: '没进到收起态');
+    final collapsedY = tester
+        .getCenter(
+          find.descendant(
+            of: expandBtn,
+            matching: find.byIcon(Icons.chevron_right_rounded),
+          ),
+        )
+        .dy;
+
+    expect(
+      (collapsedY - expandedY).abs(),
+      lessThan(2),
+      reason: '收起($collapsedY) 和展开($expandedY) 的箭头中心差了 '
+          '${(collapsedY - expandedY).abs().toStringAsFixed(1)}px',
+    );
+  });
+
+  testWidgets('应用内用的是真 logo 资源，不是手画的占位块', (tester) async {
+    await pumpWide(tester);
+    final assets = tester
+        .widgetList<Image>(find.byType(Image))
+        .map((w) => w.image)
+        .whereType<AssetImage>()
+        .map((a) => a.assetName)
+        .toList();
+    expect(
+      assets,
+      contains('assets/branding/logo.png'),
+      reason: '侧栏左上角还是占位色块 —— 用户给的 logo 没接上',
+    );
+  });
+
+  testWidgets('收起态也留着 logo（它就是撑出头部高度的东西）', (tester) async {
+    await pumpWide(tester);
+    await tester.tap(find.text('收起侧栏'));
+    await tester.pumpAndSettle();
+
+    final assets = tester
+        .widgetList<Image>(find.byType(Image))
+        .map((w) => w.image)
+        .whereType<AssetImage>()
+        .map((a) => a.assetName)
+        .toList();
+    expect(assets, contains('assets/branding/logo.png'));
+    expect(tester.takeException(), isNull);
+  });
 }
