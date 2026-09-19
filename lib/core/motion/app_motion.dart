@@ -14,6 +14,8 @@
 ///    —— 交互反馈 120~200ms，页面转场 350~400ms，超过 500ms 就会觉得拖沓。
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
@@ -135,6 +137,80 @@ class _SpringAnimatedValueState extends State<SpringAnimatedValue>
         animation: _c,
         builder: (c, _) => widget.builder(c, _c.value),
       );
+}
+
+/// 鼠标悬停时的"轻微抬起"：上浮一点点 + 轻微放大，用**弹簧**驱动。
+///
+/// 桌面端"鼠标扫过一列表"时的活气就来自这里：卡片不是"啪"地变色，
+/// 而是像被光标轻轻抬了一下。默认幅度刻意很小（1.5px / 1.2%）——
+/// 再大就变成花哨的玩具，扫读时反而添乱。
+///
+/// 几条必须守住的规矩：
+///   · 只有真的有鼠标（桌面端）才响应，触屏上"悬停"没有意义；
+///   · 系统开了「减弱动态效果」就完全不动（[AppMotion.reduceMotion]）；
+///   · 用弹簧而不是固定时长：快速划过一排卡片时，进出都跟手、不顿挫。
+///
+/// 抽成一个公共 widget 是为了**两种视图手感一致** ——
+/// 列表和瀑布流各写一份偏移量，早晚会漂移成 1px 和 3px。
+class HoverLift extends StatefulWidget {
+  const HoverLift({
+    super.key,
+    required this.child,
+    this.dy = -1.5,
+    this.scale = 1.0,
+    this.enabled = true,
+  });
+
+  final Widget child;
+
+  /// 悬停时向上偏移多少像素（负值向上）。
+  final double dy;
+
+  /// 悬停时放大到多少（1.0 = 不放大）。
+  final double scale;
+
+  final bool enabled;
+
+  @override
+  State<HoverLift> createState() => _HoverLiftState();
+}
+
+class _HoverLiftState extends State<HoverLift> {
+  bool _hover = false;
+
+  /// 桌面端才做悬停动效（用 dart:io 判断，这个应用不出 Web 端）。
+  static final bool _hasMouse =
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  bool get _active => widget.enabled && _hasMouse;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_active) return widget.child;
+    final reduce = AppMotion.reduceMotion(context);
+    final on = _hover && !reduce;
+
+    return MouseRegion(
+      onEnter: (_) {
+        if (!_hover) setState(() => _hover = true);
+      },
+      onExit: (_) {
+        if (_hover) setState(() => _hover = false);
+      },
+      child: SpringAnimatedValue(
+        value: on ? 1.0 : 0.0,
+        // 进的时候轻轻回弹（有生气），出的时候利落（不拖泥带水）
+        spring: on ? AppMotion.bouncy : AppMotion.snappy,
+        builder: (context, t) => Transform.translate(
+          offset: Offset(0, widget.dy * t),
+          child: Transform.scale(
+            scale: 1 + (widget.scale - 1) * t,
+            child: widget.child,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// 可按压的容器：按下时轻微缩小 + 降低不透明度 + 触感反馈。

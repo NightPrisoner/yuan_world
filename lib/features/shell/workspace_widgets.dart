@@ -767,41 +767,74 @@ class _NoteGridCardState extends State<_NoteGridCard> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: Pressable(
-        onTap: widget.onTap,
-        onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
-        scale: 0.98,
-        child: AnimatedContainer(
-          duration: AppMotion.fast,
-          curve: AppMotion.enter,
-          decoration: BoxDecoration(
-            color: c.secondaryBackground,
-            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-            border: Border.all(
-              color: widget.selected
-                  ? c.tint
-                  : (c.isDark
-                      ? c.separator.withValues(alpha: 0.4)
-                      : const Color(0x0F000000)),
-              width: widget.selected ? 1.5 : 0.5,
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (hasCover)
-                    AspectRatio(
-                      aspectRatio: 16 / 11,
-                      child: Image.file(
-                        File(p.join(widget.imageRoot, effectiveCover(n.coverImage)!)),
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => ColoredBox(color: c.fill),
+      // 瀑布流卡片是"一张张看"的：抬得比列表行明显一点（2px + 1.2%），
+      // 加上封面缓慢放大，鼠标扫过时整面墙是活的
+      child: HoverLift(
+        dy: -2,
+        scale: 1.012,
+        child: Pressable(
+          onTap: widget.onTap,
+          onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
+          scale: 0.98,
+          child: AnimatedContainer(
+            duration: AppMotion.fast,
+            curve: AppMotion.enter,
+            decoration: BoxDecoration(
+              color: c.secondaryBackground,
+              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+              border: Border.all(
+                color: widget.selected
+                    ? c.tint
+                    : (_hover
+                        ? c.separator.withValues(alpha: c.isDark ? 0.9 : 0.8)
+                        : (c.isDark
+                            ? c.separator.withValues(alpha: 0.4)
+                            : const Color(0x0F000000))),
+                width: widget.selected ? 1.5 : 0.5,
+              ),
+              // 悬停时给一点投影：只有"抬起来"配上影子才成立
+              boxShadow: _hover && !widget.selected
+                  ? <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black
+                            .withValues(alpha: c.isDark ? 0.35 : 0.10),
+                        blurRadius: 14,
+                        offset: const Offset(0, 5),
                       ),
-                    ),
+                    ]
+                  : null,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (hasCover)
+                      AspectRatio(
+                        aspectRatio: 16 / 11,
+                        child: ClipRect(
+                          // 封面缓慢放大（比整卡的抬起慢一点）：
+                          // 像镜头轻轻推近，是"活气"最省力的一招
+                          child: AnimatedScale(
+                            scale: _hover ? 1.04 : 1.0,
+                            duration: AppMotion.normal,
+                            curve: AppMotion.enter,
+                            child: Image.file(
+                              File(
+                                p.join(
+                                  widget.imageRoot,
+                                  effectiveCover(n.coverImage)!,
+                                ),
+                              ),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) =>
+                                  ColoredBox(color: c.fill),
+                            ),
+                          ),
+                        ),
+                      ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
                     child: Column(
@@ -854,30 +887,36 @@ class _NoteGridCardState extends State<_NoteGridCard> {
               // ⋯ 按钮必须放在**整张卡片**这一层，不能塞进封面里 ——
               // 之前放在封面 Stack 内，导致没有封面的笔记（新建的都是纯文字）
               // 完全没有操作入口。
+              //
+              // 出现时淡入 + 从 0.8 放大到 1（SpringAnimatedValue 之外
+              // 最省事的一招）；不在悬停态时树里是真没有它，
+              // "只有悬停才出现"这条语义不变。
               if (_hover)
                 Positioned(
                   top: 4,
                   right: 4,
-                  child: Builder(
-                    builder: (btnCtx) => Pressable(
-                      onTap: () =>
-                          widget.onActions(AppMenuAnchor(context: btnCtx)),
-                      scale: 0.88,
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          // 有封面时压在图上，用深色底 + 白图标才看得清；
-                          // 纯文字卡片用浅色底，否则会像块膏药
-                          color: hasCover
-                              ? Colors.black.withValues(alpha: 0.45)
-                              : c.fill,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.more_horiz_rounded,
-                          size: 14,
-                          color: hasCover ? Colors.white : c.secondaryLabel,
+                  child: _FadePopIn(
+                    child: Builder(
+                      builder: (btnCtx) => Pressable(
+                        onTap: () =>
+                            widget.onActions(AppMenuAnchor(context: btnCtx)),
+                        scale: 0.88,
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            // 有封面时压在图上，用深色底 + 白图标才看得清；
+                            // 纯文字卡片用浅色底，否则会像块膏药
+                            color: hasCover
+                                ? Colors.black.withValues(alpha: 0.45)
+                                : c.fill,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.more_horiz_rounded,
+                            size: 14,
+                            color: hasCover ? Colors.white : c.secondaryLabel,
+                          ),
                         ),
                       ),
                     ),
@@ -886,6 +925,51 @@ class _NoteGridCardState extends State<_NoteGridCard> {
             ],
           ),
         ),
+      ),
+      ),
+    );
+  }
+}
+
+/// 出现时"淡入 + 微微放大"。
+///
+/// 悬停才露出来的小控件（⋯ 按钮）如果直接闪现，会显得很生硬；
+/// 用 [AppMotion.pop] 这条带回弹的曲线，冒出来的时候有点"弹"出来。
+class _FadePopIn extends StatefulWidget {
+  const _FadePopIn({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_FadePopIn> createState() => _FadePopInState();
+}
+
+class _FadePopInState extends State<_FadePopIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: AppMotion.fast,
+  )..forward();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (AppMotion.reduceMotion(context)) return widget.child;
+    final curved = CurvedAnimation(
+      parent: _c,
+      curve: AppMotion.pop,
+      reverseCurve: AppMotion.exit,
+    );
+    return FadeTransition(
+      opacity: _c,
+      child: ScaleTransition(
+        scale: Tween<double>(begin: 0.8, end: 1).animate(curved),
+        child: widget.child,
       ),
     );
   }
@@ -925,61 +1009,95 @@ class _NoteListRowState extends State<_NoteListRow> {
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: Pressable(
-        onTap: widget.onTap,
-        onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
-        scale: 0.99,
-        opacity: 0.85,
-        child: AnimatedContainer(
-          duration: AppMotion.fast,
-          curve: AppMotion.enter,
-          margin: const EdgeInsets.only(bottom: 4),
-          padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
-          decoration: BoxDecoration(
-            color: widget.selected
-                ? c.tint.withValues(alpha: c.isDark ? 0.20 : 0.12)
-                : (_hover ? c.secondaryBackground : Colors.transparent),
-            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  if (n.isPinned)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 4),
-                      child: Icon(Icons.push_pin, size: 11, color: c.tint),
-                    ),
-                  Expanded(
-                    child: Text(
-                      n.title.isEmpty ? '无标题笔记' : n.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppText.footnote.copyWith(
-                        color: n.title.isEmpty ? c.tertiaryLabel : c.label,
-                        fontWeight: FontWeight.w600,
+      // 悬停时整行轻轻抬起 1px：幅度比网格卡片更小 ——
+      // 列表是"一行行读"的，抬多了会晃眼
+      child: HoverLift(
+        dy: -1,
+        scale: 1.002,
+        child: Pressable(
+          onTap: widget.onTap,
+          onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
+          scale: 0.99,
+          opacity: 0.85,
+          child: AnimatedContainer(
+            duration: AppMotion.fast,
+            curve: AppMotion.enter,
+            margin: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
+            decoration: BoxDecoration(
+              color: widget.selected
+                  ? c.tint.withValues(alpha: c.isDark ? 0.20 : 0.12)
+                  : (_hover ? c.secondaryBackground : Colors.transparent),
+              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+              border: Border.all(
+                // 悬停时描一道极淡的边，把"抬起来"这件事说清楚
+                color: _hover && !widget.selected
+                    ? c.separator.withValues(alpha: c.isDark ? 0.7 : 0.5)
+                    : Colors.transparent,
+                width: 0.5,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    if (n.isPinned)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Icon(Icons.push_pin, size: 11, color: c.tint),
                       ),
-                    ),
-                  ),
-                  if (n.isFavorite)
-                    Icon(Icons.star_rounded, size: 12, color: c.palette[7]),
-                  // 悬停时露出操作入口，避免只能靠右键才发现
-                  if (_hover)
-                    Builder(
-                      builder: (btnCtx) => GestureDetector(
-                        onTap: () =>
-                            widget.onActions(AppMenuAnchor(context: btnCtx)),
-                        behavior: HitTestBehavior.opaque,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 6),
-                          child: Icon(Icons.more_horiz_rounded,
-                              size: 15, color: c.tertiaryLabel),
+                    Expanded(
+                      child: Text(
+                        n.title.isEmpty ? '无标题笔记' : n.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.footnote.copyWith(
+                          color: n.title.isEmpty ? c.tertiaryLabel : c.label,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
-                ],
-              ),
+                    if (n.isFavorite)
+                      Icon(Icons.star_rounded, size: 12, color: c.palette[7]),
+                    // 悬停时露出操作入口，避免只能靠右键才发现。
+                    // 用 AnimatedSwitcher：不在悬停态时树里**真的没有**它，
+                    // 出现时是淡入+轻微放大的。
+                    AnimatedSwitcher(
+                      duration: AppMotion.fast,
+                      switchInCurve: AppMotion.pop,
+                      switchOutCurve: AppMotion.exit,
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: ScaleTransition(
+                          scale: Tween<double>(begin: 0.8, end: 1).animate(anim),
+                          child: child,
+                        ),
+                      ),
+                      child: _hover
+                          ? Builder(
+                              key: const ValueKey<String>('row-actions'),
+                              builder: (btnCtx) => GestureDetector(
+                                onTap: () => widget.onActions(
+                                  AppMenuAnchor(context: btnCtx),
+                                ),
+                                behavior: HitTestBehavior.opaque,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(left: 6),
+                                  child: Icon(
+                                    Icons.more_horiz_rounded,
+                                    size: 15,
+                                    color: c.tertiaryLabel,
+                                  ),
+                                ),
+                              ),
+                            )
+                          : const SizedBox.shrink(
+                              key: ValueKey<String>('row-actions-none'),
+                            ),
+                    ),
+                  ],
+                ),
               if (n.excerpt.isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text(
@@ -1023,6 +1141,7 @@ class _NoteListRowState extends State<_NoteListRow> {
               ),
             ],
           ),
+        ),
         ),
       ),
     );
