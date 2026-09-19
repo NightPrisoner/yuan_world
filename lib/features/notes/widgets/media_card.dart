@@ -481,24 +481,38 @@ class _VideoControlsState extends State<_VideoControls> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // 1) 点画面任意处播放/暂停。控制条上的按钮在它上面，
-          //    所以拖进度条、点倍速都不会被这里截走。
-          GestureDetector(
+          // 1) 整块画面收**裸指针事件**：点任意处播放/暂停。
+          //
+          // 用的是 Listener 而不是 GestureDetector —— 这一条是用户
+          // "点中间死活播不了"换来的：手势识别要走**竞技场**，
+          // 上层任何一个人（滚动、选择、别的 detector）在竞技场里赢了，
+          // 这一路就再也收不到 onTap，但**外观上一切正常**，于是表现为
+          // "按钮看得见、点了没反应"。Listener 拿的是最原始的指针消息，
+          // 不参与竞技场，谁都抢不走。
+          //
+          // 它放在 Stack 最底下：点到底部控制条上的滑块/按钮时，
+          // 命中测试会停在那一条，这里就不会跟着误触发播放。
+          Listener(
             behavior: HitTestBehavior.opaque,
-            onTap: () => unawaited(_toggle()),
+            onPointerUp: (_) => unawaited(_toggle()),
             child: const SizedBox.expand(),
           ),
 
           // 2) 正中央的大按钮：未播放或播完时显示。
-          //    不管鼠标在不在画面里都显示 —— 这就是"待播"状态的默认样子，
-          //    否则用户看到一张静止画面，不知道该怎么放。
+          //    **只负责好看** —— 手势交给上面那个 Listener，
+          //    所以这里必须 IgnorePointer，不能自己再抢一层。
           if (!_playing)
-            Center(
-              child: _centerButton(
-                icon: _completed
-                    ? Icons.replay_rounded
-                    : Icons.play_arrow_rounded,
-                tip: _completed ? '重新播放' : '播放',
+            IgnorePointer(
+              child: Center(
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: _centerButton(
+                    icon: _completed
+                        ? Icons.replay_rounded
+                        : Icons.play_arrow_rounded,
+                    tip: _completed ? '重新播放' : '播放',
+                  ),
+                ),
               ),
             ),
 
@@ -522,32 +536,27 @@ class _VideoControlsState extends State<_VideoControls> {
   }
 
   /// 画面正中的播放/重播按钮。
-  Widget _centerButton({required IconData icon, required String tip}) =>
-      MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Tooltip(
-          message: tip,
-          child: Pressable(
-            onTap: () => unawaited(_toggle()),
-            scale: 0.94,
-            child: Container(
-              width: 58,
-              height: 58,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.42),
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  width: 2,
-                ),
-              ),
-              // 播放三角形的视觉重心偏左，往右挪一点才像"居中"
-              child: Icon(icon, size: 34, color: Colors.white),
-            ),
-          ),
+  ///
+  /// **纯视觉**：外面套了 IgnorePointer，手势由底下那个 Listener 统一处理。
+  /// 这样"点中间"和"点画面别处"走的是同一条路，不会再出现
+  /// "按钮看得见却点不动"。
+  Widget _centerButton({required IconData icon, required String tip}) => Tooltip(
+    message: tip,
+    child: Container(
+      width: 58,
+      height: 58,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.42),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.9),
+          width: 2,
         ),
-      );
+      ),
+      child: Icon(icon, size: 34, color: Colors.white),
+    ),
+  );
 
   // ── 底部控制条 ──────────────────────────────────────────────────────────
   //
