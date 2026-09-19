@@ -569,68 +569,111 @@ class _NavRowState extends State<_NavRow> {
             top: 7,
             bottom: 7,
           ),
-          decoration: BoxDecoration(
-            color: widget.selected
-                ? accent.withValues(alpha: c.isDark ? 0.22 : 0.13)
-                : (_hover ? c.fill : Colors.transparent),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
+          // 底色分成**两层**画：悬停一层（淡），选中一层（强调色）。
+          //
+          // 选中那层带一点"弹进来"：切换功能时旧的那块缩着淡出、新的
+          // 那块弹着出现，切换这件事就有了反馈。**只动底色，不碰文字** ——
+          // 文字跟着缩放会在非整数比例下重新栅格化（列表那边已经吃过一次亏）。
+          child: Stack(
             children: [
-              // 收起/展开的小三角。**只有真的有子文件夹时才显示**，
-              // 否则叶子节点前面挂个三角，点下去没反应，很困惑。
-              if (widget.hasChildren)
-                _CollapseToggle(
-                  collapsed: widget.collapsed,
-                  color: widget.selected ? accent : c.tertiaryLabel,
-                  onTap: widget.onToggleCollapse,
-                )
-              else if (widget.indent)
-                // 没子级的补一块等宽占位，让同级的名字左对齐
-                const SizedBox(width: 15),
-              Icon(
-                widget.icon,
-                size: 17,
-                color: widget.selected ? accent : c.secondaryLabel,
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Text(
-                  widget.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppText.footnote.copyWith(
-                    color: widget.selected ? accent : c.label,
-                    fontWeight:
-                        widget.selected ? FontWeight.w600 : FontWeight.w400,
-                  ),
-                ),
-              ),
-              if (widget.pinned)
-                Padding(
-                  padding: const EdgeInsets.only(left: 5),
-                  child: Icon(Icons.push_pin, size: 11, color: c.tint),
-                ),
-              if (widget.onMenu != null && _hover)
-                Builder(
-                  builder: (btnCtx) => GestureDetector(
-                    onTap: () => widget.onMenu!(AppMenuAnchor(context: btnCtx)),
-                    behavior: HitTestBehavior.opaque,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Icon(Icons.more_horiz_rounded,
-                          size: 15, color: c.tertiaryLabel),
+              Positioned.fill(
+                child: AnimatedOpacity(
+                  opacity: _hover && !widget.selected ? 1 : 0,
+                  duration: AppMotion.fast,
+                  curve: AppMotion.enter,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: c.fill,
+                      borderRadius: BorderRadius.circular(8),
                     ),
                   ),
-                )
-              else if (widget.count != null && widget.count! > 0)
-                Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Text(
-                    '${widget.count}',
-                    style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                ),
+              ),
+              Positioned.fill(
+                child: AnimatedScale(
+                  scale: widget.selected ? 1 : 0.94,
+                  duration: AppMotion.fast,
+                  curve: AppMotion.pop,
+                  alignment: Alignment.centerLeft,
+                  child: AnimatedOpacity(
+                    opacity: widget.selected ? 1 : 0,
+                    duration: AppMotion.fast,
+                    curve: AppMotion.enter,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: c.isDark ? 0.22 : 0.13),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
                   ),
                 ),
+              ),
+              // 内容层：图标与文字的颜色也淡入淡出，而不是"啪"地换色
+              TweenAnimationBuilder<double>(
+                tween: Tween<double>(end: widget.selected ? 1 : 0),
+                duration: AppMotion.fast,
+                curve: AppMotion.enter,
+                builder: (context, t, child) => Row(
+                  children: [
+                    // 收起/展开的小三角。**只有真的有子文件夹时才显示**，
+                    // 否则叶子节点前面挂个三角，点下去没反应，很困惑。
+                    if (widget.hasChildren)
+                      _CollapseToggle(
+                        collapsed: widget.collapsed,
+                        color: Color.lerp(c.tertiaryLabel, accent, t)!,
+                        onTap: widget.onToggleCollapse,
+                      )
+                    else if (widget.indent)
+                      // 没子级的补一块等宽占位，让同级的名字左对齐
+                      const SizedBox(width: 15),
+                    Icon(
+                      widget.icon,
+                      size: 17,
+                      color: Color.lerp(c.secondaryLabel, accent, t)!,
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Text(
+                        widget.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.footnote.copyWith(
+                          color: Color.lerp(c.label, accent, t)!,
+                          fontWeight: widget.selected
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
+                      ),
+                    ),
+                    if (widget.pinned)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 5),
+                        child: Icon(Icons.push_pin, size: 11, color: c.tint),
+                      ),
+                    if (widget.onMenu != null && _hover)
+                      Builder(
+                        builder: (btnCtx) => GestureDetector(
+                          onTap: () =>
+                              widget.onMenu!(AppMenuAnchor(context: btnCtx)),
+                          behavior: HitTestBehavior.opaque,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 2),
+                            child: Icon(Icons.more_horiz_rounded,
+                                size: 15, color: c.tertiaryLabel),
+                          ),
+                        ),
+                      ),
+                    if (widget.count != null && widget.count! > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text(
+                      '${widget.count}',
+                      style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                    ),
+                  ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -1018,16 +1061,22 @@ class _NoteListRowState extends State<_NoteListRow> {
       //      一行行弹进弹出，用户看到的是"很快的颜色变动"，刺眼。
       // 列表是文字为主、又要一行行扫读的地方：反馈用**低对比度的底色
       // 渐变**就够了，任何饱和元素都会变成闪烁源。
-      child: Pressable(
-        onTap: widget.onTap,
-        onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
-        scale: 0.99,
-        opacity: 0.85,
-        child: AnimatedContainer(
-          // **进快、出慢**：鼠标快速划过一排时，离场是慢慢淡出的，
-          // 不会"啪"地一下弹回原色 —— 那种一行行开关式的明暗跳变
-          // 就是用户说的"很快的颜色变动 / 闪眼"。
-          duration: _hover ? AppMotion.instant : AppMotion.normal,
+      // 悬停时整行轻轻抬起（用户认可这一版动效，保留）：
+      // 之前删掉的真正原因是**颜色**在闪（高饱和竖条 + 面板色跳变），
+      // 不是这个位移。位移只有 1px、放大 0.2%，扫过一排是"活着"而不是"抖"。
+      child: HoverLift(
+        dy: -1,
+        scale: 1.002,
+        child: Pressable(
+          onTap: widget.onTap,
+          onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
+          scale: 0.99,
+          opacity: 0.85,
+          child: AnimatedContainer(
+            // **进快、出慢**：鼠标快速划过一排时，离场是慢慢淡出的，
+            // 不会"啪"地一下弹回原色 —— 那种一行行开关式的明暗跳变
+            // 就是用户说的"很快的颜色变动 / 闪眼"。
+            duration: _hover ? AppMotion.instant : AppMotion.normal,
           curve: AppMotion.enter,
           margin: const EdgeInsets.only(bottom: 4),
           padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
@@ -1148,6 +1197,7 @@ class _NoteListRowState extends State<_NoteListRow> {
               ),
             ],
           ),
+        ),
         ),
       ),
     );

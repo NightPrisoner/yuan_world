@@ -700,7 +700,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                                   )
                                 : showNotesSection
                                     ? _listPane(context, state, notes)
-                                    : _sectionPage(state),
+                                    : _sectionSwitcher(state),
                           ),
                         ),
                       ),
@@ -750,6 +750,35 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
     if (_windowFullscreen) setAppFullscreen(false);
     _windowFullscreen = false;
     _editorFullscreen = false;
+  }
+
+  /// 分栏页面之间的切换动画。
+  ///
+  /// 以前是**瞬间替换**：点「统计」整块内容"啪"地换掉，层级关系断了。
+  /// 现在用 [AnimatedSwitcher]：旧页淡出，新页从右侧 2% 处轻微滑入
+  /// —— 幅度很小（不是整页平移），够表达"换了一页"，又不至于让人等动画。
+  /// 按 [_section] 给 key，切换时 Flutter 才认得出"这是另一页"。
+  Widget _sectionSwitcher(AppState state) {
+    final page = KeyedSubtree(
+      key: ValueKey<String>('section-${_section.name}'),
+      child: _sectionPage(state),
+    );
+    return AnimatedSwitcher(
+      duration: AppMotion.normal,
+      switchInCurve: AppMotion.enter,
+      switchOutCurve: AppMotion.exit,
+      transitionBuilder: (child, anim) => FadeTransition(
+        opacity: anim,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.02, 0),
+            end: Offset.zero,
+          ).animate(anim),
+          child: child,
+        ),
+      ),
+      child: page,
+    );
   }
 
   Widget _sectionPage(AppState state) => switch (_section) {

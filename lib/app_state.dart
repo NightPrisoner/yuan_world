@@ -256,8 +256,14 @@ class AppState extends ChangeNotifier {
   /// **保留当前的排序**：以前这里新建了一个 `const NoteFilter()`，
   /// 于是点「未分类」会把排序悄悄重置成默认值 —— 列表突然重排，
   /// 而旁边的「全部笔记」「收藏」都是保留的。
+  ///
+  /// 另外**必须清掉收藏等其它筛选**：以前是往当前筛选上叠
+  /// `uncategorizedOnly: true`，于是"先点收藏、再点未分类"会变成
+  /// 「收藏 且 未分类」两个条件同时成立 —— 侧栏里两行**同时高亮**
+  /// （用户截到的就是这个），列表也几乎一定是空的。
+  /// 侧栏这些入口是**互斥**的：点谁就是只看谁。
   void selectUncategorized() => setFilter(
-    _filter.copyWith(clearCollection: true, uncategorizedOnly: true),
+    NoteFilter(uncategorizedOnly: true, sort: _filter.sort),
   );
 
   /// 回到「全部笔记」。
