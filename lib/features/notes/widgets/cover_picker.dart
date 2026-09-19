@@ -80,10 +80,11 @@ class _CoverPickerState extends State<_CoverPicker> {
   String imageRootOf(BuildContext context) =>
       context.read<AppState>().db.imageRoot.path;
 
-  void _pick(String? rel) {
+  /// 设置头图。[rel] 空串 = 恢复默认（按正文第一张图自动派生），
+  /// [kCoverNone] = 明确不要头图。
+  void _pick(String rel) {
     final state = context.read<AppState>();
-    // 传空串是"显式清除"，之后会退回按正文第一张图自动派生
-    state.repo.updateNote(id: widget.note.id, coverImage: rel ?? '');
+    state.repo.updateNote(id: widget.note.id, coverImage: rel);
     state.refreshListOnly();
     Navigator.pop(context, true);
   }
@@ -175,12 +176,26 @@ class _CoverPickerState extends State<_CoverPicker> {
               label: _busy ? '正在上传…' : '从本地选择图片',
               onTap: _busy ? null : _upload,
             ),
-            if ((_current ?? '').isNotEmpty)
+            // ── 三种状态各给一个明确的入口，别让一句话兼两件事 ──
+            //
+            // 以前只有一个「移除头图（回到默认：正文第一张图）」，可它做的
+            // 其实是"彻底不要头图"（写空串），文字和行为对不上：用户想
+            // "恢复成自动取第一张图"会点它，结果是头图没了。
+            // 而且空串还会被自动派生逻辑当成"没设过"给补回来 ——
+            // 编辑一下正文头图就自己回来了。
+            if (!isCoverDisabled(_current))
+              _action(
+                c,
+                icon: Icons.block_rounded,
+                label: '不设置头图',
+                onTap: () => _pick(kCoverNone),
+              ),
+            if (_current != null && _current!.isNotEmpty)
               _action(
                 c,
                 icon: Icons.restart_alt_rounded,
-                label: '移除头图（回到默认：正文第一张图）',
-                onTap: () => _pick(null),
+                label: '恢复默认（用正文第一张图）',
+                onTap: () => _pick(''),
               ),
             const SizedBox(height: 6),
           ],

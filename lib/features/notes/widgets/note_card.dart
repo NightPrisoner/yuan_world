@@ -65,7 +65,9 @@ class _NoteCardState extends State<NoteCard> {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final hasCover = note.coverImage != null && note.coverImage!.isNotEmpty;
+    // 用 effectiveCover：`__none__`（用户明确不要头图）是个非空串，
+    // 只看 isNotEmpty 会把它当路径去拼文件名
+    final hasCover = effectiveCover(note.coverImage) != null;
 
     return MouseRegion(
       onEnter: (_) {
@@ -157,7 +159,10 @@ class _NoteCardState extends State<NoteCard> {
           if (hasCover) ...[
             const SizedBox(width: 12),
             _maybeHero(
-              _Thumb(path: p.join(imageRoot, note.coverImage!), size: 66),
+              _Thumb(
+                path: p.join(imageRoot, effectiveCover(note.coverImage)!),
+                size: 66,
+              ),
             ),
           ],
         ],
@@ -175,7 +180,7 @@ class _NoteCardState extends State<NoteCard> {
         if (hasCover)
           _maybeHero(
             _Cover(
-              path: p.join(imageRoot, note.coverImage!),
+              path: p.join(imageRoot, effectiveCover(note.coverImage)!),
               color: c.fill,
             ),
           ),

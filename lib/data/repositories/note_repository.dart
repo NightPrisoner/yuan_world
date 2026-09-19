@@ -465,7 +465,10 @@ class NoteRepository {
         <Object?>[id],
       );
       final existing = cur.isEmpty ? null : cur.first['cover_image'] as String?;
-      if (existing == null || existing.isEmpty) {
+      // **用户明确选过"不设置头图"就不能再自动补。**
+      // 以前只看 isEmpty，于是点了"不设置头图"之后只要再编辑一下正文
+      // （触发一次自动保存），头图就自己回来了 —— 用户会觉得这开关坏了。
+      if (existing != kCoverNone && (existing == null || existing.isEmpty)) {
         final first = firstImageOf(content);
         if (first != null) set('cover_image', first);
       }

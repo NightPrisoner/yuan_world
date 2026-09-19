@@ -22,7 +22,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -2421,7 +2420,7 @@ class _NoteGridCardState extends State<_NoteGridCard> {
   Widget build(BuildContext context) {
     final c = context.colors;
     final n = widget.note;
-    final hasCover = n.coverImage != null && n.coverImage!.isNotEmpty;
+    final hasCover = effectiveCover(n.coverImage) != null;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -2456,7 +2455,7 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                     AspectRatio(
                       aspectRatio: 16 / 11,
                       child: Image.file(
-                        File(p.join(widget.imageRoot, n.coverImage!)),
+                        File(p.join(widget.imageRoot, effectiveCover(n.coverImage)!)),
                         fit: BoxFit.cover,
                         errorBuilder: (_, _, _) => ColoredBox(color: c.fill),
                       ),

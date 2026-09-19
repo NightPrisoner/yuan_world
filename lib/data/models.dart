@@ -7,6 +7,28 @@
 library;
 
 /// 文集（小米笔记里叫「文件夹」）。支持嵌套：`parentId` 非空即为子文件夹。
+/// 「用户明确不要头图」的标记。
+///
+/// 头图有三种状态，必须能分开：
+///   - `null` / `''`  —— 没设过，按正文第一张图自动派生
+///   - [kCoverNone]   —— 用户**明确选了"不设置头图"**，谁也别自作主张补上
+///   - 其它非空串     —— 用户指定的那张图
+///
+/// 为什么不能拿 `''` 兼作"不要"：自动派生的条件是"当前是空就补一张"，
+/// 于是用户点了"不设置头图"之后，**只要再编辑一下正文触发自动保存，
+/// 头图就自己回来了** —— 看起来像开关坏了。用一个不会被误判的标记才能
+/// 把"没设过"和"明确不要"分开。
+const String kCoverNone = '__none__';
+
+/// 这篇笔记实际该显示的头图；null 表示不显示（含用户明确不要的情况）。
+String? effectiveCover(String? cover) {
+  if (cover == null || cover.isEmpty || cover == kCoverNone) return null;
+  return cover;
+}
+
+/// 用户是否明确选择了"不设置头图"。
+bool isCoverDisabled(String? cover) => cover == kCoverNone;
+
 class Collection {
   const Collection({
     required this.id,
