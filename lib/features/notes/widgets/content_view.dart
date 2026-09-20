@@ -436,6 +436,9 @@ class RichParagraph extends StatelessWidget {
   /// **必须是 WidgetSpan**：span 上的 `TapGestureRecognizer` 在真机上点不动
   /// （安卓实测，`[[双链]]` 那条走了同样的弯路，见提交说明）。
   /// 于外链、双链共用同一个可点小控件，长相按调用方给的样式走。
+  ///
+  /// 两种链接都在安卓真机上实测过：双链点一下跳到目标笔记、目标页列出
+  /// 「被引用 1」；外链点一下弹「打开链接？」确认框（取消 / 打开）。
   static InlineSpan _tapSpan(
     String label,
     TextStyle style,
