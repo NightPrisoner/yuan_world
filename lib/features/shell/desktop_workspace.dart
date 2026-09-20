@@ -36,7 +36,6 @@ import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_menu.dart';
 import '../../core/widgets/local_image.dart';
-import '../../data/exporter/note_exporter.dart';
 import '../../data/models.dart';
 import '../../data/repositories/note_repository.dart';
 import '../collections/collection_sheets.dart';

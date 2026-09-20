@@ -102,6 +102,45 @@ Future<void> exportZip(
   );
 }
 
+/// 导出**整个文集**（含子文件夹）为压缩包。
+///
+/// 包内保留目录层级：`文集/子文件夹/标题.docx`。
+///
+/// 抽成顶层函数是因为它要在三处被调：桌面的文件夹右键菜单、
+/// 手机能进的「文件夹管理」页（桌面原本是唯一的入口，手机上根本够不着），
+/// 以后别处想加也一样。
+Future<void> exportCollection(BuildContext context, Collection col) async {
+  final state = context.read<AppState>();
+  // 必须走 notesForExport —— 它会把正文一起取出来。
+  // listNotes 走的是不含 content 列的轻量查询，直接拿它的结果去导出，
+  // 出来的 docx 全是空壳（正文一个字都没有），用户报的正是这个问题。
+  final notes = state.repo.notesForExport(collectionId: col.id);
+  if (!context.mounted) return;
+  if (notes.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('「${col.name}」里还没有笔记'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    return;
+  }
+
+  final format = await pickExportFormat(context, header: '导出格式');
+  if (format == null || !context.mounted) return;
+
+  await exportZip(
+    context,
+    items: <({List<String> path, Note note})>[
+      for (final n in notes)
+        (path: collectionPathOf(n, state.collections), note: n),
+    ],
+    format: format,
+    // 压缩包名用文集名，用户一眼知道这是哪一包
+    zipName: '${NoteExporter.safeZipName(col.name)}.zip',
+  );
+}
+
 /// 弹一个格式选择菜单。单篇和批量共用，免得两处选项对不上。
 Future<ExportFormat?> pickExportFormat(
   BuildContext context, {

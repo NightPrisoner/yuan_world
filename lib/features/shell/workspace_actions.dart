@@ -156,35 +156,10 @@ extension _WsActions on _DesktopWorkspaceState {
 
   /// 导出整个文集（含子文件夹）为压缩包。
   ///
-  /// 包内保留目录层级：`文集/子文件夹/标题.docx`。
-  /// 用的是和批量导出**同一个** [NoteExporter.zipBytes]，
-  /// 区别只是每篇的 path 换成它自己在文集树里的位置。
-  Future<void> _exportCollection(Collection col) async {
-    final state = context.read<AppState>();
-    // 必须走 notesForExport —— 它会把正文一起取出来。
-    // listNotes 走的是不含 content 列的轻量查询，直接拿它的结果去导出，
-    // 出来的 docx 全是空壳（正文一个字都没有），用户报的正是这个问题。
-    final notes = state.repo.notesForExport(collectionId: col.id);
-    if (!mounted) return;
-    if (notes.isEmpty) {
-      _toast('「${col.name}」里还没有笔记');
-      return;
-    }
-
-    final format = await pickExportFormat(context, header: '导出格式');
-    if (format == null || !mounted) return;
-
-    await exportZip(
-      context,
-      items: <({List<String> path, Note note})>[
-        for (final n in notes)
-          (path: collectionPathOf(n, state.collections), note: n),
-      ],
-      format: format,
-      // 压缩包名用文集名，用户一眼知道这是哪一包
-      zipName: '${NoteExporter.safeZipName(col.name)}.zip',
-    );
-  }
+  /// 逻辑在 [exportCollection] 里（note_actions.dart）—— 手机上也能进
+  /// 「文件夹管理」页导出，两端共用一份，免得选项/包内结构走偏。
+  Future<void> _exportCollection(Collection col) =>
+      exportCollection(context, col);
 
   Future<void> _exportNotes(List<int> ids) async {
     final format = await pickExportFormat(context, header: '导出格式');

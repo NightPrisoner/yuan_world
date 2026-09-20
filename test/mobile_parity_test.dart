@@ -19,6 +19,7 @@ import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
 import 'package:yuan_world/features/collections/collection_sheets.dart';
+import 'package:yuan_world/features/collections/manage_collections_page.dart';
 import 'package:yuan_world/features/notes/editor/note_editor_page.dart';
 import 'package:yuan_world/features/notes/note_detail_page.dart';
 import 'package:yuan_world/features/search/search_page.dart';
@@ -238,8 +239,7 @@ void main() {
     });
   });
 
-  group('手机端文集嵌套', () {
-    testWidgets('编辑弹窗里能选上级（桌面靠拖拽嵌套，手机拖不了）', (tester) async {
+  group('手机端文集嵌套', () {    testWidgets('编辑弹窗里能选上级（桌面靠拖拽嵌套，手机拖不了）', (tester) async {
       final a = await state.createCollection('甲');
       final b = await state.createCollection('乙');
       await state.refresh();
@@ -328,6 +328,40 @@ void main() {
       // 选项里不该有自己，也不该有子孙（乙）
       expect(find.text('顶层（不在任何文集里）'), findsOneWidget);
       expect(find.text('乙'), findsNothing, reason: '子孙不能当上级，否则树成环');
+    });
+  });
+
+  group('手机端导出文集', () {
+    testWidgets('文件夹管理页里有导出入口，点开是格式菜单', (tester) async {
+      final id = await state.createCollection('甲');
+      state.repo.insertNote(
+        title: '里面的',
+        content: '正文',
+        excerpt: '正文',
+        publishedAt: DateTime.now(),
+        charCount: 2,
+        collectionId: id,
+      );
+      await state.refresh();
+
+      await pumpPhone(tester, const ManageCollectionsPage());
+
+      // 桌面是在文件夹上右键导出的，手机没有右键 —— 入口必须在这一页
+      expect(find.byTooltip('导出为压缩包'), findsOneWidget);
+      await tester.tap(find.byTooltip('导出为压缩包'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('.docx'), findsWidgets,
+          reason: '应该弹出格式选择，说明入口是通的（真正保存要走系统文件框）');
+    });
+
+    testWidgets('文集空的时候会说清楚，而不是弹格式菜单', (tester) async {
+      await state.createCollection('空的');
+      await state.refresh();
+      await pumpPhone(tester, const ManageCollectionsPage());
+
+      await tester.tap(find.byTooltip('导出为压缩包'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('还没有笔记'), findsOneWidget);
     });
   });
 }

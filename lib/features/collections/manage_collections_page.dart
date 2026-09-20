@@ -13,6 +13,7 @@ import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models.dart';
+import '../notes/widgets/note_actions.dart';
 import 'collection_sheets.dart';
 
 class ManageCollectionsPage extends StatelessWidget {
@@ -107,6 +108,10 @@ class ManageCollectionsPage extends StatelessWidget {
                   col: col,
                   index: i,
                   onEdit: () => showCollectionEditor(context, existing: col),
+                  // 导出整个文集：**手机上唯一的入口**。
+                  // 桌面是在文件夹上点右键，手机没有右键，所以放在这一页
+                  // （设置 → 文件夹管理，两端都进得来）。
+                  onExport: () => exportCollection(context, col),
                   onDelete: () => _confirmDelete(context, state, col),
                 );
               },
@@ -167,12 +172,16 @@ class _CollectionTile extends StatelessWidget {
     required this.index,
     required this.onEdit,
     required this.onDelete,
+    this.onExport,
   });
 
   final Collection col;
   final int index;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+
+  /// 导出整个文集。给 null 就不显示这个按钮（别的地方复用这一行时用得上）。
+  final VoidCallback? onExport;
 
   @override
   Widget build(BuildContext context) {
@@ -247,6 +256,22 @@ class _CollectionTile extends StatelessWidget {
                         ],
                       ),
                     ),
+                    if (onExport != null)
+                      Pressable(
+                        onTap: onExport,
+                        scale: 0.9,
+                        child: Tooltip(
+                          message: '导出为压缩包',
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Icon(
+                              Icons.download_rounded,
+                              size: 18,
+                              color: c.tint,
+                            ),
+                          ),
+                        ),
+                      ),
                     Icon(Icons.drag_indicator_rounded,
                         size: 18, color: c.quaternaryLabel),
                   ],
