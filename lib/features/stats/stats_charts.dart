@@ -533,12 +533,10 @@ class ShareChart extends StatelessWidget {
     super.key,
     required this.items,
     required this.style,
-    this.onTapItem,
   });
 
   final List<ShareItem> items;
   final ShareStyle style;
-  final void Function(ShareItem item)? onTapItem;
 
   int get _total => items.fold<int>(0, (s, e) => s + e.value);
 
@@ -552,13 +550,9 @@ class ShareChart extends StatelessWidget {
       return Column(
         children: [
           for (final it in items)
-            Pressable(
-              onTap: onTapItem == null ? null : () => onTapItem!(it),
-              scale: 0.99,
-              haptic: false,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Row(
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
                   children: [
                     SizedBox(
                       width: 96,
@@ -610,7 +604,6 @@ class ShareChart extends StatelessWidget {
                   ],
                 ),
               ),
-            ),
         ],
       );
     }
@@ -661,13 +654,9 @@ class ShareChart extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               for (final it in items.take(7))
-                Pressable(
-                  onTap: onTapItem == null ? null : () => onTapItem!(it),
-                  scale: 0.99,
-                  haptic: false,
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 7),
-                    child: Row(
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 7),
+                  child: Row(
                       children: [
                         Container(
                           width: 8,
@@ -701,7 +690,6 @@ class ShareChart extends StatelessWidget {
                           ),
                         ),
                       ],
-                    ),
                   ),
                 ),
             ],

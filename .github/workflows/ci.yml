@@ -1,0 +1,38 @@
+# 提交即验证：静态检查 + 全部测试。
+#
+# 这个项目此前**没有任何 CI** —— 766 条测试只在我本地跑，谁改坏了也只有在
+# 自己机器上才发现。这个工作流把同一套命令搬到 push / PR 上。
+#
+# 说明：
+#   · 用 stable 渠道的 Flutter：项目跟着稳定版走，锁死具体版本号反而会
+#     隔三差五因为 runner 上的版本变化红一次。
+#   · sqlite3 是从源码编的（`third_party/sqlite3/sqlite3.c`，由 native hook 编译），
+#     ubuntu runner 自带 clang/cmake，够用。
+#   · 只跑 analyze + test：构建 Windows/Android 产物太慢，而且签名、SDK
+#     授权这些在 CI 里是另一件事，没必要混在一起。
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 拉依赖
+        run: flutter pub get
+
+      - name: 静态检查
+        run: flutter analyze
+
+      - name: 全部测试
+        run: flutter test

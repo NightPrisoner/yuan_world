@@ -10,10 +10,12 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:yuan_world/core/utils/text_stats.dart';
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/docx_importer.dart';
@@ -318,10 +320,12 @@ void main() {
         excerpt: '',
         tags: <String>['临时'],
       );
-      db.db.execute(
-        'INSERT INTO note_images (note_id, rel_path, created_at) VALUES (?,?,?)',
-        <Object?>[id, '$id/1.png', DateTime.now().millisecondsSinceEpoch],
-      );
+      // 图片是**磁盘上的文件**（`images/<id>/`），不是数据库里的行 ——
+      // 以前这里往 note_images 那张死表里插一行来"代表图片"，
+      // 而那张表从来没被任何代码用过，v9 已经删了。
+      final mediaDir = Directory(p.join(db.imageRoot.path, '$id'))
+        ..createSync(recursive: true);
+      File(p.join(mediaDir.path, '1.png')).writeAsBytesSync(const <int>[1, 2, 3]);
 
       repo.deleteNote(id);
 
@@ -330,6 +334,8 @@ void main() {
       expect(repo.getNote(id), isNotNull, reason: '删进回收站不等于抹掉');
       expect(repo.listNotes(const NoteFilter()), isEmpty, reason: '列表里不该再出现');
       expect(repo.listTrashedNotes().length, 1);
+      // 图片文件也还在：回收站里的笔记还原之后图还得能显示
+      expect(mediaDir.existsSync(), isTrue, reason: '软删除不能碰磁盘上的图');
       // 标签关联也要留着，否则恢复之后标签就没了
       final joins =
           db.db.select('SELECT * FROM note_tags WHERE note_id = ?', <Object?>[id]);
@@ -343,18 +349,15 @@ void main() {
         excerpt: '',
         tags: <String>['临时'],
       );
-      db.db.execute(
-        'INSERT INTO note_images (note_id, rel_path, created_at) VALUES (?,?,?)',
-        <Object?>[id, '$id/1.png', DateTime.now().millisecondsSinceEpoch],
-      );
+      final mediaDir = Directory(p.join(db.imageRoot.path, '$id'))
+        ..createSync(recursive: true);
+      File(p.join(mediaDir.path, '1.png')).writeAsBytesSync(const <int>[1, 2, 3]);
 
       repo.deleteNote(id);
       repo.purgeNotes(<int>[id]);
 
       expect(repo.getNote(id), isNull);
-      final imgs =
-          db.db.select('SELECT * FROM note_images WHERE note_id = ?', <Object?>[id]);
-      expect(imgs.length, 0);
+      expect(mediaDir.existsSync(), isFalse, reason: '彻底删除要连图一起清掉');
       final joins =
           db.db.select('SELECT * FROM note_tags WHERE note_id = ?', <Object?>[id]);
       expect(joins.length, 0);

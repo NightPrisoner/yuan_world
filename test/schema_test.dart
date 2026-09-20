@@ -153,4 +153,50 @@ void main() {
       db.close();
     });
   });
+
+  group('v9：删掉从没被用过的 note_images', () {
+    bool hasNoteImages(AppDatabase db) => db.db
+        .select("SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='note_images'")
+        .isNotEmpty;
+
+    test('新库本来就没有这张表', () {
+      final db = AppDatabase.inMemory();
+      expect(hasNoteImages(db), isFalse);
+      db.close();
+    });
+
+    test('老库（v8，表还在）升上来会被删掉，笔记数据一篇不少', () {
+      final dir = Directory.systemTemp.createTempSync('yw_schema3_');
+      final first = AppDatabase.openAt(dir.path);
+      // 造一条笔记，确认迁移不会顺手动数据
+      first.db.execute(
+        'INSERT INTO notes (title, content, excerpt, created_at, updated_at, '
+        'sort_key) VALUES (?,?,?,?,?,?)',
+        <Object?>['测试', '正文', '正文', 1, 1, '测试'],
+      );
+
+      // 退回 v8：把那张死表建回来，并把版本号写回去
+      first.db.execute('''
+        CREATE TABLE note_images (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          note_id INTEGER NOT NULL,
+          rel_path TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      ''');
+      first.db.execute('PRAGMA user_version = 8');
+      first.close();
+
+      final second = AppDatabase.openAt(dir.path);
+      expect(hasNoteImages(second), isFalse, reason: 'v9 迁移没把它删掉');
+      expect(
+        second.db.select('SELECT COUNT(*) AS c FROM notes').first['c'],
+        1,
+        reason: '删表不能碰笔记',
+      );
+      second.close();
+      dir.deleteSync(recursive: true);
+    });
+  });
 }

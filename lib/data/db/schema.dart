@@ -13,7 +13,7 @@
 library;
 
 /// 当前 schema 版本。每次改表结构都要 +1，并在 [kMigrations] 里补一段。
-const int kSchemaVersion = 8;
+const int kSchemaVersion = 9;
 
 /// v8：按文件名规则排序用的键。
 ///
@@ -272,30 +272,12 @@ const List<String> kCreateStatements = <String>[
 
   // ── 图片 ──────────────────────────────────────────────────────────────
   //
-  // ⚠️ **这张表目前没有任何代码在读写，是历史遗留。**
+  // **这里以前有张 `note_images` 表，v9 把它删了。**
   //
-  // 图片信息实际存在两个地方：`notes.image_count`（计数）和磁盘上的
-  // `images/<noteId>/`（文件本身），正文里的相对路径就是索引。
-  // 当初设想的"图片元信息表"没有落地。
-  //
-  // **没有删它，是刻意的**：删表要写迁移，而迁移是唯一会动用户数据的
-  // 地方 —— 为了一张空表去冒数据风险不值得。留着的代价只是 schema 里
-  // 多一段。但**别再往上加东西**：新功能要存图片元信息的话，
-  // 先想清楚和磁盘目录谁是权威，而不是顺手用它。
-  '''
-  CREATE TABLE note_images (
-    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    note_id  INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-    -- 相对于图片根目录的相对路径，如 "3/1a2b3c.png"
-    rel_path TEXT    NOT NULL,
-    mime     TEXT    NOT NULL DEFAULT 'image/png',
-    bytes    INTEGER NOT NULL DEFAULT 0,
-    width    INTEGER,
-    height   INTEGER,
-    created_at INTEGER NOT NULL
-  )
-  ''',
-  'CREATE INDEX idx_note_images_note ON note_images(note_id)',
+  // 它是早期设想的"图片元信息表"，从来没有代码读写过：图片的计数在
+  // `notes.image_count`，文件本身在磁盘的 `images/<noteId>/`，正文里的
+  // 相对路径就是索引。新功能要存图片元信息的话，**先想清楚和磁盘目录
+  // 谁是权威**，别顺手再建一张同名的表。
 
   // ── 行为事件（阅读/编辑），用于活跃度可视化 ──────────────────────────
   '''
@@ -377,4 +359,17 @@ const Map<int, List<String>> kMigrations = <int, List<String>>{
   7: kTrashStatements,
   // v7 → v8：标题排序键（对齐 Windows 文件名规则）
   8: kSortKeyStatements,
+  // v8 → v9：删掉从没被用过的 `note_images`
+  //
+  // 它是早期设想的"图片元信息表"，**从来没有代码读写过** ——
+  // 图片的计数在 `notes.image_count`，文件本身在 `images/<noteId>/`，
+  // 正文里的相对路径就是索引。留着的唯一效果是让人以为"这里存着图片信息"。
+  //
+  // 这条迁移只 DROP 一张保证为空的表，不动任何笔记数据；写成
+  // `IF EXISTS` 是为了兼容"新库（本来就没有）"和"老库（v8 之前建的）"
+  // 两种情况。
+  9: <String>[
+    'DROP TABLE IF EXISTS note_images',
+    'DROP INDEX IF EXISTS idx_note_images_note',
+  ],
 };
