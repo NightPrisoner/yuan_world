@@ -698,7 +698,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   Widget _sectionPage(AppState state) => switch (_section) {
     _Section.todos => const TodosPage(),
     _Section.stats => const StatsPage(),
-    _Section.trash => const TrashPage(),
+    _Section.trash => const TrashPage(embedded: true),
     _Section.settings => const SettingsPage(),
     // 归档复用中间那栏的笔记列表，不需要单独页面
     _Section.notes || _Section.archived => const SizedBox.shrink(),

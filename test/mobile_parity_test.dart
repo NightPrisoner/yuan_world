@@ -11,6 +11,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:yuan_world/app_state.dart';
@@ -420,6 +421,88 @@ void main() {
       expect(find.text('第一章'), findsWidgets, reason: '目录条目要出来');
       // 浮层：正文还在（没被挤掉），目录盖在上面
       expect(find.textContaining('正文一'), findsWidgets);
+    });
+  });
+
+  group('手机端筛选胶囊高亮', () {
+    /// 找到某个胶囊并读它的 selected。
+    ///
+    /// `_Pill` 是 notes_page 的私有类，测试里没法直接引用类型 —— 用
+    /// `runtimeType.toString()` 认它，再用 dynamic 读公开字段 `selected`。
+    bool pillSelected(WidgetTester tester, String label) {
+      final pill = tester
+          .widgetList(find.byWidgetPredicate(
+            (w) => w.runtimeType.toString() == '_Pill',
+          ))
+          .cast<dynamic>()
+          .firstWhere((p) => p.label == label);
+      return pill.selected as bool;
+    }
+
+    testWidgets('点「归档」之后「全部」不能跟着一起亮（用户报的两个同时高亮）', (tester) async {
+      add('甲');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      expect(pillSelected(tester, '全部'), isTrue);
+      expect(pillSelected(tester, '归档'), isFalse);
+
+      await tester.tap(find.text('归档'));
+      await tester.pumpAndSettle();
+
+      expect(state.filter.archivedOnly, isTrue);
+      expect(pillSelected(tester, '归档'), isTrue);
+      expect(pillSelected(tester, '全部'), isFalse,
+          reason: '归档是「全部」之外的另一条口径，两个同时亮是 bug');
+
+      // 收藏同理（互斥筛选都要排掉）
+      await tester.tap(find.text('全部'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('收藏'));
+      await tester.pumpAndSettle();
+      expect(pillSelected(tester, '收藏'), isTrue);
+      expect(pillSelected(tester, '全部'), isFalse);
+    });
+  });
+
+  group('手机端瀑布流列数', () {
+    testWidgets('设置里改列数，手机瀑布流真的跟着变', (tester) async {
+      // 以前手机上是 `gridColumns.clamp(2, fit)`，而 fit 在手机上恒为 2 ——
+      // 改列数**一点效果都没有**。
+      for (final cols in <int>[2, 4]) {
+        add('笔记 $cols');
+        state.setGridColumns(cols);
+        state.setGridMode(true);
+        await state.refresh();
+        await pumpPhone(tester, const HomeShell());
+        await tester.pumpAndSettle();
+
+        final grid = tester.widget<SliverMasonryGrid>(
+          find.byType(SliverMasonryGrid),
+        );
+        final delegate = grid.gridDelegate
+            as SliverSimpleGridDelegateWithFixedCrossAxisCount;
+        expect(delegate.crossAxisCount, cols,
+            reason: '$cols 列的设置必须生效');
+      }
+    });
+  });
+
+  group('手机端文件夹嵌套展示', () {
+    testWidgets('子文件夹在「文件夹管理」页里缩进显示（和 Windows 左栏一样）', (tester) async {
+      final parent = await state.createCollection('父文件夹');
+      await state.createCollection('子文件夹', parentId: parent);
+      await state.refresh();
+      await pumpPhone(tester, const ManageCollectionsPage());
+
+      final px = tester.getTopLeft(find.text('父文件夹')).dx;
+      final cx = tester.getTopLeft(find.text('子文件夹')).dx;
+      expect(cx, greaterThan(px), reason: '子文件夹必须缩进，否则看不出归属');
+      // 父在前、子紧随其后
+      expect(
+        tester.getTopLeft(find.text('子文件夹')).dy,
+        greaterThan(tester.getTopLeft(find.text('父文件夹')).dy),
+      );
     });
   });
 

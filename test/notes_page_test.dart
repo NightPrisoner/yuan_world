@@ -848,14 +848,21 @@ void main() {
       expect(find.text('设置'), findsWidgets);
     });
 
-    testWidgets('筛选栏末尾有「新建」文件夹入口', (tester) async {
+    testWidgets('筛选栏最右边固定一个文件夹图标，点进「笔记文件夹」页', (tester) async {
       state.repo.createCollection('已有文件夹');
       await state.refresh();
       await pumpApp(tester, size: const Size(420, 900));
 
-      expect(find.text('新建'), findsOneWidget);
+      // 建文件夹的入口从筛选胶囊里挪到了这个固定图标（它不进滚动区）
+      expect(find.byTooltip('笔记文件夹'), findsOneWidget);
+      await tester.tap(find.byTooltip('笔记文件夹'));
+      await tester.pumpAndSettle();
 
-      await tester.tap(find.text('新建'));
+      expect(find.text('文件夹管理'), findsOneWidget);
+      expect(find.text('已有文件夹'), findsOneWidget);
+
+      // 那一页里能新建
+      await tester.tap(find.byTooltip('新建文件夹'));
       await tester.pumpAndSettle();
       expect(find.text('新建文集'), findsOneWidget);
     });

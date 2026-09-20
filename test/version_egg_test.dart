@@ -80,9 +80,18 @@ void main() {
         reason: 'assets/egg/ 里没列出任何图 —— pubspec 的 assets 配错了？',
       );
       expect(
-        gallery.every((p) => p.startsWith(kEggAssetDir)),
+        gallery.every(
+          (p) => p.startsWith(kEggAssetDir) || p == kEggBrandAsset,
+        ),
         isTrue,
-        reason: '列出来的必须都在图库目录里',
+        reason: '列出来的要么在图库目录里，要么是应用图标那一份',
+      );
+      // 应用图标也要在池子里（用户明确要求的；它不在 assets/egg/ 下面，
+      // 所以上面那条"都在目录里"的判断必须给它开个口子）
+      expect(
+        gallery,
+        contains(kEggBrandAsset),
+        reason: '应用图标没有被加进彩蛋池',
       );
     });
 

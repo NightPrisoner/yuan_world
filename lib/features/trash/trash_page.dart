@@ -20,7 +20,11 @@ import '../../core/theme/app_theme.dart';
 import '../../data/models.dart';
 
 class TrashPage extends StatefulWidget {
-  const TrashPage({super.key});
+  const TrashPage({super.key, this.embedded = false});
+
+  /// 嵌在桌面三栏的中间栏里时为 true：不套 Scaffold、不显示返回按钮
+  /// （外面已经提供了背景和导航）。手机上作为独立路由时是 false。
+  final bool embedded;
 
   @override
   State<TrashPage> createState() => _TrashPageState();
@@ -179,7 +183,11 @@ class _TrashPageState extends State<TrashPage> {
     final notes = state.trashedNotes;
     final empty = cols.isEmpty && notes.isEmpty;
 
-    return Column(
+    // 外面这层原来是"直接返回 Column"—— 那是给桌面中间栏用的（父级已经
+    // 提供了背景和 Material）。手机上这一页是**独立路由**，没有 Scaffold
+    // 就没有 Material 表面和底色，于是整页渲染成黑底 + 淡黄色的文字
+    // （用户的原话："回收站画面很怪"）。
+    final body = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _header(c, state, cols.length + notes.length),
@@ -204,6 +212,22 @@ class _TrashPageState extends State<TrashPage> {
                 ),
         ),
       ],
+    );
+
+    if (widget.embedded) return body;
+
+    return Scaffold(
+      backgroundColor: c.groupedBackground,
+      appBar: AppBar(
+        backgroundColor: c.groupedBackground,
+        surfaceTintColor: Colors.transparent,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        title: Text('回收站', style: AppText.headline.copyWith(color: c.label)),
+      ),
+      body: SafeArea(top: false, child: body),
     );
   }
 

@@ -24,6 +24,12 @@ class ManageCollectionsPage extends StatelessWidget {
     final state = context.watch<AppState>();
     final c = context.colors;
     final list = state.collections;
+    // 按**父子层级**排成一棵扁平的树（父在前、子紧随其后，带深度）。
+    //
+    // 原来这一页是平铺的：嵌套关系在库里有、桌面左栏也能看出来，
+    // 到了手机上就全乱了 —— 子文件夹和父文件夹长得一模一样、位置也看不出
+    // 归属（用户报的"文件夹也要和 Windows 一样支持嵌套"）。
+    final tree = _treeOrdered(list);
 
     return Scaffold(
       backgroundColor: c.groupedBackground,
@@ -93,24 +99,26 @@ class ManageCollectionsPage extends StatelessWidget {
           : ReorderableListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
               physics: const BouncingScrollPhysics(),
-              itemCount: list.length,
+              itemCount: tree.length,
               // onReorderItem 的 newIndex 已经处理过"移除后下标偏移"
               onReorderItem: (oldIndex, newIndex) {
-                final ordered = List<Collection>.from(list);
+                final ordered = List<Collection>.from(
+                  tree.map((e) => e.$1),
+                );
                 final item = ordered.removeAt(oldIndex);
-                ordered.insert(newIndex, item);
+                ordered.insert(newIndex.clamp(0, ordered.length), item);
                 state.reorderCollections(ordered);
               },
               itemBuilder: (context, i) {
-                final col = list[i];
+                final (col, depth) = tree[i];
                 return _CollectionTile(
                   key: ValueKey<int>(col.id),
                   col: col,
                   index: i,
+                  depth: depth,
                   onEdit: () => showCollectionEditor(context, existing: col),
                   // 导出整个文集：**手机上唯一的入口**。
-                  // 桌面是在文件夹上点右键，手机没有右键，所以放在这一页
-                  // （设置 → 文件夹管理，两端都进得来）。
+                  // 桌面是在文件夹上点右键，手机没有右键，所以放在这一页。
                   onExport: () => exportCollection(context, col),
                   onDelete: () => _confirmDelete(context, state, col),
                 );
@@ -165,6 +173,34 @@ class ManageCollectionsPage extends StatelessWidget {
   }
 }
 
+/// 把扁平列表排成"父在前、子紧随"的顺序，并带上深度。
+///
+/// 递归而不是排序：只按 `parentId` 排序是排不出层级的（同一父下的子要
+/// 紧跟在父后面，而孙又要跟在子后面）。
+List<(Collection, int)> _treeOrdered(List<Collection> all) {
+  final byParent = <int?, List<Collection>>{};
+  for (final c in all) {
+    byParent.putIfAbsent(c.parentId, () => <Collection>[]).add(c);
+  }
+  final out = <(Collection, int)>[];
+  void walk(int? parent, int depth) {
+    for (final c in byParent[parent] ?? const <Collection>[]) {
+      // 防环：真要被拖成环了也别让这里无限递归
+      if (depth > 8) return;
+      out.add((c, depth));
+      walk(c.id, depth + 1);
+    }
+  }
+
+  walk(null, 0);
+  // 兜底：父级不在当前列表里的（数据异常）也得显示出来，否则"看不见就删不掉"
+  final seen = out.map((e) => e.$1.id).toSet();
+  for (final c in all) {
+    if (!seen.contains(c.id)) out.add((c, 0));
+  }
+  return out;
+}
+
 class _CollectionTile extends StatelessWidget {
   const _CollectionTile({
     super.key,
@@ -172,11 +208,15 @@ class _CollectionTile extends StatelessWidget {
     required this.index,
     required this.onEdit,
     required this.onDelete,
+    this.depth = 0,
     this.onExport,
   });
 
   final Collection col;
   final int index;
+
+  /// 嵌套深度（0 = 顶层）。子文件夹要缩进，一眼看出归属。
+  final int depth;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
@@ -187,7 +227,8 @@ class _CollectionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      // 子文件夹缩进 + 一层"树线"的感觉（左边一条浅竖线）
+      padding: EdgeInsets.only(bottom: 8, left: depth * 18.0),
       child: Dismissible(
         key: ValueKey<String>('dismiss-${col.id}'),
         direction: DismissDirection.endToStart,

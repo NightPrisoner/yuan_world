@@ -23,6 +23,15 @@ const int kEggTapCount = 3;
 /// 图库在资源里的前缀。
 const String kEggAssetDir = 'assets/egg/';
 
+/// 应用图标（品牌标）也算彩蛋图之一。
+///
+/// 直接引用品牌标那份资源，**不往 `assets/egg/` 里再放一份副本** ——
+/// 同一张 1.7MB 的图在包里存两份纯属浪费，而彩蛋池是按资源路径收集的，
+/// 加一个路径就够了。（之前我把 egg 目录里那份副本删了，理由是"图标不该
+/// 出现在随机池里"；用户要的是反过来 —— 图标也要在池子里，所以现在
+/// 是"显式把它加进来"，而不是靠目录里躺一份副本。）
+const String kEggBrandAsset = 'assets/branding/logo.png';
+
 /// 打开彩蛋。
 Future<void> showVersionEgg(BuildContext context) => Navigator.of(context).push(
   PageRouteBuilder<void>(
@@ -42,14 +51,15 @@ Future<void> showVersionEgg(BuildContext context) => Navigator.of(context).push(
 ///
 /// 用 AssetManifest 而不是写死一份清单：往 `assets/egg/` 丢新图就能生效，
 /// 不用记得回来改代码 —— 那种"改了资源忘了改清单"的坑不值得踩第二次。
+/// 另外把应用图标（[kEggBrandAsset]）也算进来。
 Future<List<String>> loadEggGallery() async {
   try {
     final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
-    final all = manifest
-        .listAssets()
-        .where((p) => p.startsWith(kEggAssetDir))
-        .toList()
-      ..sort(); // 固定顺序，便于测试和复现
+    final assets = manifest.listAssets();
+    final all = assets.where((p) => p.startsWith(kEggAssetDir)).toList();
+    // 图标是"池子之外的一份资源"，显式加上；清单里没有（比如被裁掉）就算了
+    if (assets.contains(kEggBrandAsset)) all.add(kEggBrandAsset);
+    all.sort(); // 固定顺序，便于测试和复现
     return all;
   } catch (_) {
     // 资源清单读不出来不该让彩蛋炸掉，只是没图可放

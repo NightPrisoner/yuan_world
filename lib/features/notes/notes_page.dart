@@ -23,6 +23,7 @@ import '../../core/widgets/app_refresh.dart';
 import '../../data/models.dart';
 import '../../data/repositories/note_repository.dart';
 import '../collections/collection_sheets.dart';
+import '../collections/manage_collections_page.dart';
 import '../importer/import_page.dart';
 import 'editor/note_editor_page.dart';
 import '../search/search_page.dart';
@@ -467,12 +468,16 @@ class _NotesPageState extends State<NotesPage> {
         ),
       _Pill(
         label: '全部',
-        selected: f.collectionId == null && f.tag == null && !f.favoritesOnly,
-        onTap: () {
-          state.selectCollection(null);
-          state.selectTag(null);
-          if (f.favoritesOnly) state.toggleFavorites();
-        },
+        // **「全部」要把所有互斥筛选都排掉。**
+        // 以前漏了 `archivedOnly` 和 `uncategorizedOnly`：点过「归档」之后，
+        // 「全部」和「归档」会**同时高亮**（用户报的"点来点去两个都亮"），
+        // 未分类同理。判断条件必须和 tab 的语义一一对应。
+        selected: f.collectionId == null &&
+            f.tag == null &&
+            !f.favoritesOnly &&
+            !f.uncategorizedOnly &&
+            !f.archivedOnly,
+        onTap: () => state.selectAll(),
       ),
       _Pill(
         label: '收藏',
@@ -539,23 +544,58 @@ class _NotesPageState extends State<NotesPage> {
           // 再点一下取消：标签是"随手贴"的东西，不该逼用户去找取消入口
           onTap: () => state.selectTag(f.tag == tag.name ? null : tag.name),
         ),
-      // 末尾常驻「新建」入口：手机上没有左栏，不这样放用户找不到
-      _Pill(
-        label: '新建',
-        icon: Icons.add_rounded,
-        selected: false,
-        onTap: () => showCollectionEditor(context),
-      ),
+      // 原来这里还有个「新建」胶囊用来建文件夹。现在挪走了：
+      // 最右边那个固定图标进的就是「笔记文件夹」页，那一页有 ＋ 和空状态里的
+      // 「新建文件夹」，建/改名/嵌套/排序/删除/导出都在那儿 —— 一排筛选胶囊里
+      // 混一个"创建"动作本来就是两码事。
     ];
 
     return SizedBox(
       height: 46,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: chips.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, i) => Center(child: chips[i]),
+      child: Row(
+        children: [
+          // 胶囊区：**横向拖得动**（这些是筛选器，数量会随文件夹/标签增长）
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(left: 16, right: 4),
+              itemCount: chips.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, i) => Center(child: chips[i]),
+            ),
+          ),
+          // **最右边固定一个文件夹图标**：它不进滚动区，手指怎么滑它都在，
+          // 点它进「笔记文件夹」页（新建/重命名/嵌套/排序/删除/导出都在那儿）。
+          // 以前这些只能从设置页绕进去，等于藏起来了。
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Tooltip(
+              message: '笔记文件夹',
+              child: Pressable(
+                scale: 0.9,
+                onTap: () => Navigator.of(context).push(
+                  ApplePageRoute<void>(
+                    pageBuilder: (_) => const ManageCollectionsPage(),
+                  ),
+                ),
+                child: Container(
+                  width: 34,
+                  height: 34,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c.fill,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.folder_rounded,
+                    size: 18,
+                    color: c.tint,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -635,11 +675,14 @@ class _NotesPageState extends State<NotesPage> {
   }
 
   Widget _buildGrid(BuildContext context, List<Note> notes, String imageRoot) {
-    // 尊重用户的列数设置，但窄屏上会收敛：手机宽度塞 5 列，
-    // 一格只剩几十像素，标题全变省略号。
-    final width = MediaQuery.sizeOf(context).width;
-    final fit = (width / 150).floor().clamp(2, 5);
-    final columns = context.read<AppState>().gridColumns.clamp(2, fit);
+    // **列数以用户设置为准。**
+    //
+    // 以前这里写的是 `gridColumns.clamp(2, fit)`，而 `fit = (宽/150).floor()`
+    // 在手机上恒等于 2 —— clamp 之后永远是 2 列，于是在设置里改列数
+    // **一点效果都没有**（用户报的正是这个）。当初的想法是"别把格子挤成
+    // 省略号"，但那不该靠无视用户的选择来实现：他明确调到 4 列，就该给 4 列。
+    // 宽度真的不够时格子自己会变窄、标题变省略号，那是可预期的结果。
+    final columns = context.read<AppState>().gridColumns.clamp(1, 6);
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
       sliver: SliverMasonryGrid.count(
@@ -850,42 +893,73 @@ class _Pill extends StatelessWidget {
   }
 }
 
-/// 排序菜单。
+/// 排序菜单（和桌面**同一套**：先选字段，再选方向）。
+///
+/// 以前这里是 `PopupMenuButton<NoteSort>`，把 8 种"字段+方向"的组合平铺成
+/// 一列（"最近编辑 ↓ / 最近编辑 ↑ / 创建日期 ↓ …"）—— 选项长、还看不出
+/// 字段和方向是两组独立的东西。桌面一直是「字段一组 + 方向一组」，
+/// 两边菜单长得不一样才是问题（用户的原话：排序要和 Windows 一样）。
 class _SortMenu extends StatelessWidget {
   const _SortMenu({required this.state});
   final AppState state;
 
+  static const String _fieldPrefix = 'f:';
+  static const String _dirPrefix = 'd:';
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    return PopupMenuButton<NoteSort>(
-      tooltip: '排序',
-      position: PopupMenuPosition.under,
-      color: c.secondaryBackground,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-      ),
-      icon: Icon(Icons.swap_vert_rounded, size: 20, color: c.tint),
-      onSelected: state.setSort,
-      itemBuilder: (context) => [
-        for (final s in NoteSort.values)
-          PopupMenuItem<NoteSort>(
-            value: s,
-            child: Row(
-              children: [
-                Icon(
-                  state.filter.sort == s
+    final sort = state.filter.sort;
+    return Tooltip(
+      message: '排序',
+      child: Pressable(
+        scale: 0.9,
+        onTap: () async {
+          final picked = await showAppMenu<String>(
+            context,
+            anchor: AppMenuAnchor(context: context),
+            header: '排序',
+            items: <AppMenuItem<String>>[
+              for (final f in SortField.values)
+                AppMenuItem(
+                  value: '$_fieldPrefix${f.name}',
+                  label: f.label,
+                  icon: sort.field == f
                       ? Icons.check_circle_rounded
                       : Icons.circle_outlined,
-                  size: 16,
-                  color: state.filter.sort == s ? c.tint : c.tertiaryLabel,
+                  color: sort.field == f ? c.tint : null,
                 ),
-                const SizedBox(width: 10),
-                Text(s.label, style: AppText.callout.copyWith(color: c.label)),
-              ],
-            ),
-          ),
-      ],
+              for (final d in SortDir.values)
+                AppMenuItem(
+                  value: '$_dirPrefix${d.name}',
+                  label: '${d.label} ${d.arrow}',
+                  icon: sort.dir == d
+                      ? Icons.check_circle_rounded
+                      : Icons.unfold_more_rounded,
+                  color: sort.dir == d ? c.tint : null,
+                  // 方向是另一组选项，画条线分开
+                  dividerBefore: d == SortDir.values.first,
+                ),
+            ],
+          );
+          if (picked == null) return;
+
+          if (picked.startsWith(_fieldPrefix)) {
+            final name = picked.substring(_fieldPrefix.length);
+            final f = SortField.values.firstWhere((x) => x.name == name);
+            // 换字段时**保留方向** —— 两次点击是独立的，不该互相重置
+            state.setSort(NoteSort.of(f, sort.dir));
+          } else {
+            final name = picked.substring(_dirPrefix.length);
+            final d = SortDir.values.firstWhere((x) => x.name == name);
+            state.setSort(NoteSort.of(sort.field, d));
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(Icons.swap_vert_rounded, size: 20, color: c.tint),
+        ),
+      ),
     );
   }
 }
