@@ -11,6 +11,53 @@
 part of 'note_repository.dart';
 
 extension NoteQueries on NoteRepository {
+  /// 按标题精确找一篇笔记（`[[双链]]` 跳转用）。
+  ///
+  /// 去掉首尾空白再比：标题里带个尾空格是手滑，不该因此找不到。
+  /// 同名取**最近改过的那篇** —— 总得有个确定的说法。
+  /// 回收站里的不算：链到一个已删的笔记，点进去是空的更莫名其妙。
+  int? noteIdByTitle(String title) {
+    final t = title.trim();
+    if (t.isEmpty) return null;
+    final rows = _d.select(
+      'SELECT id FROM notes WHERE title = ? AND ${liveNote("notes")} '
+      'ORDER BY updated_at DESC LIMIT 1',
+      <Object?>[t],
+    );
+    return rows.isEmpty ? null : rows.first['id'] as int;
+  }
+
+  /// 谁的正文里链到了这篇笔记（反向链接）。
+  ///
+  /// 口径：只算**活着的**笔记（非归档、非隐藏、不在回收站），
+  /// 也不含自己 —— 和列表、标签、统计保持同一套"什么算存在"。
+  ///
+  /// 实现是 `content LIKE`：正文里可能写 `[[标题]]` 也可能写
+  /// `[[标题|显示名]]`，所以用 `[[标题` 前缀匹配再交给
+  /// `parseWikiLinks` 复核（避免"标题是别人前缀"的误命中）。
+  List<Note> backlinksOf(int noteId, {int limit = 50, bool hiddenOnly = false}) {
+    final target = getNote(noteId);
+    if (target == null) return const <Note>[];
+    final name = target.title.trim();
+    if (name.isEmpty) return const <Note>[];
+
+    final rows = _d.select(
+      // `n.*` 而不是 `_noteColumns()`：后者为了列表性能不带 content，
+      // 而这里正要看正文
+      'SELECT n.* FROM notes n '
+      'WHERE n.id != ? AND n.content LIKE ? AND '
+      '${hiddenOnly ? hiddenNote("n") : liveNote("n")} '
+      'ORDER BY n.updated_at DESC LIMIT ?',
+      <Object?>[noteId, '%[[$name%', limit],
+    );
+    final notes = rows.map((r) => Note.fromRow(r)).toList();
+    _attachTags(notes);
+    // LIKE 只是粗筛（`[[标题` 也能命中 `[[标题B]]`），这里精确复核
+    return notes
+        .where((n) => wikiTargetsIn(n.content).contains(name))
+        .toList();
+  }
+
   /// 按筛选条件取笔记列表。默认只取正文元数据，不含大字段 content。
   List<Note> listNotes(NoteFilter f, {int limit = 500, int offset = 0}) {
     final where = <String>[];

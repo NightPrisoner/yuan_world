@@ -17,12 +17,15 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
+import '../../../core/motion/apple_page_route.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/wiki_links.dart';
 import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_importer.dart';
 import 'media_card.dart';
 import '../../../core/utils/text_stats.dart';
 import '../../../data/repositories/note_repository.dart';
+import '../note_detail_page.dart';
 
 class ContentView extends StatelessWidget {
   const ContentView({
@@ -314,8 +317,12 @@ class RichParagraph extends StatelessWidget {
     //
     // **裸链接也要认**：Word 文档导入后常常是一串 https://… 直接躺在正文里，
     // 不是 markdown 的 `[文字](url)`。只认后者的话，用户点它毫无反应。
+    //
+    // `[[双链]]` 也要在最前面：它是**双方括号**，不先切出来会被
+    // `[文字](url)` 那条规则咬掉一半。
     final re = RegExp(
-      r'(\[[^\]]+\]\([^)]+\)|https?://[^\s<>()（）【】]+'
+      r'(\[\[[^\[\]\n]+\]\]'
+      r'|\[[^\]]+\]\([^)]+\)|https?://[^\s<>()（）【】]+'
       r'|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)',
     );
     var last = 0;
@@ -324,7 +331,9 @@ class RichParagraph extends StatelessWidget {
         spans.add(TextSpan(text: input.substring(last, m.start)));
       }
       final token = m.group(0)!;
-      if (token.startsWith('[')) {
+      if (token.startsWith('[[')) {
+        spans.add(_wikiLinkSpan(context, token, base, c));
+      } else if (token.startsWith('[')) {
         spans.add(_linkSpan(context, token, base, c));
       } else if (token.startsWith('http')) {
         spans.add(_bareLinkSpan(context, token, base, c));
@@ -352,8 +361,52 @@ class RichParagraph extends StatelessWidget {
     return spans;
   }
 
-  /// 裸链接（正文里直接躺着一串 https://…）。
+  /// `[[双链]]`：点一下跳到那篇笔记。
   ///
+  /// 找不到目标时**要说清楚**（弹一句"没有这篇笔记"），而不是点了没反应 ——
+  /// 这也是双链最容易出问题的地方：标题改了、笔记删了，链接就成了死的。
+  ///
+  /// 这里 import 了 `note_detail_page.dart`（而它又 import 本文件），
+  /// 形成一个**方向明确的循环**：正文要跳到"另一篇笔记的页面"，
+  /// 而那个页面正是用本文件渲染正文的。Dart 允许这种循环，两边也没有
+  /// 顶层初始化依赖，所以就这么留着 —— 硬拆成回调只会多一层传参。
+  static InlineSpan _wikiLinkSpan(
+    BuildContext context,
+    String token,
+    TextStyle base,
+    AppColors c,
+  ) {
+    final links = parseWikiLinks(token);
+    if (links.isEmpty) return TextSpan(text: token, style: base);
+    final link = links.first;
+    return TextSpan(
+      text: link.label,
+      style: base.copyWith(
+        color: c.tint,
+        // 双链不用下划线（那是外链的样子），换成浅浅的底色
+        backgroundColor: c.tint.withValues(alpha: 0.10),
+      ),
+      recognizer: TapGestureRecognizer()
+        ..onTap = () {
+          final state = context.read<AppState>();
+          final id = state.repo.noteIdByTitle(link.target);
+          if (id == null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('没有找到《${link.target}》这篇笔记'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+            return;
+          }
+          Navigator.of(context).push(
+            ApplePageRoute<void>(pageBuilder: (_) => NoteDetailPage(noteId: id)),
+          );
+        },
+    );
+  }
+
+  /// 裸链接（正文里直接躺着一串 https://…）。
   /// Word 文档导进来常常是这种形态，不认它用户就会觉得"链接点了没反应"。
   static InlineSpan _bareLinkSpan(
     BuildContext context,

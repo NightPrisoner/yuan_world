@@ -8,6 +8,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../../core/utils/filename_sort.dart';
 import '../../core/utils/text_stats.dart';
+import '../../core/utils/wiki_links.dart';
 import '../db/app_database.dart';
 import '../db/query_scope.dart';
 import '../models.dart';

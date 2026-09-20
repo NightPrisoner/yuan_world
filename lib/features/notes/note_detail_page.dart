@@ -26,6 +26,7 @@ import 'widgets/content_view.dart';
 import 'widgets/toc_panel.dart';
 import 'widgets/field_blocks.dart';
 import 'widgets/note_actions.dart';
+import 'widgets/note_card.dart' show formatRelative;
 import '../../data/repositories/note_repository.dart';
 
 class NoteDetailPage extends StatefulWidget {
@@ -81,6 +82,9 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
 
   /// 目录条目，以及每个标题所在 block 的 GlobalKey（跳转靠它定位）。
   List<TocEntry> _toc = const <TocEntry>[];
+
+  /// 反向链接：哪些笔记的正文里链到了这一篇。
+  List<Note> _backlinks = const <Note>[];
   final Map<int, GlobalKey> _blockKeys = <int, GlobalKey>{};
 
   bool _tocOpen = false;
@@ -124,6 +128,72 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       _blockKeys[e.blockIndex] = GlobalKey();
     }
     _tocOpen = false;
+    // 反向链接：读取时现算（正文是唯一真源，见 core/utils/wiki_links.dart）
+    _backlinks = state.repo.backlinksOf(note.id, hiddenOnly: state.privacyMode);
+  }
+
+  /// 「被引用」：列出链到这篇的笔记。
+  ///
+  /// 用 [NoteCard] 那套行样式会和列表太像（用户会以为是"这篇的下级"），
+  /// 所以做成更轻的一栏标题 + 小行：它是**出口**，不是内容。
+  Widget _backlinksSection(AppColors c, AppState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(height: 0.5, color: c.separator),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Icon(Icons.link_rounded, size: 15, color: c.tertiaryLabel),
+            const SizedBox(width: 6),
+            Text(
+              '被引用 ${_backlinks.length}',
+              style: AppText.caption1.copyWith(
+                color: c.tertiaryLabel,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        for (final n in _backlinks)
+          Pressable(
+            onTap: () => _openNoteRoute(n.id),
+            scale: 0.99,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      n.title.isEmpty ? '无标题笔记' : n.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppText.footnote.copyWith(color: c.tint),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    formatRelative(n.updatedAt),
+                    style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        const SizedBox(height: 18),
+      ],
+    );
+  }
+
+  /// 打开另一篇笔记（反向链接、双链跳转都用它）。
+  ///
+  /// 嵌入三栏时也 push 一个**独立页面**：三栏的右栏此刻正显示着当前这篇，
+  /// 直接换掉内容会让用户"回不去"（没有历史）。
+  void _openNoteRoute(int id) {
+    Navigator.of(context).push(
+      ApplePageRoute<void>(pageBuilder: (_) => NoteDetailPage(noteId: id)),
+    );
   }
 
   @override
@@ -380,6 +450,16 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             blockKeys: _blockKeys,
             noteId: note.id,
           ),
+
+          // 反向链接：谁的正文里写了 `[[这篇的标题]]`。
+          // 放在正文之后 —— 它是"顺藤摸瓜"的出口，不该挤在开头。
+          if (_backlinks.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                child: _backlinksSection(c, state),
+              ),
+            ),
 
           SliverToBoxAdapter(
             child: Padding(
