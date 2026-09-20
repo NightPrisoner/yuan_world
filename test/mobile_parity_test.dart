@@ -562,6 +562,61 @@ void main() {
     });
   });
 
+  group('手机端空列表的说法', () {
+    testWidgets('空文件夹说"还是空的"，不能说"换个关键词"（用户报的）', (tester) async {
+      final col = await state.createCollection('空文件夹');
+      add('有正文的');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      await tester.tap(find.text('空文件夹'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('还是空的'), findsOneWidget);
+      expect(find.text('没有匹配的笔记'), findsNothing,
+          reason: '没有搜索词却说"换个关键词"是答非所问');
+      expect(find.text('看全部笔记'), findsOneWidget, reason: '要给一个脱困的动作');
+
+      // 点了就回到全部
+      await tester.tap(find.text('看全部笔记'));
+      await tester.pumpAndSettle();
+      expect(state.filter.collectionId, isNull);
+      expect(find.text('有正文的'), findsOneWidget);
+      expect(col, isNotNull);
+    });
+
+    testWidgets('空收藏 / 空归档 / 空标签各自说自己的话', (tester) async {
+      add('有正文的');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      await tester.tap(find.text('收藏'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('还没有收藏的笔记'), findsOneWidget);
+
+      await tester.tap(find.text('归档'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('归档里还没有笔记'), findsOneWidget);
+
+      await tester.tap(find.text('全部'));
+      await tester.pumpAndSettle();
+      state.selectTag('不存在的标签');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('没有带「不存在的标签」标签的笔记'), findsOneWidget);
+    });
+
+    testWidgets('搜不到时才说"没有匹配的笔记"', (tester) async {
+      add('有正文的');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      state.setQuery('zzz查不到');
+      await tester.pumpAndSettle();
+      expect(find.text('没有匹配的笔记'), findsOneWidget);
+      expect(find.textContaining('换个关键词'), findsOneWidget);
+    });
+  });
+
   group('手机端导出文集', () {
     testWidgets('文件夹管理页里有导出入口，点开是格式菜单', (tester) async {
       final id = await state.createCollection('甲');

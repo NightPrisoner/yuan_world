@@ -334,18 +334,7 @@ class _NotesPageState extends State<NotesPage> {
           if (notes.isEmpty)
             SliverFillRemaining(
               hasScrollBody: false,
-              child: EmptyHint(
-                icon: (state.overview?.noteCount ?? 0) > 0
-                    ? Icons.search_off_rounded
-                    : Icons.auto_stories_rounded,
-                title: (state.overview?.noteCount ?? 0) > 0 ? '没有匹配的笔记' : '还没有内容',
-                subtitle: (state.overview?.noteCount ?? 0) > 0
-                    ? '换个关键词，或切换到「全部」看看'
-                    : '导入你的 .docx 文集，或直接新建一篇笔记',
-                action: (state.overview?.noteCount ?? 0) > 0
-                    ? null
-                    : _importButton(context),
-              ),
+              child: _buildEmpty(context, state),
             )
           else if (state.gridMode)
             _buildGrid(context, notes, imageRoot)
@@ -601,6 +590,132 @@ class _NotesPageState extends State<NotesPage> {
   }
 
   // ── 列表 / 瀑布流 ───────────────────────────────────────────────────────
+
+  /// 列表空了的时候说什么。
+  ///
+  /// **不能所有"空"都说"没有匹配的笔记"** —— 用户只是点进了一个空文件夹、
+  /// 空收藏或空归档，屏幕上却写着"换个关键词试试"，等于答非所问
+  /// （真机上就是这么看到的：没有任何搜索词，标题却是"没有匹配的笔记"）。
+  /// 所以按**为什么空**分几种说法，并给一个能立刻脱困的动作。
+  Widget _buildEmpty(BuildContext context, AppState state) {
+    final f = state.filter;
+    final total = state.overview?.noteCount ?? 0;
+    final q = f.query.trim();
+
+    // 1) 搜出来的空：确实该提示换关键词
+    if (q.isNotEmpty) {
+      return EmptyHint(
+        icon: Icons.search_off_rounded,
+        title: '没有匹配的笔记',
+        subtitle: '换个关键词，或切换到「全部」看看',
+        action: _clearFilterButton(context, state, '看全部笔记'),
+      );
+    }
+
+    // 2) 库里本来就一篇都没有：引导导入/新建（老样子）
+    if (total == 0) {
+      return EmptyHint(
+        icon: Icons.auto_stories_rounded,
+        title: '还没有内容',
+        subtitle: '导入你的 .docx 文集，或直接新建一篇笔记',
+        action: _importButton(context),
+      );
+    }
+
+    // 3) 其它都是"筛选筛空了"，各自说清是哪个筛选
+    if (state.privacyMode) {
+      return EmptyHint(
+        icon: Icons.lock_outline_rounded,
+        title: '隐私空间里还没有笔记',
+        subtitle: '在笔记菜单里选「移入隐私空间」，内容就会只出现在这里',
+        action: _clearFilterButton(context, state, '退出隐私空间', exitPrivacy: true),
+      );
+    }
+    if (f.archivedOnly) {
+      return EmptyHint(
+        icon: Icons.archive_outlined,
+        title: '归档里还没有笔记',
+        subtitle: '长按笔记选「归档」，它会从主列表挪到这里，随时能取回来',
+        action: _clearFilterButton(context, state, '看全部笔记'),
+      );
+    }
+    if (f.favoritesOnly) {
+      return EmptyHint(
+        icon: Icons.star_outline_rounded,
+        title: '还没有收藏的笔记',
+        subtitle: '在阅读页点右上角的星标，收藏的笔记会集中在这里',
+        action: _clearFilterButton(context, state, '看全部笔记'),
+      );
+    }
+    if (f.uncategorizedOnly) {
+      return EmptyHint(
+        icon: Icons.inbox_outlined,
+        title: '没有未分类的笔记',
+        subtitle: '所有笔记都归好类了',
+        action: _clearFilterButton(context, state, '看全部笔记'),
+      );
+    }
+    if (f.collectionId != null) {
+      final col = state.collections
+          .where((c) => c.id == f.collectionId)
+          .firstOrNull;
+      return EmptyHint(
+        icon: Icons.folder_open_rounded,
+        title: col == null ? '这个文件夹还是空的' : '「${col.name}」还是空的',
+        subtitle: '把笔记移进来：多选 → 批量操作 → 移动到文集',
+        action: _clearFilterButton(context, state, '看全部笔记'),
+      );
+    }
+    if (f.tag != null) {
+      return EmptyHint(
+        icon: Icons.label_outline_rounded,
+        title: '没有带「${f.tag}」标签的笔记',
+        subtitle: '在阅读页点标签按钮给笔记贴上它，就会出现在这里',
+        action: _clearFilterButton(context, state, '看全部笔记'),
+      );
+    }
+
+    // 兜底（理论上到不了这里）
+    return EmptyHint(
+      icon: Icons.search_off_rounded,
+      title: '没有匹配的笔记',
+      subtitle: '换个筛选条件，或切换到「全部」看看',
+      action: _clearFilterButton(context, state, '看全部笔记'),
+    );
+  }
+
+  /// 空状态里的"脱困"按钮：一键回到全部笔记（或退出隐私空间）。
+  Widget _clearFilterButton(
+    BuildContext context,
+    AppState state,
+    String label, {
+    bool exitPrivacy = false,
+  }) {
+    final c = context.colors;
+    return Pressable(
+      onTap: () {
+        if (exitPrivacy) {
+          state.exitPrivacyMode();
+        } else {
+          state.selectAll();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+        decoration: BoxDecoration(
+          color: c.tint,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: AppText.callout.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _buildList(BuildContext context, List<Note> notes, String imageRoot) {
     return SliverPadding(
