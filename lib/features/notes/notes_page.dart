@@ -210,6 +210,27 @@ class _NotesPageState extends State<NotesPage> {
         accent: c.palette[7],
         onTap: state.toggleFavorites,
       ),
+      // 归档：和「收藏」一样是一种**视图**，所以放在这一排。
+      //
+      // 桌面左栏有「归档」这一项，手机上原本没有 —— 结果是：手机上长按
+      // 笔记选「归档」之后，那篇笔记就从列表里消失了，而且**再也看不到、
+      // 也没法取消归档**（只能在电脑上处理）。这个胶囊补上这条路。
+      _Pill(
+        label: '归档',
+        icon: Icons.archive_outlined,
+        selected: f.archivedOnly,
+        accent: c.palette[4],
+        onTap: () => state.setFilter(
+          f.archivedOnly
+              ? f.copyWith(archivedOnly: false, hiddenOnly: false)
+              // 归档和"未归档"是互斥的两边，切过去时先清掉其它互斥筛选
+              : NoteFilter(
+                  archivedOnly: true,
+                  sort: f.sort,
+                  query: f.query,
+                ),
+        ),
+      ),
       for (final col in state.collections)
         _Pill(
           label: col.name,

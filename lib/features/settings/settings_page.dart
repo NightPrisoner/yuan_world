@@ -19,6 +19,7 @@ import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
 import '../privacy/privacy_page.dart';
 import '../tags/manage_tags_page.dart';
+import '../trash/trash_page.dart';
 import 'field_manager_page.dart';
 
 /// 快照目录（还没建就建出来，用户点"打开"时才不会是空路径）。
@@ -403,6 +404,24 @@ class SettingsPage extends StatelessWidget {
             _SectionHeader('数据'),
             _Group(
               children: [
+                // 回收站：**手机端唯一的入口**。
+                //
+                // 桌面左栏有「回收站」，而手机是底部四个标签 + 这个设置页，
+                // 之前 TrashPage 只被 desktop_workspace 引用 —— 也就是说
+                // 在手机上删掉的笔记**永远找不回来**（也没有地方彻底清空）。
+                // 入口放这儿是因为它属于"系统级的地方"，不是一种筛选视图。
+                _NavRow(
+                  icon: Icons.delete_outline_rounded,
+                  iconColor: c.palette[3],
+                  label: '回收站',
+                  subtitle: state.trashedNotes.isEmpty
+                      ? '空的'
+                      : '${state.trashedNotes.length} 篇，可恢复或彻底删除',
+                  onTap: () => Navigator.of(context).push(
+                    ApplePageRoute<void>(pageBuilder: (_) => const TrashPage()),
+                  ),
+                ),
+                _RowDivider(),
                 _NavRow(
                   icon: Icons.playlist_add_rounded,
                   iconColor: c.palette[4],
