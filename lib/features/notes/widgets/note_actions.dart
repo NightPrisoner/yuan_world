@@ -25,6 +25,7 @@ import '../../../data/exporter/note_times.dart';
 import '../../../data/models.dart';
 import '../../collections/collection_sheets.dart';
 import 'cover_picker.dart';
+import '../../../data/repositories/note_repository.dart';
 
 /// 菜单里用户可能触发的动作。
 enum NoteAction {

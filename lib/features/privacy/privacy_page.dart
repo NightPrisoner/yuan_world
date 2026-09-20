@@ -19,6 +19,7 @@ import 'package:provider/provider.dart';
 
 import '../../app_state.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/repositories/note_repository.dart';
 
 const String kPrivacyPasswordKey = 'privacy.password_hash';
 const String kPrivacyQuestionKey = 'privacy.question';

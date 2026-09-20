@@ -11,6 +11,7 @@ import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models.dart';
 import '../notes/note_detail_page.dart';
+import '../../data/repositories/note_repository.dart';
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});

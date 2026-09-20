@@ -26,6 +26,7 @@ import 'widgets/content_view.dart';
 import 'widgets/toc_panel.dart';
 import 'widgets/field_blocks.dart';
 import 'widgets/note_actions.dart';
+import '../../data/repositories/note_repository.dart';
 
 class NoteDetailPage extends StatefulWidget {
   const NoteDetailPage({

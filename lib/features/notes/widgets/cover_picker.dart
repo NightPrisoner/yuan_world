@@ -23,6 +23,7 @@ import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_importer.dart';
 import '../../../data/models.dart';
 import '../editor/body_segments.dart';
+import '../../../data/repositories/note_repository.dart';
 
 /// 弹出头图选择器。返回 true 表示有改动。
 ///

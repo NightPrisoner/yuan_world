@@ -22,6 +22,7 @@ import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_importer.dart';
 import 'media_card.dart';
 import '../../../core/utils/text_stats.dart';
+import '../../../data/repositories/note_repository.dart';
 
 class ContentView extends StatelessWidget {
   const ContentView({

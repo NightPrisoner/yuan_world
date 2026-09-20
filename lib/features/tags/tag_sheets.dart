@@ -14,6 +14,7 @@ import 'package:provider/provider.dart';
 import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
+import '../../data/repositories/note_repository.dart';
 
 /// 打开某篇笔记的标签编辑弹窗。返回是否改过（调用方据此决定要不要重读）。
 Future<bool> showNoteTagEditor(BuildContext context, int noteId) async {

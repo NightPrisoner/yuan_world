@@ -17,6 +17,7 @@ import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models.dart';
 import '../../../data/repositories/field_repository.dart';
+import '../../../data/repositories/note_repository.dart';
 
 /// 一行参数。[slot] 为 `head` 时左对齐，`tail` 时右对齐并带 `——` 前缀。
 class FieldLine extends StatefulWidget {

@@ -38,6 +38,7 @@ import 'markdown_editing.dart';
 import '../widgets/field_blocks.dart';
 import '../widgets/media_card.dart';
 import '../widgets/toc_panel.dart';
+import '../../../data/repositories/note_repository.dart';
 
 /// 媒体块外面套的悬停壳：鼠标进来才把删除键露出来。
 ///
