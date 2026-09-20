@@ -261,12 +261,18 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       if (media.videos > 0) '${media.videos} 视频',
     ].join(' · ');
 
-    final scrollView = CustomScrollView(
-      controller: _scroll,
-      physics: const BouncingScrollPhysics(
-        parent: AlwaysScrollableScrollPhysics(),
-      ),
-      slivers: <Widget>[
+    // 整篇正文**只套一个** `SelectionArea`（外面那层）。
+    //
+    // 段落本身只画 `Text.rich`（见 content_view.dart 的说明）：一篇长文几百段，
+    // 每段各套一个选区容器，进页面和滚动都发沉；整篇一个既能跨段落选中，
+    // 又不会给每段都挂一套选区注册器/手势识别器。
+    final scrollView = SelectionArea(
+      child: CustomScrollView(
+        controller: _scroll,
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
+        slivers: <Widget>[
         SliverAppBar(
           pinned: true,
           expandedHeight: _expanded,
@@ -470,7 +476,8 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             ),
           ),
         ],
-      );
+      ),
+    );
 
     // 目录**停靠**在正文旁边（对齐 Word 的导航窗格），不是浮在内容上的外挂件：
     // 正文该多宽就多宽，目录不遮字。位置可左右切换，宽度可拖。

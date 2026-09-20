@@ -301,15 +301,13 @@ class RichParagraph extends StatelessWidget {
     final c = context.colors;
     final style = base ?? AppText.reading.copyWith(color: c.label);
     final spans = _parseInline(context, text, style, c);
-    // **`SelectionArea` + `Text.rich`，不用 `SelectableText.rich`。**
+    // 这里**只画文字**，不套 `SelectionArea`。
     //
-    // `SelectableText` 内部是只读 `EditableText`，它把整段当成一个选区来
-    // 处理 —— 段落里 span 上挂的手势识别器（页面链接、`[[双链]]`）收不到
-    // 点击，表现是"链接看着像链接、点了毫无反应"。`SelectionArea` 是整棵
-    // 子树选区方案，`Text.rich` 照常收点击，选中复制也还在。
-    return SelectionArea(
-      child: Text.rich(TextSpan(children: spans), style: style),
-    );
+    // 之前每个段落各套一个（为了能选中复制，同时让 `Text.rich` 收得到点击）——
+    // 一篇长文几百个段落就是几百个 `SelectionContainer` + 各自的选区注册器
+    // 和手势识别器，滚动和进页面都发沉。现在改成**整篇一个** `SelectionArea`
+    // （在阅读页包住整个滚动区，见 note_detail_page.dart），跨段落选中反而更好。
+    return Text.rich(TextSpan(children: spans), style: style);
   }
 
   static List<InlineSpan> _parseInline(

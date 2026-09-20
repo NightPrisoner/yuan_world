@@ -128,6 +128,13 @@ Future<void> _setupDesktopWindow() async {
   });
 }
 
+/// 是否显示 Flutter 的性能叠加层（右上角那两个条：UI 线程 / 光栅线程）。
+///
+/// 编译期开关：`flutter build apk --profile --dart-define=YW_PERF=true`。
+/// 平时不编译进去，所以对用户零成本；要量"到底卡在哪一段"时再打开，
+/// 截图就能看到 UI / raster 各占多少毫秒。
+const bool kShowPerfOverlay = bool.fromEnvironment('YW_PERF');
+
 class YuanWorldApp extends StatelessWidget {
   const YuanWorldApp({super.key, this.navigatorKey});
 
@@ -140,6 +147,8 @@ class YuanWorldApp extends StatelessWidget {
       title: '元世界',
       navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
+      // 只有带 --dart-define=YW_PERF=true 的构建才有，见 kShowPerfOverlay
+      showPerformanceOverlay: kShowPerfOverlay,
       themeMode: state.themeMode,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
