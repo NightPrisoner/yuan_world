@@ -7,11 +7,56 @@
 /// 正文该多宽就多宽，目录不遮字；位置可左右切换，宽度可拖。
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/toc.dart';
+
+/// 在**懒构建**的滚动视图里把某个 key 滚进视野。
+///
+/// 为什么不能只 `ensureVisible`：离视口远的条目**根本没有 RenderObject**，
+/// 这时 `currentContext` 是 null，ensureVisible 会**静默失败** ——
+/// 用户看到的就是"点目录没反应"。
+///
+/// 也不能只"按比例猜一次"：块高差别大时（正文里插了几张大图）比例估计
+/// 能差出好几屏，猜不中目标就永远建不出来。所以没中就**一屏一屏往后扫**，
+/// 扫到它出现为止 —— 目标一定在文档里，扫过去必然能建出来。
+/// 扫描用的是 `jumpTo`（不动画），几十次也只在一帧里完成。
+Future<bool> revealTocTarget({
+  required ScrollController controller,
+  required GlobalKey key,
+  double alignment = 0.02,
+}) async {
+  Future<bool> settle() async {
+    final ctx = key.currentContext;
+    if (ctx == null || !ctx.mounted) return false;
+    await Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+      alignment: alignment,
+    );
+    return true;
+  }
+
+  if (await settle()) return true;
+  if (!controller.hasClients) return false;
+
+  final pos = controller.position;
+  final step = math.max(120.0, pos.viewportDimension * 0.9);
+  for (var offset = 0.0; offset <= pos.maxScrollExtent; offset += step) {
+    pos.jumpTo(offset.clamp(0.0, pos.maxScrollExtent));
+    await WidgetsBinding.instance.endOfFrame;
+    if (await settle()) return true;
+  }
+  // 最后停在末尾再试一次（步进可能跨过了末尾那一段）
+  pos.jumpTo(pos.maxScrollExtent);
+  await WidgetsBinding.instance.endOfFrame;
+  return settle();
+}
 
 class TocPanel extends StatelessWidget {
   const TocPanel({

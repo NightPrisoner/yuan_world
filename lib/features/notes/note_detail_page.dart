@@ -17,7 +17,6 @@ import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/motion/apple_page_route.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/utils/text_stats.dart';
 import '../../core/utils/toc.dart';
 import '../../core/widgets/app_menu.dart';
 import '../../data/models.dart';
@@ -83,9 +82,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   List<TocEntry> _toc = const <TocEntry>[];
   final Map<int, GlobalKey> _blockKeys = <int, GlobalKey>{};
 
-  /// 正文一共多少个 block。粗跳估算位置要用它。
-  int _blockCount = 0;
-
   bool _tocOpen = false;
 
   /// 目录栏的宽度与停靠侧，跟着设置走。
@@ -122,7 +118,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     // 目录：正文变了就重算，并把旧的 key 换掉 ——
     // 复用旧 key 会让 ensureVisible 跳到上一篇文章的位置
     _toc = extractToc(_content);
-    _blockCount = parseContent(_content).length;
     _blockKeys.clear();
     for (final e in _toc) {
       _blockKeys[e.blockIndex] = GlobalKey();
@@ -413,36 +408,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
 
   /// 跳到某个标题。
   ///
-  /// 不能直接 `ensureVisible` 了事：正文用 `SliverList` 渲染，是**懒构建**的，
-  /// 靠后的标题此刻还没有 RenderObject，`currentContext` 是 null，
-  /// 调用会静默失败 —— 表现就是「点了目录一点反应都没有」。
-  ///
-  /// 所以分两步：先按 block 占比粗跳到大致位置，等目标被构建出来，再精确定位。
+  /// 正文用 `SliverList` 渲染，是**懒构建**的：靠后的标题此刻还没有
+  /// RenderObject，直接 `ensureVisible` 会静默失败（表现就是"点了没反应"）。
+  /// 交给 [revealTocTarget] 处理 —— 它会在没建出来时一屏一屏往后扫，
+  /// 而不是只按比例猜一次（图片多、块高差别大时，比例估计能差出好几屏）。
   Future<void> _jumpTo(TocEntry entry) async {
     final key = _blockKeys[entry.blockIndex];
     if (key == null) return;
-
-    if (key.currentContext == null && _scroll.hasClients) {
-      final pos = _scroll.position;
-      final ratio = _blockCount <= 1 ? 0.0 : entry.blockIndex / _blockCount;
-      _scroll.jumpTo(
-        (pos.maxScrollExtent * ratio).clamp(0.0, pos.maxScrollExtent),
-      );
-      // 等一帧让 SliverList 把目标 block 建出来
-      await WidgetsBinding.instance.endOfFrame;
-      await Future<void>.delayed(const Duration(milliseconds: 16));
-    }
-
-    // 跨过 await 之后 context 可能已经失效，必须再确认一次
-    final ctx = key.currentContext;
-    if (ctx == null || !ctx.mounted) return;
-    await Scrollable.ensureVisible(
-      ctx,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-      // 稍微留一点上边距，标题不会顶在滚动栏最上沿
-      alignment: 0.02,
-    );
+    await revealTocTarget(controller: _scroll, key: key);
   }
 
   Widget _coverBanner(AppColors c, String imageRoot, String cover, int noteId) {

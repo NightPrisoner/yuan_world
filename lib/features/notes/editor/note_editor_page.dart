@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -170,6 +171,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   bool _tocOpen = false;
   String _tocSide = 'right';
   double _tocWidth = 220;
+
+  /// 正文那个滚动区（目录跳转要按偏移量精确滚）。
+  final ScrollController _scroll = ScrollController();
   int? _focusedSegment;
 
   /// 是否正有文件悬停在编辑区上方（画那层"松手即插入"的蒙层用）。
@@ -296,6 +300,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _title.dispose();
     _body.dispose();
     _bodyFocus.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -900,9 +905,14 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   /// 跳到第 [order] 个标题（0 起，按正文出现顺序）。
   ///
   /// 目录条目给的是"在 parseContent 结果里的下标"，而编辑器是按**分段**
-  /// 渲染的 ——— 两者的坐标系不同。所以走"第 N 个标题"这个中间量：
+  /// 渲染的 —— 两者的坐标系不同。所以走"第 N 个标题"这个中间量：
   /// 先数出它在正文的第几行，再找那一行落在哪个分段里。
-  /// 这样不用给两个坐标系做映射，也不会因为分段里混了图片而错位。
+  ///
+  /// **只把分段滚进视野是不够的**：编辑器里"图片之间的一大段文字"是
+  /// **一个**输入框，一篇纯文字笔记就是**一整段** —— 对它 ensureVisible
+  /// 等于滚回开头（用户报的"跳转有点问题"就是这个：点了目录没反应）。
+  /// 所以分两步：先让这一段被构建出来（懒列表里远处段落还没建），
+  /// 再用 RenderEditable 量出那一行的真实位置，精确滚过去。
   Future<void> _jumpToHeading(int order) async {
     if (order < 0) return;
     final lines = _body.text.split('\n');
@@ -932,21 +942,84 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       cursor += span;
     }
     if (segIndex < 0 || segIndex >= _segKeys.length) return;
-    final ctx = _segKeys[segIndex].currentContext;
-    if (ctx == null) return;
-    await Scrollable.ensureVisible(
-      ctx,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
-      alignment: 0.02,
-    );
-    // 顺便把光标放进那一段：跳过去就是为了接着改
-    if (segIndex < _segFocus.length) {
-      _segFocus[segIndex].requestFocus();
-      final text = _segControllers[segIndex].text;
-      _segControllers[segIndex].selection =
-          TextSelection.collapsed(offset: text.length);
+
+    final key = _segKeys[segIndex];
+    if (!await _ensureSegmentBuilt(key, segIndex)) return;
+
+    // 段落内、这一行之前有多少字符（用来把光标/视图放到那一行）
+    final seg = _segments[segIndex];
+    var offsetInSegment = 0;
+    if (seg is TextSegment) {
+      final segLines = seg.text.split('\n');
+      for (var i = 0; i < lineIndex - cursor && i < segLines.length; i++) {
+        offsetInSegment += segLines[i].length + 1;
+      }
+      offsetInSegment = offsetInSegment.clamp(0, seg.text.length);
     }
+
+    await _refineToLine(key, offsetInSegment, segIndex);
+    // 顺便把光标放进那一段：跳过去就是为了接着改
+    if (segIndex < _segFocus.length && seg is TextSegment) {
+      _segFocus[segIndex].requestFocus();
+      _segControllers[segIndex].selection =
+          TextSelection.collapsed(offset: offsetInSegment);
+    }
+  }
+
+  /// 让第 [segIndex] 段被构建出来并（大致）滚进视野。
+  ///
+  /// 懒构建的列表里，离视口远的段落**根本没有 RenderObject**，
+  /// 这时候 ensureVisible 会静默失败 —— 表现就是"点目录一点反应都没有"。
+  Future<bool> _ensureSegmentBuilt(GlobalKey key, int segIndex) =>
+      revealTocTarget(controller: _scroll, key: key, alignment: 0.0);
+
+  /// 精确滚到段落内的第 [offsetInSegment] 个字符那一行。
+  ///
+  /// 用 `RenderEditable.getLocalRectForCaret` 量出那一行的真实位置，
+  /// 再按差值滚 —— 段落有多长都不影响精度。
+  Future<void> _refineToLine(
+    GlobalKey key,
+    int offsetInSegment,
+    int segIndex,
+  ) async {
+    final ctx = key.currentContext;
+    if (ctx == null || !_scroll.hasClients) return;
+    // currentContext 是 BuildContext，往下找 RenderEditable 要的是 Element
+    final editable = ctx is Element ? _findRenderEditable(ctx) : null;
+    if (editable == null) return;
+
+    final rect = editable.getLocalRectForCaret(
+      TextPosition(offset: offsetInSegment),
+    );
+    final dy = editable.localToGlobal(rect.topLeft).dy;
+    // 想让这一行落在视口上沿往下一点的位置
+    final want = _scroll.position.viewportDimension * 0.12;
+    final delta = dy - want;
+    if (delta.abs() < 2) return;
+    final target = (_scroll.offset + delta)
+        .clamp(0.0, _scroll.position.maxScrollExtent);
+    await _scroll.animateTo(
+      target,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// 在子树里找 TextField 内部那个 RenderEditable。
+  RenderEditable? _findRenderEditable(Element root) {
+    RenderEditable? found;
+    void visit(Element e) {
+      if (found != null) return;
+      final ro = e.renderObject;
+      if (ro is RenderEditable) {
+        found = ro;
+        return;
+      }
+      e.visitChildren(visit);
+    }
+
+    visit(root);
+    return found;
   }
 
   /// 保存状态提示：让"有没有存上"这件事一眼可见。
@@ -967,6 +1040,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
   Widget _buildEditor(AppColors c) {
     return ListView(
+      controller: _scroll,
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       physics: const BouncingScrollPhysics(),
       children: [
