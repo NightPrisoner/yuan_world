@@ -20,6 +20,7 @@ import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
 import 'package:yuan_world/features/collections/collection_sheets.dart';
 import 'package:yuan_world/features/collections/manage_collections_page.dart';
+import 'package:yuan_world/features/importer/import_page.dart';
 import 'package:yuan_world/features/notes/editor/note_editor_page.dart';
 import 'package:yuan_world/features/notes/note_detail_page.dart';
 import 'package:yuan_world/features/search/search_page.dart';
@@ -328,6 +329,34 @@ void main() {
       // 选项里不该有自己，也不该有子孙（乙）
       expect(find.text('顶层（不在任何文集里）'), findsOneWidget);
       expect(find.text('乙'), findsNothing, reason: '子孙不能当上级，否则树成环');
+    });
+  });
+
+  group('手机端导入文集', () {
+    testWidgets('导入页能打开，两个入口都在', (tester) async {
+      await state.refresh();
+      await pumpPhone(tester, const ImportPage());
+      expect(find.text('选择文件夹'), findsOneWidget);
+      expect(find.text('选择文件'), findsOneWidget);
+    });
+
+    testWidgets('桌面端保留"拖文件进来"的提示', (tester) async {
+      // 这条只测得到**桌面分支**：判断用的是 `Platform.isWindows`
+      // （`isDesktopPlatform()`），widget 测试里改不了它。
+      // 手机分支（提示消失）是在真机上截图确认的 —— 见提交说明。
+      await state.refresh();
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppState>.value(
+          value: state,
+          child: MaterialApp(theme: AppTheme.light(), home: const ImportPage()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('拖到页面任意位置'), findsOneWidget,
+          reason: '桌面端这句是真能用的，不能一起删掉');
     });
   });
 

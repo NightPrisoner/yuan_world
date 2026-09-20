@@ -17,6 +17,7 @@ import 'package:provider/provider.dart';
 import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/app_menu.dart';
 import '../../data/importer/import_service.dart';
 
 class ImportPage extends StatefulWidget {
@@ -335,24 +336,28 @@ class _ImportPageState extends State<ImportPage> {
           ],
         ),
         const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.download_rounded,
-              size: 15,
-              color: _dragging ? c.tint : c.tertiaryLabel,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              _dragging ? '松开即可导入' : '也可以直接把文件或文件夹拖到页面任意位置',
-              style: AppText.footnote.copyWith(
+        // 「拖到页面任意位置」是**桌面专有**的说法：手机上文件不会从系统
+        // 外面拖进来，写着只会让人白试一次。判断沿用全应用那一套
+        // （`prefersAnchoredMenu` = 桌面/指针设备）。
+        if (prefersAnchoredMenu(context))
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.download_rounded,
+                size: 15,
                 color: _dragging ? c.tint : c.tertiaryLabel,
-                fontWeight: _dragging ? FontWeight.w600 : null,
               ),
-            ),
-          ],
-        ),
+              const SizedBox(width: 6),
+              Text(
+                _dragging ? '松开即可导入' : '也可以直接把文件或文件夹拖到页面任意位置',
+                style: AppText.footnote.copyWith(
+                  color: _dragging ? c.tint : c.tertiaryLabel,
+                  fontWeight: _dragging ? FontWeight.w600 : null,
+                ),
+              ),
+            ],
+          ),
       ],
     );
   }
