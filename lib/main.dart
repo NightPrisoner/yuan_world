@@ -10,6 +10,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
 import 'core/app_paths.dart';
+import 'core/media/poster_maker.dart';
 import 'core/theme/app_theme.dart';
 import 'data/db/app_database.dart';
 import 'data/importer/import_service.dart';
@@ -42,10 +43,35 @@ Future<void> main() async {
   );
 
   if (kDebugMode) _maybeOpenEditorForTesting(navKey);
+  if (kDebugMode) _maybeMakePosterProbe();
 
   // 每日自动快照：放在界面已经可用之后跑。它只拷数据库（几兆），
   // 而且内部自己吞掉异常 —— 备份失败绝不能挡住启动。
   state.snapshotIfDue();
+}
+
+/// 调试用：`YW_MAKE_POSTER=<视频绝对路径>` 抓一帧存成 PNG 然后退出。
+///
+/// 和 `YW_EDIT_NOTE` 一个道理：抓首帧这条路只有真 exe 里能跑通
+/// （测试环境没有 libmpv），留个钩子才能验证它到底行不行。
+///
+/// **必须等到界面起来之后再抓**：`VideoController` 自己就是靠
+/// "下一帧"（`addPostFrameCallback`）去创建原生画面输出的，
+/// 在 `runApp` 之前建会永远等不到那一帧（实测直接卡死在 `open()`）。
+void _maybeMakePosterProbe() {
+  final path = Platform.environment['YW_MAKE_POSTER'];
+  if (path == null || path.isEmpty) return;
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    final poster = PosterMaker.posterNameFor(path);
+    stdout.writeln('YW_MAKE_POSTER 开始：$path');
+    final ok = await PosterMaker.make(videoPath: path, posterPath: poster)
+        .timeout(const Duration(seconds: 50), onTimeout: () {
+      stdout.writeln('YW_MAKE_POSTER 超时（50 秒还没抓完）');
+      return false;
+    });
+    stdout.writeln('YW_MAKE_POSTER ok=$ok poster=$poster');
+    exit(0);
+  });
 }
 
 /// 调试用：`YW_EDIT_NOTE=<笔记id>` 启动后直接进入该笔记的编辑器。

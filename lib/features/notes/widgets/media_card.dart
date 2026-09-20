@@ -1,10 +1,19 @@
 /// 正文里的视频卡片：直接在笔记里播放。
 ///
 /// 用 `media_kit` 而不是 `video_player`：后者在 Windows 上**没有官方实现**，
-/// 而这个应用是桌面优先的。media_kit 的四端都有，而且能拿到首帧当预览图。
+/// 而这个应用是桌面优先的。media_kit 四端都有，控制条也能完全自己写。
 ///
-/// 播放器是**懒创建**的：正文里可能有多个视频，一进笔记就为每个都建一个
-/// 解码器，内存和句柄都吃不消。点播放才建。
+/// ## 封面态：不建播放器
+///
+/// 视频**没被点过之前只显示一张首帧图** `xxx_first_frame.png`，播放器是懒创建
+/// 的 —— 正文里可能有多个视频，一进笔记就为每个都建一个解码器，内存和原生
+/// 句柄都吃不消（一屏几个视频就是几个 libmpv 实例）。
+///
+/// 这张图有两种来源：下载工具（B 站那种）本来就导出了一张；没有的话由
+/// [PosterMaker] 在卡片**真的出现在屏幕上**时补抓一张存下来（也是一次性的，
+/// 存下来之后永远走图片路径）。两个都没有就退化成深色占位块 —— 三种情况都
+/// 居中盖一个大播放键。点下去才 `Player()` + `VideoController()`，
+/// 之后这张卡片一直走播放器态。
 ///
 /// ## 控制条什么时候出现（很重要的一处交互）
 ///
@@ -23,6 +32,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../core/media/poster_maker.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_menu.dart';
@@ -45,11 +55,19 @@ class MediaCard extends StatefulWidget {
   /// 在正文里的序号，可空。
   final int? index;
 
+  /// 首帧图的名字：`x.mp4` → `x_first_frame.png`。
+  ///
+  /// 纯函数、没有 IO，所以单独放在 widget 上给测试直接调
+  /// （真正干的活是 [PosterMaker]）。
+  static String posterNameFor(String relPath) =>
+      PosterMaker.posterNameFor(relPath);
+
   @override
   State<MediaCard> createState() => _MediaCardState();
 }
 
-class _MediaCardState extends State<MediaCard> {
+class _MediaCardState extends State<MediaCard>
+    with AutomaticKeepAliveClientMixin {
   Player? _player;
   VideoController? _controller;
 
@@ -58,40 +76,117 @@ class _MediaCardState extends State<MediaCard> {
   String? _error;
   StreamSubscription<String>? _errorSub;
 
+  /// 用户点过播放没有。**没点之前不建播放器**（见类文档）。
+  bool _activated = false;
+
+  /// 当前是否在播（只用来决定"要不要保活"，见 [wantKeepAlive]）。
+  bool _playing = false;
+  StreamSubscription<bool>? _playingSub;
+
+  /// 已经为这张卡片排过"抓首帧"的队了（不管成没成，只排一次）。
+  bool _posterAsked = false;
+
+  /// 这一帧的"看看它在不在屏幕上"已经约好了（避免 build 一次约一个）。
+  bool _posterCheckPending = false;
+
   bool get _exists => File(widget.path).existsSync();
 
-  @override
-  void initState() {
-    super.initState();
-    // **一进来就打开但不播放** —— 这样能直接看到第一帧画面当预览图。
-    // 之前是点播放才创建，用户看到的是一张灰卡片，不知道视频里是什么。
-    if (_exists) _open(play: false);
+  /// 首帧图**应该**在的位置（不一定存在）。
+  String get _posterFile => p.join(
+        p.dirname(widget.path),
+        p.basename(MediaCard.posterNameFor(widget.relPath)),
+      );
+
+  /// 首帧图的绝对路径；没有就 null。
+  String? get _posterPath {
+    // 变量名不能用 p（会和 path 包的前缀 p 冲突）
+    final candidate = _posterFile;
+    return File(candidate).existsSync() ? candidate : null;
   }
+
+  /// 没有首帧图 → 排一次队让 [PosterMaker] 补一张。
+  ///
+  /// 只在**这张卡片真的在屏幕上**的时候才排：一屏之外的视频抓了也白抓
+  /// （用户翻到那儿可能都好几天以后了），而且白占一个解码器。
+  void _maybeAskForPoster() {
+    if (_posterAsked || _posterCheckPending || _activated || !_exists) return;
+    if (_posterPath != null) return; // 图已经有了，什么都不用做
+    _posterCheckPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _posterCheckPending = false;
+      if (!mounted || _activated || _posterPath != null) return;
+      if (!_onScreen()) return; // 这次不算数，滚进来的时候会再排一次
+      _posterAsked = true;
+      PosterMaker.request(
+        videoPath: widget.path,
+        posterPath: _posterFile,
+        onReady: () {
+          if (mounted) setState(() {});
+        },
+      );
+    });
+  }
+
+  /// 卡片现在看得见吗（只按竖直方向算，正文是竖着的）。
+  bool _onScreen() {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return false;
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+    final h = MediaQuery.sizeOf(context).height;
+    return bottom > 0 && top < h;
+  }
+
+  // **不再一进来就建播放器**（原来这里是 `initState`，现在整个搬走了）。
+  //
+  // 以前为了拿到首帧画面，每个可见的视频卡都会建一个 Player ——
+  // 一屏里放几个视频就是几个 libmpv 实例（每个都带解码器和纹理）。
+  // 现在封面用 `xxx_first_frame.png`（现成的就用，没有就让 [PosterMaker]
+  // 补一张，见 [_maybeAskForPoster]），一个播放器都不用建。
 
   @override
   void dispose() {
+    _playingSub?.cancel();
     _errorSub?.cancel();
     _player?.dispose();
     super.dispose();
   }
 
+  /// 懒加载：用户点了才建播放器并开始播。
+  void _activate() {
+    if (_activated) return;
+    setState(() => _activated = true);
+    _open(play: true);
+  }
+
   void _open({required bool play}) {
-    final player = Player();
-    final controller = VideoController(player);
-    _player = player;
-    _controller = controller;
-    // 打开失败要让用户**看得见**，不能只是"点了没反应"：
-    // 之前这里把异常吞了，卡片就变成一个永远按不动的播放键。
-    _errorSub = player.stream.error.listen((e) {
-      if (mounted) setState(() => _error = e);
-    });
-    // **必须 await open** —— 这是"点播放没反应"的根因。
-    //
-    // media_kit 的 Player 是**异步初始化**的，`open()` 只有在原生播放器就绪
-    // 之后才真正执行。之前这里不 await（fire-and-forget），命令会落在
-    // 就绪之前被丢掉：媒体从来没被打开过，`state.duration` 一直是 0，
-    // 于是点播放、点重播、拖进度条**全都没反应**。
-    unawaited(_openMedia(player, play: play));
+    try {
+      final player = Player();
+      final controller = VideoController(player);
+      _player = player;
+      _controller = controller;
+      // 打开失败要让用户**看得见**，不能只是"点了没反应"：
+      // 之前这里把异常吞了，卡片就变成一个永远按不动的播放键。
+      _errorSub = player.stream.error.listen((e) {
+        if (mounted) setState(() => _error = e);
+      });
+      // 播放状态只用来决定保活：正在播的时候别让列表把它回收掉
+      _playingSub = player.stream.playing.listen((v) {
+        if (!mounted || v == _playing) return;
+        setState(() => _playing = v);
+        updateKeepAlive();
+      });
+      // **必须 await open** —— 这是"点播放没反应"的根因。
+      //
+      // media_kit 的 Player 是**异步初始化**的，`open()` 只有在原生播放器就绪
+      // 之后才真正执行。之前这里不 await（fire-and-forget），命令会落在
+      // 就绪之前被丢掉：媒体从来没被打开过，`state.duration` 一直是 0，
+      // 于是点播放、点重播、拖进度条**全都没反应**。
+      unawaited(_openMedia(player, play: play));
+    } catch (e) {
+      // 建播放器本身失败（原生库缺失等）也要说清楚，别留个死按钮
+      _error = '$e';
+    }
   }
 
   Future<void> _openMedia(
@@ -107,30 +202,34 @@ class _MediaCardState extends State<MediaCard> {
     }
   }
 
-  void _start() {
-    final player = _player;
-    if (player != null) {
-      player.play();
-      return;
-    }
-    // 理论上不会走到这，留个兜底
-    setState(() => _open(play: true));
-  }
+  /// 只有**正在播**的时候才保活。
+  ///
+  /// 懒构建的列表会把滚出视口的卡片回收掉，播放器跟着被销毁 ——
+  /// 滚回来就回到 00:00 重新加载（用户会觉得"播到一半被打断了"）。
+  /// 但不能无脑保活：那样一屏视频就常驻一堆播放器。
+  /// 折中：播着就留住，没播就允许回收（回收了再点播放会重新建，可接受）。
+  @override
+  bool get wantKeepAlive => _activated && _playing;
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // AutomaticKeepAliveClientMixin 要求
     final c = context.colors;
 
-    if (!_exists || _player == null || _controller == null) {
+    if (!_exists) {
       return _shell(
         c,
-        icon: _exists ? Icons.play_arrow_rounded : Icons.videocam_off_outlined,
-        title: _exists ? '视频' : '视频找不到了',
-        subtitle: _exists ? widget.relPath : '${widget.relPath}（文件已删除）',
-        onTap: _exists ? _start : null,
+        icon: Icons.videocam_off_outlined,
+        title: '视频找不到了',
+        subtitle: '${widget.relPath}（文件已删除）',
+        onTap: null,
       );
     }
 
+    // 老视频没有首帧图：让 PosterMaker 补一张（只有这一张卡片在屏幕上才排）
+    _maybeAskForPoster();
+
+    final live = _player != null && _controller != null;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Column(
@@ -139,18 +238,70 @@ class _MediaCardState extends State<MediaCard> {
           ClipRRect(
             borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
             child: AspectRatio(
-              // 播放器需要确定的高度；16:9 是最常见的视频比例
+              // 播放器需要确定的高度；16:9 是最常见的视频比例。
+              // **封面态用同一个比例**：否则点播放时整篇笔记会跳一下。
               aspectRatio: 16 / 9,
-              child: Video(
-                controller: _controller!,
-                controls: _controls,
-                fill: Colors.black,
-              ),
+              child: live
+                  ? Video(
+                      controller: _controller!,
+                      controls: _controls,
+                      fill: Colors.black,
+                    )
+                  : _poster(c),
             ),
           ),
           const SizedBox(height: 5),
           if (_error != null) _errorLine(c),
           _caption(c),
+        ],
+      ),
+    );
+  }
+
+  /// 还没点播放时的封面：首帧图（导入时生成的）+ 正中一个大播放键。
+  ///
+  /// 这层替代了以前"一进来就建播放器看第一帧"的做法：视觉上一样能看出
+  /// 视频里是什么，但**一个原生播放器都不用建**。
+  /// 没有首帧图就用深色占位块（老视频可能没生成过）。
+  Widget _poster(AppColors c) {
+    final poster = _posterPath;
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerUp: (_) => _activate(),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (poster != null)
+            Image.file(
+              File(poster),
+              fit: BoxFit.cover,
+              // 首帧图是给卡片用的，按显示尺寸解码就够 ——
+              // 九兆的原图直接在瀑布流里解码会拖慢滚动
+              cacheWidth: 900,
+              errorBuilder: (_, _, _) => ColoredBox(color: Colors.black),
+            )
+          else
+            ColoredBox(color: Colors.black.withValues(alpha: 0.88)),
+          // 压一层渐变，白底画面上播放键也看得清
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: 0.10),
+                  Colors.black.withValues(alpha: 0.35),
+                ],
+              ),
+            ),
+          ),
+          Center(
+            child: _BigPlayButton(
+              icon: Icons.play_arrow_rounded,
+              tip: '播放',
+              onTap: _activate,
+            ),
+          ),
         ],
       ),
     );
@@ -339,6 +490,50 @@ class VideoControlBarShell extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.end,
         children: children,
+      ),
+    );
+  }
+}
+
+/// 画面正中那个大播放键。
+///
+/// 封面态和播放器态**共用同一个**（尺寸、描边、按下反馈都一样）：
+/// 点播放时按钮不该"换一个长相"，那会让人觉得换了个东西。
+class _BigPlayButton extends StatelessWidget {
+  const _BigPlayButton({
+    required this.icon,
+    required this.tip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Tooltip(
+        message: tip,
+        child: Pressable(
+          onTap: onTap,
+          scale: 0.94,
+          child: Container(
+            width: 58,
+            height: 58,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.42),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.9),
+                width: 2,
+              ),
+            ),
+            child: Icon(icon, size: 34, color: Colors.white),
+          ),
+        ),
       ),
     );
   }
@@ -573,27 +768,12 @@ class _VideoControlsState extends State<_VideoControls> {
   ///
   /// 和底部那排控件**完全同构**（Tooltip + Pressable，自己吃手势）：
   /// 用户反馈底部那排能用、中间这个不能，那就别让中间那条路特殊。
-  Widget _centerButton({required IconData icon, required String tip}) => Tooltip(
-    message: tip,
-    child: Pressable(
-      onTap: () => unawaited(_toggle()),
-      scale: 0.94,
-      child: Container(
-        width: 58,
-        height: 58,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.42),
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.9),
-            width: 2,
-          ),
-        ),
-        child: Icon(icon, size: 34, color: Colors.white),
-      ),
-    ),
-  );
+  Widget _centerButton({required IconData icon, required String tip}) =>
+      _BigPlayButton(
+        icon: icon,
+        tip: tip,
+        onTap: () => unawaited(_toggle()),
+      );
 
   // ── 底部控制条 ──────────────────────────────────────────────────────────
   //
