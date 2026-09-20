@@ -372,6 +372,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     );
     _savedTitle = title;
     _savedBody = text;
+    // **顺手让列表页知道内容变了。**
+    //
+    // 以前保存只写库、不发通知：手机上手势返回（不走 _flushAndLeave）以后
+    // 回到列表，看到的还是旧标题/旧摘要，得下拉才刷新。这里用的是
+    // `refreshListOnly()`（只重查列表那一条轻量查询），自动保存期间也扛得住。
+    state.refreshListOnly();
     if (mounted) setState(() {});
     return true;
   }
@@ -387,7 +393,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     if (external != null) {
       external();
     } else {
-      Navigator.of(context).maybePop();
+      // 用 pop 而不是 maybePop：外层套了 PopScope（canPop: false），
+      // maybePop 会被它自己挡回来 —— 转一圈又回到这里，变成死循环。
+      Navigator.of(context).pop();
     }
   }
 
@@ -909,7 +917,19 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
     return _wrapDrop(
       _shortcuts(
-      Scaffold(
+      // **任何退出方式都要先落库 + 刷新状态。**
+      //
+      // 以前只有左上角那个返回箭头走 `_flushAndLeave`；手机上是手势返回 /
+      // 系统返回键，那条路直接 pop —— 于是：1) `dispose` 把 1.2 秒的自动保存
+      // 定时器**取消掉**，刚敲的字可能根本没落库；2) 列表页拿不到通知，
+      // 回去看到的是旧内容，得下拉才更新（用户报的正是这个）。
+      PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _flushAndLeave();
+        },
+        child: Scaffold(
       backgroundColor: c.background,
       appBar: AppBar(
         backgroundColor: c.background,
@@ -950,6 +970,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           ],
         ),
         ),
+      ),
       ),
       ),
       c,

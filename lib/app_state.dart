@@ -312,10 +312,26 @@ class AppState extends ChangeNotifier {
 
   void setQuery(String q) => setFilter(_filter.copyWith(query: q));
 
+  /// 选文件夹。
+  ///
+  /// **要清掉「收藏」「归档」这些互斥口径** —— 和 [selectUncategorized] 里
+  /// 记的是同一个坑，只是换了个入口：点「收藏」再点某个文件夹，两个胶囊会
+  /// **同时高亮**，而且列表口径到底是哪个也说不清（用户报的就是这个）。
+  /// 标签不清：标签是横切的筛选，允许叠在某个文件夹之上。
   void selectCollection(int? id) => setFilter(
     id == null
-        ? _filter.copyWith(clearCollection: true, uncategorizedOnly: false)
-        : _filter.copyWith(collectionId: id, uncategorizedOnly: false),
+        ? _filter.copyWith(
+            clearCollection: true,
+            uncategorizedOnly: false,
+            favoritesOnly: false,
+            archivedOnly: false,
+          )
+        : _filter.copyWith(
+            collectionId: id,
+            uncategorizedOnly: false,
+            favoritesOnly: false,
+            archivedOnly: false,
+          ),
   );
 
   /// 只看没有归类的笔记。

@@ -463,6 +463,35 @@ void main() {
       expect(pillSelected(tester, '收藏'), isTrue);
       expect(pillSelected(tester, '全部'), isFalse);
     });
+
+    testWidgets('点过收藏/归档再点文件夹，不能两个同时亮（用户报的）', (tester) async {
+      final col = await state.createCollection('甲文件夹');
+      add('里面的');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      // 收藏 → 文件夹
+      await tester.tap(find.text('收藏'));
+      await tester.pumpAndSettle();
+      expect(pillSelected(tester, '收藏'), isTrue);
+      await tester.tap(find.text('甲文件夹'));
+      await tester.pumpAndSettle();
+      expect(pillSelected(tester, '甲文件夹'), isTrue);
+      expect(pillSelected(tester, '收藏'), isFalse,
+          reason: '文件夹和收藏是同一排的单选视图，不能同时高亮');
+      expect(state.filter.collectionId, col);
+
+      // 归档 → 文件夹
+      await tester.tap(find.text('归档'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('甲文件夹'));
+      await tester.pumpAndSettle();
+      expect(pillSelected(tester, '甲文件夹'), isTrue);
+      expect(pillSelected(tester, '归档'), isFalse);
+      // 归档口径也确实被清掉了（不然列表是空的，看着像"笔记没了"）
+      expect(state.filter.archivedOnly, isFalse);
+      expect(state.filter.favoritesOnly, isFalse);
+    });
   });
 
   group('手机端瀑布流列数', () {
@@ -503,6 +532,33 @@ void main() {
         tester.getTopLeft(find.text('子文件夹')).dy,
         greaterThan(tester.getTopLeft(find.text('父文件夹')).dy),
       );
+    });
+  });
+
+  group('手机端编辑后列表要跟着变', () {
+    testWidgets('系统返回（手势/返回键）也要先落库 + 刷新列表', (tester) async {
+      final id = state.repo.insertNote(
+        title: '原标题',
+        content: '原正文',
+        excerpt: '原正文',
+        publishedAt: DateTime.now(),
+        charCount: 3,
+      );
+      await state.refresh();
+      await pumpPhone(tester, NoteEditorPage(noteId: id));
+      await tester.pumpAndSettle();
+
+      // 改标题，**不等** 1.2 秒的自动保存定时器
+      await tester.enterText(find.byType(TextField).first, '手势返回改的');
+      await tester.pump(const Duration(milliseconds: 60));
+
+      // 模拟手机的返回手势/返回键
+      tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      expect(state.notes.first.title, '手势返回改的',
+          reason: '以前这条路不落库也不刷新：刚敲的字可能丢，列表还是旧的，'
+              '得下拉才更新（用户报的正是这个）');
     });
   });
 

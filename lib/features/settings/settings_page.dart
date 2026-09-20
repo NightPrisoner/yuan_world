@@ -678,6 +678,18 @@ class SettingsPage extends StatelessWidget {
             Center(
               child: Column(
                 children: [
+                  // 应用图标：设置页最下面这块"关于"的地方，光有名字太素，
+                  // 加个图标一眼就认出来这是什么应用（两端共用这一页）。
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.asset(
+                      'assets/branding/logo.png',
+                      width: 58,
+                      height: 58,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   Text(
                     '元世界',
                     style: AppText.footnote.copyWith(
