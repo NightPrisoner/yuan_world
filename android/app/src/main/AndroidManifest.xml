@@ -1,8 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="yuan_world"
+        android:label="元世界"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- 桌面上显示的名字就是上面的 android:label（元世界）。
+             这里以前是 Flutter 默认的包名 "yuan_world"，装到手机上
+             桌面和任务切换里都是一串英文下划线。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

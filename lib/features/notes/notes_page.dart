@@ -219,6 +219,34 @@ class _NotesPageState extends State<NotesPage> {
           onTap: () => state.selectCollection(col.id),
           onLongPress: () => showCollectionEditor(context, existing: col),
         ),
+      // **标签也要能筛。**
+      //
+      // 之前手机上只能给笔记贴标签（阅读页的标签按钮），却没有任何地方
+      // 能按标签筛 —— `selectTag()` 只有桌面左栏在调，手机上连入口都没有，
+      // 标签功能等于残了一半。桌面有的，手机也得有。
+      //
+      // 放在文件夹后面、和文件夹同一排：两者都是"横切的分类"，
+      // 再往下一排单独放标签会让筛选条占掉两行高度。
+      if (f.tag != null && !state.tags.any((t) => t.name == f.tag))
+        // 选中的标签在筛选结果里消失了（最后一篇被取消标签）：
+        // 留一个可见的胶囊让它**能取消**，否则用户卡在一个空列表上
+        _Pill(
+          label: f.tag!,
+          icon: Icons.label_rounded,
+          accent: c.palette[5],
+          selected: true,
+          onTap: () => state.selectTag(null),
+        ),
+      for (final tag in state.tags)
+        _Pill(
+          label: tag.name,
+          icon: Icons.label_rounded,
+          count: tag.count,
+          accent: Color(tag.color),
+          selected: f.tag == tag.name,
+          // 再点一下取消：标签是"随手贴"的东西，不该逼用户去找取消入口
+          onTap: () => state.selectTag(f.tag == tag.name ? null : tag.name),
+        ),
       // 末尾常驻「新建」入口：手机上没有左栏，不这样放用户找不到
       _Pill(
         label: '新建',

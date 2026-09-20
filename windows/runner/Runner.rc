@@ -1,4 +1,4 @@
-// Microsoft Visual C++ generated resource script.
+﻿// Microsoft Visual C++ generated resource script.
 //
 #pragma code_page(65001)
 #include "resource.h"
@@ -90,12 +90,15 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.yuanworld" "\0"
-            VALUE "FileDescription", "yuan_world" "\0"
+            // FileDescription / ProductName 是任务管理器和「属性 → 详细信息」
+            // 里显示的名字，用应用名（元世界）；InternalName / OriginalFilename
+            // 必须还是真实文件名，改了工具链会对不上。
+            VALUE "FileDescription", "元世界" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "yuan_world" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.yuanworld. All rights reserved." "\0"
             VALUE "OriginalFilename", "yuan_world.exe" "\0"
-            VALUE "ProductName", "yuan_world" "\0"
+            VALUE "ProductName", "元世界" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

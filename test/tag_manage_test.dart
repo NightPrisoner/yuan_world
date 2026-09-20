@@ -196,6 +196,37 @@ void main() {
       expect(state.notes.map((n) => n.title), <String>['随笔一']);
     });
 
+    testWidgets('手机端：筛选胶囊条里也有标签，点一下筛、再点取消', (tester) async {
+      // 手机上前端没有左栏，标签只能靠这条胶囊 ——
+      // 之前这里**只有文件夹**，标签贴得上去却筛不出来
+      add('随笔一', tags: <String>['随笔']);
+      add('别的');
+      await state.refresh();
+
+      tester.view.physicalSize = const Size(420, 900); // 窄屏 → 走 NotesPage
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppState>.value(
+          value: state,
+          child: MaterialApp(theme: AppTheme.light(), home: const HomeShell()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('随笔'), findsOneWidget, reason: '手机筛选条里要有标签胶囊');
+      await tester.tap(find.text('随笔'));
+      await tester.pumpAndSettle();
+      expect(state.filter.tag, '随笔');
+      expect(state.notes.map((n) => n.title), <String>['随笔一']);
+
+      // 再点一下取消（标签是随手贴的，不该逼用户找取消入口）
+      await tester.tap(find.text('随笔'));
+      await tester.pumpAndSettle();
+      expect(state.filter.tag, isNull);
+      expect(state.notes.length, 2);
+    });
+
     testWidgets('标签弹窗：输入回车就加上，点 × 就去掉', (tester) async {
       final id = add('一');
       await state.refresh();

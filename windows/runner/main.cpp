@@ -1,4 +1,4 @@
-#include <flutter/dart_project.h>
+﻿#include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
@@ -27,7 +27,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"yuan_world", origin, size)) {
+  // 窗口标题就是应用名（元世界）。以前这里是工程名 yuan_world，
+  // 标题栏上显示的是一串英文下划线；运行时 window_manager 还会再设一次
+  // （见 main.dart 的 _setupDesktopWindow），这里是首帧之前的那一下。
+  //
+  // **故意写成 \u 转义而不是直接把中文写进源码**：MSVC 默认按系统本地
+  // 代码页读源文件，UTF-8 的中文（没有 BOM 时）会被读成乱码，
+  // 直接报 "C2001 常量中有换行符"。转义形式跟编码无关，谁编译都一样。
+  if (!window.Create(L"\u5143\u4E16\u754C", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
