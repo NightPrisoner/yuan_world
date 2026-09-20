@@ -212,7 +212,7 @@ class AppState extends ChangeNotifier {
   /// 重新拉取列表与侧边数据。
   Future<void> refresh() async {
     _collections = _visibleCollections();
-    _tags = repo.allTags();
+    _tags = repo.allTags(hiddenOnly: _privacyMode);
     _notes = repo.listNotes(_effectiveFilter);
     _overview = repo.overview(hiddenOnly: _privacyMode);
     notifyListeners();
@@ -227,8 +227,34 @@ class AppState extends ChangeNotifier {
   Future<void> refreshOverview() async {
     _overview = repo.overview(hiddenOnly: _privacyMode);
     _collections = _visibleCollections();
-    _tags = repo.allTags();
+    _tags = repo.allTags(hiddenOnly: _privacyMode);
     notifyListeners();
+  }
+
+  // ── 标签 ────────────────────────────────────────────────────────────────
+
+  /// 改标签名 / 合并 / 删除 / 改颜色。
+  ///
+  /// 都走这里而不是让页面直接摸 repo：改完必须重算标签列表和笔记列表
+  /// （合并之后旧标签没了、计数也变了），漏一次界面就和数据库对不上。
+  Future<void> renameTag(int id, String name) async {
+    repo.renameTag(id, name);
+    await refresh();
+  }
+
+  Future<void> deleteTag(int id) async {
+    repo.deleteTag(id);
+    // 正看着这个标签就先跳回全部：留着筛一个不存在的标签只会是空列表
+    if (_filter.tag != null) {
+      final still = repo.allTags().any((t) => t.name == _filter.tag);
+      if (!still) _filter = NoteFilter(sort: _filter.sort);
+    }
+    await refresh();
+  }
+
+  Future<void> setTagColor(int id, int color) async {
+    repo.setTagColor(id, color);
+    await refresh();
   }
 
   // ── 隐私空间 ────────────────────────────────────────────────────────────
@@ -354,6 +380,15 @@ class AppState extends ChangeNotifier {
   /// 把笔记移动到某个文集（null = 移出到「未分类」）。
   Future<void> moveNoteToCollection(int noteId, int? collectionId) async {
     repo.moveNoteToCollection(noteId, collectionId);
+    await refresh();
+  }
+
+  /// 整篇笔记的标签一次定完（标签弹窗用）。
+  ///
+  /// 会顺带刷新：左栏标签列表的计数、以及"当前正按某个标签筛选"的列表
+  /// 都得跟着变 —— 正在看「随笔」时去掉这篇的标签，它就该从列表里消失。
+  Future<void> setNoteTags(int noteId, List<String> names) async {
+    repo.setNoteTags(noteId, names);
     await refresh();
   }
 

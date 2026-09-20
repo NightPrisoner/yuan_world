@@ -866,18 +866,80 @@ class NoteRepository {
     }
   }
 
-  List<TagStat> allTags() {
+  List<TagStat> allTags({bool hiddenOnly = false}) {
     final rows = _d.select(
       // 回收站里的笔记不算数：不然标签会一直挂在侧栏上，
       // 计数还包含已经删掉的内容，点进去却是空的
       'SELECT t.id, t.name, t.color, COUNT(n.id) AS cnt FROM tags t '
       'JOIN note_tags nt ON nt.tag_id = t.id '
       'JOIN notes n ON n.id = nt.note_id '
-      ' AND ${liveNote("n")} '
+      ' AND ${hiddenOnly ? hiddenNote("n") : liveNote("n")} '
       'GROUP BY t.id HAVING cnt > 0 ORDER BY cnt DESC',
     );
     return rows.map((r) => TagStat.fromRow(r)).toList();
   }
+
+  /// 改标签名。新名字**已经存在**时就是合并（返回合并到的那个 id）。
+  ///
+  /// 合并不能靠"直接改名"：`tags.name` 上有唯一约束，改过去会直接报错；
+  /// 而且就算改成了，两边的笔记也得真的并到一个标签下。所以是
+  /// **先把 note_tags 指到目标标签，再把旧标签删掉**，整段一个事务。
+  ///
+  /// 返回最终生效的标签 id（合并时是目标标签的）。
+  int renameTag(int id, String newName) {
+    final name = newName.trim();
+    if (name.isEmpty) return id;
+
+    final current = _d.select('SELECT name FROM tags WHERE id = ?', [id]);
+    if (current.isEmpty) return id;
+    if (current.first['name'] == name) return id;
+
+    final target = _d.select('SELECT id FROM tags WHERE name = ?', [name]);
+    if (target.isNotEmpty) {
+      final into = target.first['id'] as int;
+      if (into == id) return id;
+      return _mergeTag(from: id, into: into);
+    }
+
+    _d.execute('UPDATE tags SET name = ? WHERE id = ?', [name, id]);
+    return id;
+  }
+
+  /// 把 [from] 合并进 [into]（[from] 消失）。
+  int _mergeTag({required int from, required int into}) {
+    _d.execute('BEGIN');
+    try {
+      // OR IGNORE：两篇笔记本来就同时挂着这两个标签时，这条会撞主键，
+      // 忽略即可 —— 它已经指向目标标签了，下面的 DELETE 会收尾。
+      _d.execute(
+        'UPDATE OR IGNORE note_tags SET tag_id = ? WHERE tag_id = ?',
+        [into, from],
+      );
+      _d.execute('DELETE FROM note_tags WHERE tag_id = ?', [from]);
+      _d.execute('DELETE FROM tags WHERE id = ?', [from]);
+      _d.execute('COMMIT');
+    } catch (_) {
+      _d.execute('ROLLBACK');
+      rethrow;
+    }
+    return into;
+  }
+
+  /// 删掉一个标签。**只解绑，不碰笔记** —— 笔记本身一篇都不会少。
+  void deleteTag(int id) {
+    _d.execute('BEGIN');
+    try {
+      _d.execute('DELETE FROM note_tags WHERE tag_id = ?', [id]);
+      _d.execute('DELETE FROM tags WHERE id = ?', [id]);
+      _d.execute('COMMIT');
+    } catch (_) {
+      _d.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  void setTagColor(int id, int color) =>
+      _d.execute('UPDATE tags SET color = ? WHERE id = ?', [color, id]);
 
   // ── 文集 ────────────────────────────────────────────────────────────────
 

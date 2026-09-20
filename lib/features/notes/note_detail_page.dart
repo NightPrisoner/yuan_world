@@ -20,6 +20,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/toc.dart';
 import '../../core/widgets/app_menu.dart';
 import '../../data/models.dart';
+import '../tags/tag_sheets.dart';
 import 'editor/body_segments.dart';
 import 'editor/note_editor_page.dart';
 import 'widgets/content_view.dart';
@@ -224,6 +225,18 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               ),
             ),
             actions: [
+              // 标签：以前界面上完全没有入口，标签功能等于不存在
+              GlassIconButton(
+                icon: Icons.label_outline_rounded,
+                tooltip: note.tags.isEmpty
+                    ? '标签'
+                    : '标签（${note.tags.length}）',
+                onTap: () async {
+                  final changed = await showNoteTagEditor(context, note.id);
+                  if (changed && mounted) setState(_load);
+                },
+              ),
+              const SizedBox(width: 6),
               GlassIconButton(
                 icon: note.isFavorite
                     ? Icons.star_rounded
@@ -329,6 +342,25 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     metaLine,
                     style: AppText.footnote.copyWith(color: c.tertiaryLabel),
                   ),
+                  // 标签：阅读时也要看得见（点这里也能改，不用去标题栏找）
+                  if (note.tags.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: [
+                        for (final t in note.tags)
+                          TagPill(
+                            name: t,
+                            onTap: () async {
+                              final changed =
+                                  await showNoteTagEditor(context, note.id);
+                              if (changed && mounted) setState(_load);
+                            },
+                          ),
+                      ],
+                    ),
+                  ],
                   if (state.headFieldsEnabled) ...[
                     const SizedBox(height: 12),
                     // 头参数：阅读时也要看得到，不只是编辑态

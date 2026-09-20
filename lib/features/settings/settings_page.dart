@@ -18,6 +18,7 @@ import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
 import '../privacy/privacy_page.dart';
+import '../tags/manage_tags_page.dart';
 import 'field_manager_page.dart';
 
 /// 快照目录（还没建就建出来，用户点"打开"时才不会是空路径）。
@@ -464,6 +465,18 @@ class SettingsPage extends StatelessWidget {
                   onTap: () => Navigator.of(context).push(
                     ApplePageRoute<void>(
                       pageBuilder: (_) => const ManageCollectionsPage(),
+                    ),
+                  ),
+                ),
+                _RowDivider(),
+                _NavRow(
+                  icon: Icons.label_rounded,
+                  iconColor: c.palette[5],
+                  label: '标签管理',
+                  subtitle: '重命名 / 合并 / 换色 / 删除',
+                  onTap: () => Navigator.of(context).push(
+                    ApplePageRoute<void>(
+                      pageBuilder: (_) => const ManageTagsPage(),
                     ),
                   ),
                 ),

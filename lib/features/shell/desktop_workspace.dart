@@ -46,6 +46,7 @@ import '../notes/widgets/note_actions.dart';
 import '../notes/widgets/note_card.dart' show formatRelative;
 import '../settings/settings_page.dart';
 import '../stats/stats_page.dart';
+import '../tags/manage_tags_page.dart';
 import '../todos/todos_page.dart';
 import '../trash/trash_page.dart';
 
@@ -509,6 +510,13 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     if (!dangling) return;
     // requestFocus 会在下一帧应用，不需要自己再排一帧
     _workspaceFocus.requestFocus();
+  }
+
+  /// 打开标签管理页（左栏标签区那个小齿轮、以及设置里那一行都走这里）。
+  void _openTagManager(BuildContext context) {
+    Navigator.of(context).push(
+      ApplePageRoute<void>(pageBuilder: (_) => const ManageTagsPage()),
+    );
   }
 
   void _goSection(_Section s) {    setState(() {
@@ -1167,6 +1175,56 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                         ),
                       ),
                     ),
+
+                  // ── 标签 ──
+                  //
+                  // 和文件夹一起放在**滚动区**里：两者都可能很长，固定
+                  // 哪一边都会把另一边挤没。标签是"多对多"的横切分类，
+                  // 和树状的文件夹本来就是两回事，所以中间拉一条分隔线。
+                  if (state.tags.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Divider(height: 1, color: c.separator),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                      child: Row(
+                        children: [
+                          Text(
+                            '标签',
+                            style: AppText.caption2.copyWith(
+                              color: c.quaternaryLabel,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const Spacer(),
+                          Pressable(
+                            onTap: () => _openTagManager(context),
+                            scale: 0.9,
+                            child: Tooltip(
+                              message: '标签管理',
+                              child: Padding(
+                                padding: const EdgeInsets.all(2),
+                                child: Icon(Icons.tune_rounded,
+                                    size: 14, color: c.tertiaryLabel),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    for (final t in state.tags)
+                      _NavRow(
+                        icon: Icons.label_rounded,
+                        label: t.name,
+                        count: t.count,
+                        color: Color(t.color),
+                        selected: _section == _Section.notes && f.tag == t.name,
+                        onTap: () {
+                          state.selectTag(t.name);
+                          _goSection(_Section.notes);
+                        },
+                      ),
+                  ],
 
                       ],
                       ),
