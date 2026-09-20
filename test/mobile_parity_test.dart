@@ -17,6 +17,7 @@ import 'package:yuan_world/core/theme/app_theme.dart';
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
+import 'package:yuan_world/features/notes/note_detail_page.dart';
 import 'package:yuan_world/features/settings/settings_page.dart';
 import 'package:yuan_world/features/shell/home_shell.dart';
 import 'package:yuan_world/features/trash/trash_page.dart';
@@ -101,5 +102,89 @@ void main() {
     await pumpPhone(tester, const SettingsPage());
     expect(find.text('回收站'), findsOneWidget);
     expect(find.text('空的'), findsOneWidget);
+  });
+
+  group('手机端多选', () {
+    testWidgets('进多选 → 点卡片是勾选（不会打开笔记）→ 全选 → 取消', (tester) async {
+      add('甲');
+      add('乙');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      // 桌面有多选，手机原本没有（只有长按的单篇菜单）
+      expect(find.textContaining('已选'), findsNothing);
+      await tester.tap(find.byTooltip('多选'));
+      await tester.pumpAndSettle();
+
+      // 进多选后：底部出现操作栏，副标题报已选数
+      expect(find.text('已选 0'), findsOneWidget);
+      expect(find.textContaining('已选 0 篇'), findsOneWidget);
+
+      // 点卡片是勾选，不是打开那篇笔记
+      await tester.tap(find.text('甲'));
+      await tester.pumpAndSettle();
+      expect(find.text('已选 1'), findsOneWidget);
+      expect(find.byType(NoteDetailPage), findsNothing, reason: '多选时不该打开笔记');
+
+      await tester.tap(find.text('全选'));
+      await tester.pumpAndSettle();
+      expect(find.text('已选 2'), findsOneWidget);
+
+      await tester.tap(find.text('反选'));
+      await tester.pumpAndSettle();
+      expect(find.text('已选 0'), findsOneWidget);
+
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('已选'), findsNothing);
+      expect(find.text('共 2 篇'), findsOneWidget, reason: '退出后回到普通标题');
+    });
+
+    testWidgets('批量操作菜单里有桌面那几项', (tester) async {
+      add('甲');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      await tester.tap(find.byTooltip('多选'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('甲'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('批量操作'));
+      await tester.pumpAndSettle();
+
+      for (final label in <String>[
+        '移动到文集',
+        '导出为压缩包',
+        '归档',
+        '移入隐私空间',
+        '删除',
+      ]) {
+        // 用 findsWidgets：「归档」在筛选胶囊条里也有一个，这里只要求菜单里存在
+        expect(find.text(label), findsWidgets, reason: '批量操作里少了「$label」');
+      }
+    });
+
+    testWidgets('批量删除会说清"先进回收站"，删完真的进回收站', (tester) async {
+      add('甲');
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      await tester.tap(find.byTooltip('多选'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('甲'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('批量操作'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('删除'));
+      await tester.pumpAndSettle();
+
+      // 文案不能吓人：是软删除
+      expect(find.textContaining('回收站'), findsWidgets);
+      await tester.tap(find.widgetWithText(TextButton, '删除'));
+      await tester.pumpAndSettle();
+
+      expect(state.notes, isEmpty);
+      expect(state.trashedNotes.length, 1, reason: '应该在回收站里，不是被抹掉');
+    });
   });
 }

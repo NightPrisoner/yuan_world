@@ -162,6 +162,17 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 把若干篇笔记移进回收站（软删除）。
+  ///
+  /// **顺手刷回收站计数**：`refresh()` 不带回收站（那是单独缓存的，
+  /// 每次都查一遍全表不划算），所以删完只看 `refresh()` 的话，
+  /// 设置页/左栏那个"回收站里几篇"还是旧数字。
+  Future<void> trashNotes(Iterable<int> ids) async {
+    repo.deleteNotes(ids);
+    refreshTrash();
+    await refresh();
+  }
+
   Future<void> restoreFromTrash(Iterable<int> ids) async {
     // 恢复笔记时数据层会**连带把它所属的文件夹链恢复出来**，
     // 否则那些文章会挂在一个还在回收站里的文件夹上

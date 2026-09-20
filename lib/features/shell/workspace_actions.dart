@@ -123,9 +123,9 @@ extension _WsActions on _DesktopWorkspaceState {
       case 'delete':
         final ok = await _confirmBatchDelete(ids.length);
         if (!ok) return;
-        state.repo.deleteNotes(ids);
-        await state.refresh();
-        _toast('已删除 ${ids.length} 篇');
+        // 走 state.trashNotes：它会连回收站计数一起刷新，
+        // 否则左栏那个"回收站 N 篇"删完还是旧数字
+        await state.trashNotes(ids);
     }
     if (mounted) _setState(() => _selected.clear());
   }
@@ -214,7 +214,9 @@ extension _WsActions on _DesktopWorkspaceState {
       builder: (ctx) => AlertDialog(
         title: Text('删除这 $count 篇笔记？'),
         content: Text(
-          '删除后无法恢复。',
+          // **别写"删除后无法恢复"**：这里是软删除，内容先进回收站，
+          // 之后随时能捞回来。吓唬用户的话，他们会因为怕丢数据而不敢整理。
+          '会先放进回收站，之后随时能恢复。',
           style: AppText.callout.copyWith(color: c.secondaryLabel),
         ),
         actions: [

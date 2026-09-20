@@ -59,6 +59,232 @@ class _NotesPageState extends State<NotesPage> {
     if ((t - _collapse.value).abs() > 0.004) _collapse.value = t;
   }
 
+  // ── 多选（桌面有的，手机也得有） ──────────────────────────────────────
+  //
+  // 桌面多选是"工具条 + 批量操作菜单"，手机上照搬那一套：进多选后点卡片
+  // 是勾选而不是打开，底部长出一条操作栏（全选 / 反选 / 批量操作 / 取消）。
+  //
+  // 入口放在右上角的列表菜单里（那里本来就是"对列表做什么"的地方），
+  // 而不是长按：**长按已经给了单篇的操作菜单**（置顶/归档/删除…），
+  // 再抢过去会让人以为长按坏了。
+  bool _selecting = false;
+  final Set<int> _selected = <int>{};
+
+  void _enterSelection([int? first]) {
+    setState(() {
+      _selecting = true;
+      _selected.clear();
+      if (first != null) _selected.add(first);
+    });
+  }
+
+  void _exitSelection() {
+    setState(() {
+      _selecting = false;
+      _selected.clear();
+    });
+  }
+
+  void _toggleSelect(int id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+  }
+
+  /// 批量操作。和桌面的那份**能力一致**：移动 / 导出压缩包 / 归档 /
+  /// 移入隐私空间 / 删除。
+  Future<void> _batchMenu(AppState state, List<Note> notes) async {
+    final ids = _selected.toList();
+    final picked = await showAppMenu<String>(
+      context,
+      header: '已选 ${ids.length} 篇',
+      items: <AppMenuItem<String>>[
+        const AppMenuItem(
+          value: 'move',
+          label: '移动到文集',
+          icon: Icons.drive_file_move_outline,
+        ),
+        const AppMenuItem(
+          value: 'export',
+          label: '导出为压缩包',
+          icon: Icons.download_rounded,
+        ),
+        const AppMenuItem(
+          value: 'archive',
+          label: '归档',
+          icon: Icons.archive_outlined,
+        ),
+        AppMenuItem(
+          value: 'hide',
+          label: state.privacyMode ? '移出隐私空间' : '移入隐私空间',
+          icon: state.privacyMode
+              ? Icons.visibility_outlined
+              : Icons.visibility_off_outlined,
+        ),
+        const AppMenuItem(
+          value: 'delete',
+          label: '删除',
+          icon: Icons.delete_outline_rounded,
+          destructive: true,
+        ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+
+    switch (picked) {
+      case 'move':
+        final target = await _pickMoveTarget(state);
+        if (target == null) return;
+        state.repo.moveNotesToCollection(ids, target);
+        await state.refresh();
+      case 'export':
+        await _exportSelected(state, ids);
+      case 'archive':
+        state.repo.setNotesArchived(ids, true);
+        await state.refresh();
+      case 'hide':
+        state.repo.setNotesHidden(ids, !state.privacyMode);
+        await state.refresh();
+      case 'delete':
+        final ok = await _confirmBatchDelete(ids.length);
+        if (ok != true) return;
+        await state.trashNotes(ids);
+    }
+    if (mounted) _exitSelection();
+  }
+
+  /// 批量导出成一个 zip。和桌面那份**同一套逻辑**（走 notesForExport
+  /// 把正文一起取出来，包内按文集层级放）。
+  Future<void> _exportSelected(AppState state, List<int> ids) async {
+    final format = await pickExportFormat(context, header: '导出格式');
+    if (format == null || !mounted) return;
+    final notes = state.repo.notesForExport(ids: ids);
+    if (notes.isEmpty) return;
+    await exportZip(
+      context,
+      items: <({List<String> path, Note note})>[
+        for (final n in notes)
+          (path: collectionPathOf(n, state.collections), note: n),
+      ],
+      format: format,
+      zipName: '元世界导出 ${notes.length} 篇.zip',
+    );
+  }
+
+  /// 选一个目标文集（null = 移出到「未分类」）。
+  Future<int?> _pickMoveTarget(AppState state) async {
+    // 用 -1 代表"未分类"：`showAppMenu` 的 value 是 int?，
+    // null 会和"用户取消"撞在一起
+    final picked = await showAppMenu<int>(
+      context,
+      header: '移动到',
+      items: <AppMenuItem<int>>[
+        const AppMenuItem(
+          value: -1,
+          label: '未分类',
+          icon: Icons.inbox_rounded,
+        ),
+        for (final col in state.collections)
+          AppMenuItem(
+            value: col.id,
+            label: col.name,
+            icon: Icons.folder_rounded,
+          ),
+      ],
+    );
+    if (picked == null) return null;
+    return picked == -1 ? -1 : picked;
+  }
+
+  Future<bool?> _confirmBatchDelete(int count) => showDialog<bool>(
+        context: context,
+        builder: (dCtx) => AlertDialog(
+          backgroundColor: dCtx.colors.secondaryBackground,
+          title: Text('删除 $count 篇笔记？', style: AppText.headline),
+          content: Text(
+            '会先放进回收站，之后随时能恢复。',
+            style: AppText.footnote.copyWith(color: dCtx.colors.secondaryLabel),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dCtx).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dCtx).pop(true),
+              child: Text(
+                '删除',
+                style: TextStyle(color: dCtx.colors.destructive),
+              ),
+            ),
+          ],
+        ),
+      );
+
+  /// 多选模式下的底部操作栏（贴在底部标签栏上面）。
+  Widget _selectionBar(AppState state, List<Note> notes) {
+    final c = context.colors;
+    final ids = notes.map((n) => n.id).toSet();
+    Widget btn(String label, VoidCallback? onTap) => Pressable(
+          onTap: onTap,
+          scale: 0.95,
+          haptic: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Text(
+              label,
+              style: AppText.callout.copyWith(
+                color: onTap == null ? c.quaternaryLabel : c.tint,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: c.secondaryBackground,
+        border: Border(top: BorderSide(color: c.separator, width: 0.5)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 52,
+          child: Row(
+            children: [
+              const SizedBox(width: 16),
+              Text(
+                '已选 ${_selected.length}',
+                style: AppText.callout.copyWith(
+                  color: _selected.isEmpty ? c.tertiaryLabel : c.tint,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              btn('全选', () => setState(() {
+                    _selected
+                      ..clear()
+                      ..addAll(ids);
+                  })),
+              btn('反选', () => setState(() {
+                    final next = ids.difference(_selected);
+                    _selected
+                      ..clear()
+                      ..addAll(next);
+                  })),
+              btn(
+                '批量操作',
+                _selected.isEmpty ? null : () => _batchMenu(state, notes),
+              ),
+              btn('取消', _exitSelection),
+              const SizedBox(width: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _scroll.removeListener(_onScroll);
@@ -108,7 +334,8 @@ class _NotesPageState extends State<NotesPage> {
           const SliverToBoxAdapter(child: SizedBox(height: 110)),
         ],
       ),
-      floatingActionButton: _buildFab(context, state),
+      floatingActionButton: _selecting ? null : _buildFab(context, state),
+      bottomNavigationBar: _selecting ? _selectionBar(state, notes) : null,
     );
   }
 
@@ -117,9 +344,11 @@ class _NotesPageState extends State<NotesPage> {
   Widget _buildHeader(BuildContext context, AppState state) {
     final c = context.colors;
     final total = state.overview?.noteCount ?? 0;
-    final subtitle = state.filter.collectionId == null && state.filter.tag == null
-        ? '共 $total 篇'
-        : '筛选出 ${state.notes.length} 篇';
+    final subtitle = _selecting
+        ? '已选 ${_selected.length} 篇'
+        : state.filter.collectionId == null && state.filter.tag == null
+            ? '共 $total 篇'
+            : '筛选出 ${state.notes.length} 篇';
 
     return SliverAppBar(
       pinned: true,
@@ -139,6 +368,17 @@ class _NotesPageState extends State<NotesPage> {
         ),
       ),
       actions: [
+        // 多选：桌面有批量操作，手机也得有入口。
+        // 放这里（而不是抢长按）是因为长按已经给了单篇的操作菜单。
+        GlassIconButton(
+          icon: _selecting
+              ? Icons.check_circle_rounded
+              : Icons.checklist_rounded,
+          color: _selecting ? context.colors.tint : null,
+          tooltip: _selecting ? '完成多选' : '多选',
+          onTap: () => _selecting ? _exitSelection() : _enterSelection(),
+        ),
+        const SizedBox(width: 6),
         GlassIconButton(
           icon: Icons.search_rounded,
           tooltip: '搜索',
@@ -301,19 +541,65 @@ class _NotesPageState extends State<NotesPage> {
           child: _Staggered(
             index: i,
             child: Builder(
-              builder: (cardCtx) => NoteCard(
-                note: notes[i],
-                imageRoot: imageRoot,
-                onTap: () => _openNote(notes[i]),
-                onLongPress: () =>
-                    _showActions(notes[i], AppMenuAnchor(context: cardCtx)),
-                onSecondaryTap: (a) => _showActions(notes[i], a),
-                onMore: (a) => _showActions(notes[i], a),
+              builder: (cardCtx) => _selectable(
+                notes[i],
+                NoteCard(
+                  note: notes[i],
+                  imageRoot: imageRoot,
+                  onTap: () => _selecting
+                      ? _toggleSelect(notes[i].id)
+                      : _openNote(notes[i]),
+                  onLongPress: () => _selecting
+                      ? _toggleSelect(notes[i].id)
+                      : _showActions(
+                          notes[i],
+                          AppMenuAnchor(context: cardCtx),
+                        ),
+                  onSecondaryTap: (a) => _showActions(notes[i], a),
+                  onMore: (a) => _showActions(notes[i], a),
+                ),
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// 多选模式下给卡片盖一层"选中"标记。
+  ///
+  /// 用外面包一层而不是改 [NoteCard] 的签名：卡片是列表/瀑布流/搜索页
+  /// 共用的，加一个只有这里用的参数会把三处都搅进来。
+  Widget _selectable(Note n, Widget card) {
+    if (!_selecting) return card;
+    final c = context.colors;
+    final on = _selected.contains(n.id);
+    return Stack(
+      children: [
+        card,
+        Positioned(
+          right: 10,
+          top: 10,
+          child: IgnorePointer(
+            child: AnimatedContainer(
+              duration: AppMotion.fast,
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                color: on ? c.tint : c.secondaryBackground.withValues(alpha: 0.85),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: on ? c.tint : c.separator,
+                  width: 1.5,
+                ),
+              ),
+              child: on
+                  ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
+                  : null,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -333,15 +619,24 @@ class _NotesPageState extends State<NotesPage> {
         itemBuilder: (context, i) => _Staggered(
           index: i,
           child: Builder(
-            builder: (cardCtx) => NoteCard(
-              note: notes[i],
-              imageRoot: imageRoot,
-              compact: true,
-              onTap: () => _openNote(notes[i]),
-              onLongPress: () =>
-                  _showActions(notes[i], AppMenuAnchor(context: cardCtx)),
-              onSecondaryTap: (a) => _showActions(notes[i], a),
-              onMore: (a) => _showActions(notes[i], a),
+            builder: (cardCtx) => _selectable(
+              notes[i],
+              NoteCard(
+                note: notes[i],
+                imageRoot: imageRoot,
+                compact: true,
+                onTap: () => _selecting
+                    ? _toggleSelect(notes[i].id)
+                    : _openNote(notes[i]),
+                onLongPress: () => _selecting
+                    ? _toggleSelect(notes[i].id)
+                    : _showActions(
+                        notes[i],
+                        AppMenuAnchor(context: cardCtx),
+                      ),
+                onSecondaryTap: (a) => _showActions(notes[i], a),
+                onMore: (a) => _showActions(notes[i], a),
+              ),
             ),
           ),
         ),
