@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/motion/apple_page_route.dart';
+import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
 import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
@@ -611,6 +612,16 @@ class SettingsPage extends StatelessWidget {
             _Group(
               children: [
                 _VersionRow(version: '1.0.0'),
+                _RowDivider(),
+                // 快捷键一览：桌面端有一堆 Ctrl+ 组合，不写出来没人猜得到。
+                // 内容直接读 core/shortcuts 的定义，不在这里手抄一份。
+                _ActionRow(
+                  icon: Icons.keyboard_rounded,
+                  iconColor: c.palette[5],
+                  label: '快捷键',
+                  subtitle: 'Ctrl+N 新建 · Ctrl+F 搜索 · Ctrl+/ 看全部',
+                  onTap: () => showShortcutHelp(context),
+                ),
                 _RowDivider(),
                 const _InfoRow(label: '本地数据库', value: 'SQLite · FTS5'),
                 _RowDivider(),

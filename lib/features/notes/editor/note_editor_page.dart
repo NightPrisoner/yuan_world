@@ -20,12 +20,12 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
+import '../../../core/shortcuts/app_shortcuts.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/text_stats.dart';
 import '../../../core/utils/toc.dart';
@@ -154,6 +154,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   // 用带实时样式的控制器：**加粗**、# 标题、`代码` 输入即生效
   final MarkdownEditingController _body = MarkdownEditingController();
   final FocusNode _bodyFocus = FocusNode();
+
+  /// 快捷键层的焦点节点（Ctrl+S / Ctrl+E / Esc 靠它才收得到按键）。
+  final FocusNode _shortcutFocus = FocusNode(debugLabel: 'editor-shortcuts');
 
   // ── 正文分段：让图片能在正文里显示出来 ──
   //
@@ -288,6 +291,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _loaded = true;
     _title.addListener(_markDirty);
     _body.addListener(_onBodyChanged);
+    // 把焦点要过来，快捷键才生效（见 [_shortcuts]）。不等用户先点一下：
+    // 打开笔记随手 Ctrl+S 是很自然的动作，那时候还得先点一下太别扭。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_shortcutFocus.hasFocus) _shortcutFocus.requestFocus();
+    });
   }
 
   @override
@@ -300,6 +308,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _title.dispose();
     _body.dispose();
     _bodyFocus.dispose();
+    _shortcutFocus.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -334,7 +343,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _saveTimer = Timer(const Duration(milliseconds: 1200), _save);
   }
 
-  void _save() {
+  /// 落库。返回**这次是不是真的写了**（没改动就什么都不做，返回 false）。
+  bool _save() {
     final text = _body.text;
     final title = _title.text.trim();
 
@@ -344,7 +354,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 会把修改时间改掉，列表里的排序也跟着乱跳。
     // 用字符串比对而不是靠 dirty 标志：不用在每个改动入口都记得打标记，
     // 漏一个就会退化成旧行为。
-    if (title == _savedTitle && text == _savedBody) return;
+    if (title == _savedTitle && text == _savedBody) return false;
 
     final state = context.read<AppState>();
     state.repo.updateNote(
@@ -360,6 +370,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _savedTitle = title;
     _savedBody = text;
     if (mounted) setState(() {});
+    return true;
   }
 
   /// 离开页面前强制落库。
@@ -674,6 +685,55 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _withBody(() => MarkdownEditing.setHeading(_activeBody, next));
   }
 
+  /// 立刻落库并给个明确回执（`Ctrl+S`）。
+  ///
+  /// 为什么还要这个：编辑器本来就有 1.2 秒的自动保存，但"我现在就要它存下去"
+  /// 是写东西时最本能的一个动作；按了没反应会让人怀疑到底存没存。
+  /// 没有任何改动时也回话（"没有改动"），而不是假装保存了。
+  void _saveNow() {
+    _saveTimer?.cancel();
+    final saved = _save();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(saved ? '已保存' : '没有改动'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Esc：从最外层往里退 —— 先退窗口全屏，再退占满页面，最后退出编辑。
+  void _escape() {
+    if (widget.windowFullscreen) {
+      widget.onToggleWindowFullscreen?.call();
+    } else if (widget.fullscreen) {
+      widget.onToggleFullscreen?.call();
+    } else {
+      _flushAndLeave();
+    }
+  }
+
+  /// 编辑器自己的快捷键。
+  ///
+  /// `Ctrl+E`（结束编辑）在这里绑、而不是在工作区：退出编辑前必须先把
+  /// 没保存的内容落库（[_flushAndLeave]），只有编辑器自己知道怎么做。
+  /// 编辑器嵌在三栏里时它的绑定比外层工作区的更近，会先命中。
+  ///
+  /// 结构上**焦点节点在快捷键层里面**：按键是从当前焦点往上冒泡的，
+  /// 焦点要是落在这一层外面（比如工作区那个节点），这里一条都收不到。
+  /// 所以编辑器一建好就主动把 [_shortcutFocus] 拿到手。
+  Widget _shortcuts(Widget child) => CallbackShortcuts(
+        bindings: bindShortcuts(<String, VoidCallback>{
+          AppShortcutIds.save: _saveNow,
+          AppShortcutIds.edit: _flushAndLeave,
+          AppShortcutIds.exitFullscreen: _escape,
+        }),
+        child: Focus(
+          focusNode: _shortcutFocus,
+          child: child,
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
@@ -711,20 +771,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           : content;
 
       return _wrapDrop(
-        CallbackShortcuts(
-        bindings: <ShortcutActivator, VoidCallback>{
-          // Esc：从最外层往里退 —— 先退窗口全屏，再退占满页面，最后退编辑
-          const SingleActivator(LogicalKeyboardKey.escape): () {
-            if (widget.windowFullscreen) {
-              widget.onToggleWindowFullscreen?.call();
-            } else if (widget.fullscreen) {
-              widget.onToggleFullscreen?.call();
-            } else {
-              _flushAndLeave();
-            }
-          },
-        },
-        child: Focus(
+        _shortcuts(
+        Focus(
           canRequestFocus: false,
           skipTraversal: true,
           child: Column(
@@ -819,6 +867,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     }
 
     return _wrapDrop(
+      _shortcuts(
       Scaffold(
       backgroundColor: c.background,
       appBar: AppBar(
@@ -860,6 +909,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           ],
         ),
         ),
+      ),
       ),
       c,
     );

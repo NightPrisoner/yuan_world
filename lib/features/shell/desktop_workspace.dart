@@ -24,7 +24,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -33,6 +32,7 @@ import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/platform/window_mode.dart';
 import '../../core/motion/apple_page_route.dart';
+import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_menu.dart';
 import '../../data/exporter/note_exporter.dart';
@@ -335,6 +335,13 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   bool _detailOpen = false;
   final TextEditingController _search = TextEditingController();
 
+  /// 搜索框的焦点：`Ctrl+F` 要能把光标送进去。
+  final FocusNode _searchFocus = FocusNode();
+
+  /// 工作区自己的焦点节点。快捷键层挂在它外面（见 build），
+  /// 所以**它有没有焦点决定了 Ctrl+N 这些能不能按**。
+  final FocusNode _workspaceFocus = FocusNode(debugLabel: 'workspace');
+
   // ── 三栏宽度（可拖动） ──
   // 上限给得比较宽松：宽屏下用户可能想把列表栏拉得很宽看瀑布流
   static const double _navMin = 160;
@@ -375,6 +382,8 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   void initState() {
     super.initState();
     _restoreWidths();
+    // 焦点一有变化就看看是不是"悬空"了（见 [_refocusIfDangling]）
+    FocusManager.instance.addListener(_refocusIfDangling);
     if (!kDebugMode) return;
     final env = Platform.environment;
 
@@ -394,8 +403,11 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
 
   @override
   void dispose() {
+    FocusManager.instance.removeListener(_refocusIfDangling);
     _navAnim.dispose();
     _search.dispose();
+    _searchFocus.dispose();
+    _workspaceFocus.dispose();
     _folderScroll.dispose();
     super.dispose();
   }
@@ -450,8 +462,56 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     });
   }
 
-  void _goSection(_Section s) {
-    setState(() {
+  /// Ctrl+F：把光标送进搜索框，并**选中已有内容**。
+  ///
+  /// 选中是有意的：连按两次 Ctrl+F 然后直接打字，就是"改搜索词"，
+  /// 不用先全选或退格 —— 这是 macOS/Windows 上搜索快捷键的共同约定。
+  void _focusSearch() {
+    // 分区不对（比如正在统计页）时先切回笔记区：搜索框只在那一栏里，
+    // 而且它要等下一帧才建出来。
+    if (_section != _Section.notes && _section != _Section.archived) {
+      _goSection(_Section.notes);
+      // 注意：`addPostFrameCallback` 自己**不会**要一帧，界面闲着的时候
+      // 这个回调可能永远不跑（Ctrl+F 就这么静默失效过）—— 所以只有在
+      // setState 已经安排好下一帧的情况下才用它。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _grabSearchFocus();
+      });
+      return;
+    }
+    _grabSearchFocus();
+  }
+
+  void _grabSearchFocus() {
+    _searchFocus.requestFocus();
+    _search.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _search.text.length,
+    );
+  }
+
+  /// 焦点掉到"作用域"上（而不是某个真控件）时，把它要回工作区。
+  ///
+  /// 为什么要管这个：按键是从**当前焦点**一路往祖先冒泡的，工作区的
+  /// 快捷键层在焦点节点外面；焦点一旦落到包着我们的那个作用域上
+  /// （unfocus、弹窗收掉、编辑器关掉拆节点都会），冒泡路径里就没有
+  /// 快捷键层了 —— Ctrl+N / Ctrl+F 全部静默失效。
+  ///
+  /// **不能无脑抢**：弹窗、别的路由有自己的作用域，焦点落在它们身上时
+  /// 说明用户正在那边操作，抢回来会打断键盘导航。所以只在"焦点就是
+  /// 我们自己那个作用域"（或者干脆没有焦点）时才要回来。
+  void _refocusIfDangling() {
+    final f = FocusManager.instance.primaryFocus;
+    final ours = _workspaceFocus.nearestScope;
+    final dangling = f == null ||
+        identical(f, FocusManager.instance.rootScope) ||
+        (f is FocusScopeNode && identical(f, ours));
+    if (!dangling) return;
+    // requestFocus 会在下一帧应用，不需要自己再排一帧
+    _workspaceFocus.requestFocus();
+  }
+
+  void _goSection(_Section s) {    setState(() {
       _section = s;
       if (s != _Section.notes) {
         _editing = false;
@@ -516,30 +576,57 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
       );
     }
 
-    return Focus(
-      // 让整个工作区能接收快捷键；子控件（搜索框、编辑器）拿到焦点后
-      // 事件仍会向上冒泡到这里
-      autofocus: true,
-      child: CallbackShortcuts(
-        bindings: <ShortcutActivator, VoidCallback>{
-          const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
-              _createNote(state),
-          const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
-              _createNote(state),
-          // Esc 退出全屏。全屏之后没有任何可见的"退出"提示，
-          // 不给个键盘出口用户会以为卡住了。
-          // 从外往里退：先退**窗口**全屏，再退**占满页面**。
-          const SingleActivator(LogicalKeyboardKey.escape): () {
-            if (_windowFullscreen) {
-              setState(() => _windowFullscreen = false);
-              setAppFullscreen(false);
-              return;
-            }
-            if (_editorFullscreen) {
-              setState(() => _editorFullscreen = false);
-            }
-          },
+    // 焦点"悬空"的时候把工作区接回来：编辑器关掉、输入框被 unfocus、
+    // 弹窗收掉……都可能让焦点落到某个**作用域**上，而快捷键收不到按键
+    // （按键从焦点往上冒泡，作用域在快捷键层外面）—— 表现就是
+    // "快捷键时灵时不灵"，最难查。
+    //
+    // 挂在 FocusManager 上而不是"每次 build 查一次"：崩掉的那一刻
+    // 往往**没有重建**（unfocus 不会触发 build），查不到。
+
+    return CallbackShortcuts(
+      // 按键 → 动作的对照表来自 core/shortcuts（帮助面板读的是同一份，
+      // 所以"面板里写的"和"实际能按的"不可能对不上）
+      bindings: bindShortcuts(<String, VoidCallback>{
+        AppShortcutIds.newNote: () => _createNote(state),
+        AppShortcutIds.search: _focusSearch,
+        // 只在"阅读态"里进入编辑：编辑态里 Ctrl+E 由编辑器自己处理
+        // （它才知道怎么安全地存盘退出，见 note_editor_page.dart）
+        AppShortcutIds.edit: () {
+          if (!_editing && _selectedNoteId != null && listSection) {
+            setState(() => _editing = true);
+          }
         },
+        AppShortcutIds.allNotes: () => _goSection(_Section.notes),
+        AppShortcutIds.archived: () => _goSection(_Section.archived),
+        AppShortcutIds.todos: () => _goSection(_Section.todos),
+        AppShortcutIds.stats: () => _goSection(_Section.stats),
+        AppShortcutIds.trash: () => _goSection(_Section.trash),
+        AppShortcutIds.settings: () => _goSection(_Section.settings),
+        AppShortcutIds.help: () => showShortcutHelp(context),
+        // Esc 退出全屏。全屏之后没有任何可见的"退出"提示，
+        // 不给个键盘出口用户会以为卡住了。
+        // 从外往里退：先退**窗口**全屏，再退**占满页面**。
+        AppShortcutIds.exitFullscreen: () {
+          if (_windowFullscreen) {
+            setState(() => _windowFullscreen = false);
+            setAppFullscreen(false);
+            return;
+          }
+          if (_editorFullscreen) {
+            setState(() => _editorFullscreen = false);
+          }
+        },
+      }),
+      // **顺序很重要**：焦点节点必须在快捷键层**里面**。
+      //
+      // 按键是从当前焦点一路往上冒泡的，所以只有"焦点是 Shortcuts 的后代"
+      // 时才收得到。反过来（Focus 包着 Shortcuts）焦点落在外面，
+      // 绑什么键都永远不会触发 —— 这个错误的表现就是"快捷键全都没反应"，
+      // 而且外观上一点异常都没有，很难查。
+      child: Focus(
+        focusNode: _workspaceFocus,
+        autofocus: true,
         child: Scaffold(
           backgroundColor: c.background,
           // 全屏编辑时把导航栏和列表栏都收起来，编辑器占满整窗
@@ -1489,6 +1576,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                   Expanded(
                     child: TextField(
                       controller: _search,
+                      focusNode: _searchFocus,
                       onChanged: (v) {
                         state.setQuery(v);
                         _goSection(_Section.notes);
