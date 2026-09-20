@@ -84,9 +84,22 @@ extension NoteMutations on NoteRepository {
     }
 
     if (title != null) {
+      // **改标题要把指向旧标题的双链一起改掉**（用户明确要求"改名不能让链接断"）。
+      //
+      // 双链存的是标题字面量，不改的话：目标一改名，所有指向它的 `[[旧标题]]`
+      // 就全断了。改写放在这里（而不是编辑器那层）是因为"改标题"的入口不止
+      // 一个：编辑器保存、批量重命名、导入回写，任何一个漏掉都会留下断链。
+      final before = _d.select(
+        'SELECT title FROM notes WHERE id = ?',
+        <Object?>[id],
+      );
+      final oldTitle = before.isEmpty ? null : before.first['title'] as String?;
       set('title', title);
       // 排序键跟着标题走，否则改了标题排序还是旧的
       set('sort_key', windowsSortKey(title));
+      if (oldTitle != null && oldTitle.trim() != title.trim()) {
+        _cascadeLinkRename(oldTitle, title);
+      }
     }
     if (content != null) set('content', content);
     if (excerpt != null) set('excerpt', excerpt);
@@ -188,6 +201,32 @@ extension NoteMutations on NoteRepository {
   }
 
   // ── 事件 ────────────────────────────────────────────────────────────────
+
+  /// 把**全库**正文里指向 [oldTitle] 的双链改写成 [newTitle]。
+  ///
+  /// 先 `LIKE '%[[旧标题%'` 粗筛（几十毫秒内的事），再用
+  /// [rewriteWikiLinks] 精确认——和反向链接查询同一套口径，
+  /// 免得 `[[旧标题2]]` 被 `[[旧标题` 误伤。
+  ///
+  /// 摘要（excerpt）里也可能带着链接文字，所以一并重写。
+  /// **不改 `updated_at`**：这不是用户对那篇笔记的编辑，把"最后编辑"
+  /// 时间搅乱了，按时间排序的列表会莫名其妙地跳。
+  void _cascadeLinkRename(String oldTitle, String newTitle) {
+    final rows = _d.select(
+      'SELECT id, content FROM notes WHERE content LIKE ?',
+      <Object?>['%[[${oldTitle.trim()}%'],
+    );
+    for (final r in rows) {
+      final id = r['id'] as int;
+      final content = (r['content'] as String?) ?? '';
+      final next = rewriteWikiLinks(content, from: oldTitle, to: newTitle);
+      if (next == content) continue;
+      _d.execute(
+        'UPDATE notes SET content = ?, excerpt = ? WHERE id = ?',
+        <Object?>[next, makeExcerpt(next), id],
+      );
+    }
+  }
 
   void logEvent(int noteId, String kind) {
     final now = DateTime.now();

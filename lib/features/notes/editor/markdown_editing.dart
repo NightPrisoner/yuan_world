@@ -160,6 +160,37 @@ class MarkdownEditing {
     wrap(controller, '[', '](url)');
   }
 
+  /// 插入**内部链接**（指向另一篇笔记的双链）。
+  ///
+  /// 有选中文字时把它当别名（`[[标题|选中文字]]`）—— 用户选了一段话再插链接，
+  /// 想保留那段话当显示文字是常态；没选就插 `[[标题]]`，光标落在后面。
+  ///
+  /// 标题由调用方从"选笔记"页面带回来，**不需要用户手打** ——
+  /// 手打标题又慢又容易错，错了还只是"点了没反应"。
+  static void insertNoteLink(TextEditingController controller, String title) {
+    final t = title.trim();
+    if (t.isEmpty) return;
+    final sel = controller.selection;
+    final text = controller.text;
+
+    if (sel.isValid && !sel.isCollapsed) {
+      final alias = text.substring(sel.start, sel.end).trim();
+      final snippet = alias.isEmpty ? '[[$t]]' : '[[$t|$alias]]';
+      controller.value = TextEditingValue(
+        text: text.replaceRange(sel.start, sel.end, snippet),
+        selection: TextSelection.collapsed(offset: sel.start + snippet.length),
+      );
+      return;
+    }
+
+    final at = sel.isValid ? sel.start : text.length;
+    final snippet = '[[$t]]';
+    controller.value = TextEditingValue(
+      text: text.replaceRange(at, at, snippet),
+      selection: TextSelection.collapsed(offset: at + snippet.length),
+    );
+  }
+
   // ── 内部工具 ────────────────────────────────────────────────────────────
 
   static TextSelection _effectiveSelection(TextEditingController controller) {

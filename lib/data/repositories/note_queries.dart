@@ -289,4 +289,27 @@ extension NoteQueries on NoteRepository {
     );
     return rows.map((r) => '${r['title']} ${r['excerpt']}').toList();
   }
+
+  /// 挑链接目标用：id + 标题 + 摘要，最近改的排前面。
+  ///
+  /// 单独一个方法而不是复用 [allTitlesAndExcerpts]：那个把标题和摘要**拼成
+  /// 一个字符串**（给全文搜索的候选词用的），拿不回来 id，也就没法确认
+  /// 选中的是哪一篇 —— 同名笔记会挑错。
+  List<({int id, String title, String excerpt})> noteTitlesForPicker({
+    int limit = 2000,
+  }) {
+    final rows = _d.select(
+      'SELECT id, title, excerpt FROM notes WHERE ${liveNote("notes")} '
+      'ORDER BY updated_at DESC LIMIT ?',
+      [limit],
+    );
+    return <({int id, String title, String excerpt})>[
+      for (final r in rows)
+        (
+          id: r['id'] as int,
+          title: (r['title'] as String?) ?? '',
+          excerpt: (r['excerpt'] as String?) ?? '',
+        ),
+    ];
+  }
 }

@@ -68,3 +68,33 @@ List<String> wikiTargetsIn(String text) {
   }
   return out;
 }
+
+/// 把正文里指向 [from] 的双链改写成指向 [to]，其余一个字不动。
+///
+/// ## 为什么需要它
+///
+/// 双链存的是**标题字面量**（见文件头那段说明），于是目标笔记一改名，
+/// 所有指向它的链接就断了 —— 点开只会提示"没有找到《旧标题》"。用户明确
+/// 要求"改名不能让链接断"，所以改标题时顺手把引用它的正文一起改掉。
+///
+/// 三个细节：
+///  · **带别名的写法要保留别名**（`[[旧|小名]]` → `[[新|小名]]`），
+///    别名的意义就是"我不想显示标题"；
+///  · 只改**目标**匹配的那些，`[[旧标题2]]` 不会被 `[[旧标题` 误伤
+///    （先按正则整体取出，再逐条比对 target，不做字符串替换）；
+///  · 原文怎么写就怎么留着（多余空格不重排），只换方括号里的标题。
+String rewriteWikiLinks(String text, {required String from, required String to}) {
+  final f = from.trim();
+  final t = to.trim();
+  if (f.isEmpty || t.isEmpty || f == t) return text;
+  return text.replaceAllMapped(kWikiLinkPattern, (m) {
+    final raw = m.group(1) ?? '';
+    final bar = raw.indexOf('|');
+    final target = (bar < 0 ? raw : raw.substring(0, bar)).trim();
+    if (target != f) return m.group(0)!;
+    if (bar < 0) return '[[$t]]';
+    final label = raw.substring(bar + 1).trim();
+    // `[[旧|]]` 这种空别名按"没有别名"处理
+    return label.isEmpty ? '[[$t]]' : '[[$t|$label]]';
+  });
+}

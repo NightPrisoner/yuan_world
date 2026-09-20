@@ -37,6 +37,7 @@ import 'markdown_controller.dart';
 import 'markdown_editing.dart';
 import '../widgets/field_blocks.dart';
 import '../widgets/media_card.dart';
+import '../widgets/note_link_picker.dart';
 import '../widgets/toc_panel.dart';
 import '../../../data/repositories/note_repository.dart';
 
@@ -674,6 +675,44 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     }
     _scheduleSave();
     setState(() {});
+  }
+
+  /// 插入链接：先问是**内部**（跳到另一篇笔记）还是**外部**（打开网址）。
+  ///
+  /// 以前这个按钮只会插 `[文字](url)` —— 想链自己另一篇笔记得手打
+  /// `[[标题]]`，慢、容易打错，打错了还只是"点了没反应"。现在内部链接
+  /// 走一个能搜索、能翻页的选笔记界面，选完直接插入（有选中文字就当别名）。
+  Future<void> _insertLinkFlow() async {
+    final kind = await showAppMenu<String>(
+      context,
+      header: '插入链接',
+      items: <AppMenuItem<String>>[
+        AppMenuItem(
+          value: 'note',
+          label: '内部链接（跳到另一篇笔记）',
+          icon: Icons.article_outlined,
+        ),
+        AppMenuItem(
+          value: 'url',
+          label: '外部链接（打开网址）',
+          icon: Icons.public_rounded,
+        ),
+      ],
+    );
+    if (!mounted || kind == null) return;
+
+    if (kind == 'url') {
+      _withBody(() => MarkdownEditing.insertLink(_activeBody));
+      return;
+    }
+
+    final picked = await pickNoteToLink(
+      context,
+      excludeNoteId: widget.noteId,
+    );
+    if (!mounted || picked == null) return;
+    _withBody(() => MarkdownEditing.insertNoteLink(_activeBody, picked.title));
+    _toast('已插入指向《${picked.title}》的链接');
   }
 
   void _cycleHeading() {
@@ -1357,8 +1396,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                 _Sep(c),
                 _ToolButton(
                   icon: Icons.link_rounded,
-                  tooltip: '链接',
-                  onTap: () => _withBody(() => MarkdownEditing.insertLink(_activeBody)),
+                  tooltip: '插入链接',
+                  onTap: _insertLinkFlow,
                 ),
                 _ToolButton(
                   icon: Icons.horizontal_rule_rounded,
