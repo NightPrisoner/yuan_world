@@ -399,6 +399,30 @@ void main() {
     });
   });
 
+  group('手机端目录面板', () {
+    testWidgets('窄屏开目录是浮层：不挤正文、不出溢出条纹', (tester) async {
+      final id = state.repo.insertNote(
+        title: '带标题的',
+        content: '# 第一章\n\n正文一。\n\n## 小节 A\n\n正文二。\n\n# 第二章\n\n正文三。',
+        excerpt: '正文',
+        publishedAt: DateTime.now(),
+        charCount: 30,
+      );
+      await state.refresh();
+      await pumpPhone(tester, NoteDetailPage(noteId: id));
+
+      // 打开目录
+      await tester.tap(find.byTooltip('目录'));
+      await tester.pumpAndSettle();
+
+      // 真机上这里是"RIGHT OVERFLOWED BY ..."的条纹
+      expect(tester.takeException(), isNull);
+      expect(find.text('第一章'), findsWidgets, reason: '目录条目要出来');
+      // 浮层：正文还在（没被挤掉），目录盖在上面
+      expect(find.textContaining('正文一'), findsWidgets);
+    });
+  });
+
   group('手机端导出文集', () {
     testWidgets('文件夹管理页里有导出入口，点开是格式菜单', (tester) async {
       final id = await state.createCollection('甲');

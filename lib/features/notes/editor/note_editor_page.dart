@@ -936,6 +936,31 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       }),
       onClose: () => setState(() => _tocOpen = false),
     );
+    // 窄屏（手机）不能停靠：目录固定 220 宽会把正文挤到 170，
+    // 编辑器的工具栏和分段立刻撑爆（阅读页那边真机上已经踩过了：
+    // 一开目录就出现 "RIGHT OVERFLOWED BY ..." 的条纹）。改成浮层。
+    final narrow = MediaQuery.sizeOf(context).width < 700;
+    if (narrow) {
+      return Stack(
+        children: [
+          body,
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _tocOpen = false),
+              child: ColoredBox(color: Colors.black.withValues(alpha: 0.18)),
+            ),
+          ),
+          Positioned(
+            top: MediaQuery.paddingOf(context).top,
+            bottom: 0,
+            left: _tocSide == 'left' ? 0 : null,
+            right: _tocSide == 'right' ? 0 : null,
+            child: panel,
+          ),
+        ],
+      );
+    }
     return Row(
       children: [
         if (_tocSide == 'left') ...[panel, TocResizer(onDrag: _resizeToc)],

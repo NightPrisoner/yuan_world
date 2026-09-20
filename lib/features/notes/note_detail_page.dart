@@ -488,21 +488,55 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       onClose: () => setState(() => _tocOpen = false),
     );
 
-    final body = showToc
-        ? Row(
-            children: [
-              if (_tocSide == 'left') ...[
-                tocPanel,
-                TocResizer(onDrag: _resizeToc, onEnd: () {}),
-              ],
-              Expanded(child: scrollView),
-              if (_tocSide == 'right') ...[
-                TocResizer(onDrag: (d) => _resizeToc(-d), onEnd: () {}),
-                tocPanel,
-              ],
-            ],
-          )
-        : scrollView;
+    // 手机上**不能停靠**：屏幕一共 390 宽，目录固定 220 留给正文只有 170，
+    // 正文顶部那排按钮（返回 / 标签 / 收藏 / 编辑 / 更多 / 目录）立刻撑爆 ——
+    // 真机上就是这么发现的：一开目录，页面中间出现一条
+    // "RIGHT OVERFLOWED BY ..." 的条纹，目录还压到了顶栏上。
+    //
+    // 所以窄屏改成**浮层**：正文照旧占满宽度，目录盖在上面 + 一层可点的
+    // 遮罩（点空白关掉）。这也是手机上放侧栏的常规做法。
+    final narrow = MediaQuery.sizeOf(context).width < 700;
+
+    final body = !showToc
+        ? scrollView
+        : narrow
+            ? Stack(
+                children: [
+                  scrollView,
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => setState(() => _tocOpen = false),
+                      child: ColoredBox(
+                        color: Colors.black.withValues(alpha: 0.18),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    // 躲开状态栏：阅读页的正文自己画顶栏、不吃系统 inset，
+                    // 浮层从 0 开始的话会顶到时间/电量那一行去（真机截图里
+                    // 「目录」两个字和状态栏图标叠在一起）。
+                    top: MediaQuery.paddingOf(context).top,
+                    bottom: 0,
+                    left: _tocSide == 'left' ? 0 : null,
+                    right: _tocSide == 'right' ? 0 : null,
+                    child: tocPanel,
+                  ),
+                ],
+              )
+            : Row(
+                children: [
+                  if (_tocSide == 'left') ...[
+                    tocPanel,
+                    TocResizer(onDrag: _resizeToc, onEnd: () {}),
+                  ],
+                  Expanded(child: scrollView),
+                  if (_tocSide == 'right') ...[
+                    TocResizer(onDrag: (d) => _resizeToc(-d), onEnd: () {}),
+                    tocPanel,
+                  ],
+                ],
+              );
 
     // 嵌入模式（三栏布局右侧面板）直接返回内容，
     // 不套 Scaffold，也不显示返回按钮——面板里没有"返回"这个概念。
