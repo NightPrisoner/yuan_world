@@ -37,6 +37,25 @@ class NotesPage extends StatefulWidget {
   State<NotesPage> createState() => _NotesPageState();
 }
 
+/// 新建一篇空笔记并直接进编辑器。
+///
+/// 抽成顶层函数是因为**手机端的快捷键**（Ctrl+N）也要走同一条路：
+/// 两处各写一遍的话，改一处忘一处，就会变成"快捷键建出来的笔记
+/// 和 FAB 建出来的不一样"。
+Future<void> createAndOpenNote(BuildContext context) async {
+  final state = context.read<AppState>();
+  // 提前取好 navigator：跨 await 之后再用 context 会被 lint 拦（也确实容易出错）
+  final navigator = Navigator.of(context);
+  final id = state.createNote();
+  await state.refresh();
+  if (!context.mounted) return;
+  // 新建出来的是空笔记，直接进编辑器 —— 跳阅读页什么也看不到
+  await navigator.push(
+    ApplePageRoute<void>(pageBuilder: (_) => NoteEditorPage(noteId: id)),
+  );
+  if (context.mounted) state.refreshListOnly();
+}
+
 class _NotesPageState extends State<NotesPage> {
   final ScrollController _scroll = ScrollController();
 
@@ -648,20 +667,7 @@ class _NotesPageState extends State<NotesPage> {
     final c = context.colors;
     return Pressable(
       scale: 0.92,
-      onTap: () async {
-        // 提前取好 navigator：跨 await 之后再用 context 会被 lint 拦（也确实容易出错）
-        final navigator = Navigator.of(context);
-        final id = state.createNote();
-        await state.refresh();
-        if (!mounted) return;
-        // 新建出来的是空笔记，直接进编辑器——跳阅读页什么也看不到
-        await navigator.push(
-          ApplePageRoute<void>(
-            pageBuilder: (_) => NoteEditorPage(noteId: id),
-          ),
-        );
-        if (mounted) state.refreshListOnly();
-      },
+      onTap: () => createAndOpenNote(context),
       child: Container(
         width: 54,
         height: 54,

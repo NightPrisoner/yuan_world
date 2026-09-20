@@ -10,6 +10,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:yuan_world/app_state.dart';
@@ -18,7 +19,9 @@ import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
 import 'package:yuan_world/features/collections/collection_sheets.dart';
+import 'package:yuan_world/features/notes/editor/note_editor_page.dart';
 import 'package:yuan_world/features/notes/note_detail_page.dart';
+import 'package:yuan_world/features/search/search_page.dart';
 import 'package:yuan_world/features/settings/settings_page.dart';
 import 'package:yuan_world/features/shell/home_shell.dart';
 import 'package:yuan_world/features/trash/trash_page.dart';
@@ -186,6 +189,52 @@ void main() {
 
       expect(state.notes, isEmpty);
       expect(state.trashedNotes.length, 1, reason: '应该在回收站里，不是被抹掉');
+    });
+  });
+
+  group('手机端快捷键', () {
+    testWidgets('Ctrl+3 / Ctrl+1 切底部标签（手机上外接键盘也能用）', (tester) async {
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+      expect(find.text('全部'), findsOneWidget, reason: '默认在笔记页');
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+      expect(find.text('待办'), findsWidgets);
+      expect(find.text('全部'), findsNothing, reason: '已经不在笔记页了');
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit1);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+      expect(find.text('全部'), findsOneWidget);
+    });
+
+    testWidgets('Ctrl+F 打开搜索页', (tester) async {
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+      expect(find.byType(SearchPage), findsOneWidget);
+    });
+
+    testWidgets('Ctrl+N 新建并进编辑器（和 FAB 走同一条路）', (tester) async {
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+      final before = state.notes.length;
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+
+      expect(state.notes.length, before + 1);
+      expect(find.byType(NoteEditorPage), findsOneWidget);
     });
   });
 

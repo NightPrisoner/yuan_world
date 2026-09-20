@@ -16,8 +16,11 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
 import '../../core/motion/app_motion.dart';
+import '../../core/motion/apple_page_route.dart';
+import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
 import '../notes/notes_page.dart';
+import '../search/search_page.dart';
 import '../settings/settings_page.dart';
 import '../stats/stats_page.dart';
 import '../todos/todos_page.dart';
@@ -32,6 +35,15 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _index = _initialTab();
+
+  /// 窄屏快捷键层的焦点节点（宽屏那套在 DesktopWorkspace 里）。
+  final FocusNode _shellFocus = FocusNode(debugLabel: 'mobile-shell');
+
+  @override
+  void dispose() {
+    _shellFocus.dispose();
+    super.dispose();
+  }
 
   /// 调试用：设置环境变量 `YW_TAB=1` 可直接启动到指定标签页，
   /// 免去每次手动点击（截图验证、演示时很方便）。仅 debug 构建生效。
@@ -68,13 +80,37 @@ class _HomeShellState extends State<HomeShell> {
       ],
     );
 
-    return Scaffold(
-      backgroundColor: c.groupedBackground,
-      body: body,
-      bottomNavigationBar: _MobileTabBar(
-        index: _index,
-        tabs: _tabs,
-        onSelect: (i) => setState(() => _index = i),
+    // **窄屏也要能按快捷键。**
+    //
+    // 设置页里那行「快捷键」是两端口径的，而快捷键层原本只在三栏工作区
+    // （宽屏）里 —— 手机上外接键盘按 Ctrl+N 毫无反应，那行说明就是骗人的。
+    // 手机能做的动作比桌面少，所以只绑真正存在的那几个：新建、搜索、切标签。
+    //
+    // 结构照抄工作区那条踩过的坑：**快捷键层在外、焦点节点在内**
+    // （按键从当前焦点往上冒泡，反过来的话永远收不到）。
+    return CallbackShortcuts(
+      bindings: bindShortcuts(<String, VoidCallback>{
+        AppShortcutIds.newNote: () => createAndOpenNote(context),
+        AppShortcutIds.search: () => Navigator.of(context).push(
+          ApplePageRoute<void>(pageBuilder: (_) => const SearchPage()),
+        ),
+        AppShortcutIds.allNotes: () => setState(() => _index = 0),
+        AppShortcutIds.todos: () => setState(() => _index = 1),
+        AppShortcutIds.stats: () => setState(() => _index = 2),
+        AppShortcutIds.settings: () => setState(() => _index = 3),
+      }),
+      child: Focus(
+        focusNode: _shellFocus,
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: c.groupedBackground,
+          body: body,
+          bottomNavigationBar: _MobileTabBar(
+            index: _index,
+            tabs: _tabs,
+            onSelect: (i) => setState(() => _index = i),
+          ),
+        ),
       ),
     );
   }
