@@ -30,6 +30,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/text_stats.dart';
 import '../../../core/utils/toc.dart';
 import '../../../core/widgets/app_menu.dart';
+import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_importer.dart';
 import 'body_segments.dart';
 import 'markdown_controller.dart';
@@ -1208,11 +1209,10 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-            child: Image.file(
-              File(abs),
-              width: double.infinity,
+            child: LocalImage(
+              path: abs,
               fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Container(
+              errorBuilder: (_) => Container(
                 height: 76,
                 alignment: Alignment.center,
                 color: c.fill,

@@ -7,14 +7,13 @@
 /// - 截图渐显 + 从模糊到清晰的过渡，避免图片"跳"出来
 library;
 
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_menu.dart';
+import '../../../core/widgets/local_image.dart';
 import '../../../data/models.dart';
 
 class NoteCard extends StatefulWidget {
@@ -364,8 +363,9 @@ class _Cover extends StatelessWidget {
 
 /// 本地图片加载：带淡入 + 失败兜底。
 ///
-/// 用 [Image.file] 而不是网络图，因为这是纯本地应用。
-/// 加 `frameBuilder` 做淡入，避免图片"啪"地出现破坏流畅感。
+/// 用 [LocalImage] 而不是裸 `Image.file`：同一个组件在列表里当 96px 的
+/// 缩略图、在卡片里当 300px 的封面，解码尺寸得跟着显示尺寸走 ——
+/// 不然一张 9MB 的图会被整张解码进内存（见 local_image.dart 的说明）。
 class _LocalImage extends StatelessWidget {
   const _LocalImage({required this.path, required this.color});
   final String path;
@@ -373,25 +373,11 @@ class _LocalImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final file = File(path);
-    if (!file.existsSync()) {
-      return ColoredBox(color: color);
-    }
-    return Image.file(
-      file,
+    return LocalImage(
+      path: path,
       fit: BoxFit.cover,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.medium,
-      frameBuilder: (context, child, frame, wasSyncLoaded) {
-        if (wasSyncLoaded) return child;
-        return AnimatedOpacity(
-          opacity: frame == null ? 0 : 1,
-          duration: AppMotion.normal,
-          curve: AppMotion.enter,
-          child: child,
-        );
-      },
-      errorBuilder: (_, _, _) => ColoredBox(
+      fallbackColor: color,
+      errorBuilder: (context) => ColoredBox(
         color: color,
         child: const Center(
           child: Icon(Icons.broken_image_outlined, size: 18),

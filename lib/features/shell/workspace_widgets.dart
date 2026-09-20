@@ -840,16 +840,13 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                             scale: _hover ? 1.04 : 1.0,
                             duration: AppMotion.normal,
                             curve: AppMotion.enter,
-                            child: Image.file(
-                              File(
-                                p.join(
-                                  widget.imageRoot,
-                                  effectiveCover(n.coverImage)!,
-                                ),
+                            child: LocalImage(
+                              path: p.join(
+                                widget.imageRoot,
+                                effectiveCover(n.coverImage)!,
                               ),
                               fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) =>
-                                  ColoredBox(color: c.fill),
+                              fallbackColor: c.fill,
                             ),
                           ),
                         ),

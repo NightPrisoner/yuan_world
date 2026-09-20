@@ -7,8 +7,6 @@
 ///   4. 编辑交给独立的编辑器页（工具栏 / 预览 / 自动保存都在那边）
 library;
 
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -19,6 +17,7 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/toc.dart';
 import '../../core/widgets/app_menu.dart';
+import '../../core/widgets/local_image.dart';
 import '../../data/models.dart';
 import '../tags/tag_sheets.dart';
 import 'editor/body_segments.dart';
@@ -455,10 +454,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
       child: AspectRatio(
         aspectRatio: 16 / 10,
-        child: Image.file(
-          File(p.join(imageRoot, cover)),
+        child: LocalImage(
+          path: p.join(imageRoot, cover),
           fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => ColoredBox(color: c.fill),
+          fallbackColor: c.fill,
         ),
       ),
     );

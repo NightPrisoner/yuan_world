@@ -18,6 +18,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_importer.dart';
 import 'media_card.dart';
 import '../../../core/utils/text_stats.dart';
@@ -257,19 +258,10 @@ class ContentBlockView extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
               child: file.existsSync()
-                  ? Image.file(
-                      file,
+                  ? LocalImage(
+                      path: full,
                       fit: BoxFit.contain,
-                      frameBuilder: (context, child, frame, sync) {
-                        if (sync) return child;
-                        return AnimatedOpacity(
-                          opacity: frame == null ? 0 : 1,
-                          duration: AppMotion.normal,
-                          curve: AppMotion.enter,
-                          child: child,
-                        );
-                      },
-                      errorBuilder: (_, _, _) => _brokenImage(c),
+                      errorBuilder: (_) => _brokenImage(c),
                     )
                   : _brokenImage(c),
             ),
@@ -629,6 +621,8 @@ class _ImageViewerState extends State<ImageViewer> {
                       minScale: 1,
                       maxScale: 5,
                       child: Center(
+                        // **这里故意不解码缩放**：看图页能放大到 5 倍，
+                        // 降采样之后再放大就是一坨马赛克（见 local_image.dart）
                         child: Image.file(
                           File(widget.images[i]),
                           fit: BoxFit.contain,

@@ -19,6 +19,7 @@ import 'package:provider/provider.dart';
 import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_importer.dart';
 import '../../../data/models.dart';
 import '../editor/body_segments.dart';
@@ -221,10 +222,11 @@ class _CoverPickerState extends State<_CoverPicker> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Image.file(
-              File(p.join(root, rel)),
+            LocalImage(
+              path: p.join(root, rel),
               fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => ColoredBox(
+              fallbackColor: c.fill,
+              errorBuilder: (_) => ColoredBox(
                 color: c.fill,
                 child: Icon(Icons.broken_image_outlined,
                     size: 20, color: c.quaternaryLabel),
