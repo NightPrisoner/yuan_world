@@ -360,6 +360,45 @@ void main() {
     });
   });
 
+  group('手机端隐私空间', () {
+    testWidgets('进了隐私空间：列表里有出口，设置页那行也变成"退出"', (tester) async {
+      add('公开的');
+      final secret = add('秘密');
+      state.repo.setNoteHidden(secret, true);
+      await state.refresh();
+
+      // 从设置页进（手机端唯一的入口）。设置页很长，先滚到那一行再点
+      await pumpPhone(tester, const SettingsPage());
+      expect(find.text('进入隐私空间'), findsOneWidget);
+      await tester.ensureVisible(find.text('进入隐私空间'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('进入隐私空间'));
+      await tester.pumpAndSettle();
+      expect(state.privacyMode, isTrue);
+
+      // 设置页那行必须变成出口 —— 手机上原本进了就退不出来
+      expect(find.text('退出隐私空间'), findsOneWidget);
+      await tester.ensureVisible(find.text('退出隐私空间'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('退出隐私空间'));
+      await tester.pumpAndSettle();
+      expect(state.privacyMode, isFalse);
+
+      // 列表里也有出口（光看列表得知道自己在哪个空间）
+      state.enterPrivacyMode();
+      await state.refresh();
+      await pumpPhone(tester, const HomeShell());
+      expect(find.textContaining('隐私空间 · 退出'), findsOneWidget);
+      expect(find.text('秘密'), findsOneWidget, reason: '隐私空间里就该只看到隐藏内容');
+      expect(find.text('公开的'), findsNothing);
+
+      await tester.tap(find.textContaining('隐私空间 · 退出'));
+      await tester.pumpAndSettle();
+      expect(state.privacyMode, isFalse);
+      expect(find.text('公开的'), findsOneWidget);
+    });
+  });
+
   group('手机端导出文集', () {
     testWidgets('文件夹管理页里有导出入口，点开是格式菜单', (tester) async {
       final id = await state.createCollection('甲');

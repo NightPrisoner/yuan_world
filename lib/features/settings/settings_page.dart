@@ -500,12 +500,26 @@ class SettingsPage extends StatelessWidget {
                   ),
                 ),
                 _RowDivider(),
+                // 进了隐私空间以后，这一行**变成出口**。
+                //
+                // 桌面上有左栏那个锁形提示可以退出；手机端原本只有
+                // 「进入」这一个入口、**没有任何出口** —— 用户进了隐私空间
+                // 之后只会看到一片（或少量）隐藏内容，既不知道自己在哪儿，
+                // 也退不出去（不持久化，重启才行）。这是实打实的能力缺口。
                 _NavRow(
-                  icon: Icons.lock_rounded,
+                  icon: state.privacyMode
+                      ? Icons.lock_open_rounded
+                      : Icons.lock_rounded,
                   iconColor: c.palette[6],
-                  label: '进入隐私空间',
-                  subtitle: _privacySubtitle(context),
+                  label: state.privacyMode ? '退出隐私空间' : '进入隐私空间',
+                  subtitle: state.privacyMode
+                      ? '当前只看隐私内容，退出后回到全部笔记'
+                      : _privacySubtitle(context),
                   onTap: () async {
+                    if (state.privacyMode) {
+                      state.exitPrivacyMode();
+                      return;
+                    }
                     // 没密码直接进，有密码验一下就进 —— 不再有中间页
                     final ok = await enterPrivacySpace(context);
                     if (!ok || !context.mounted) return;

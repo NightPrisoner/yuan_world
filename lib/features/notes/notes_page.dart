@@ -453,6 +453,18 @@ class _NotesPageState extends State<NotesPage> {
     final f = state.filter;
 
     final chips = <Widget>[
+      // 在隐私空间里，头一个胶囊就是「退出」。
+      //
+      // 手机上没有桌面那个锁形提示，光看列表根本不知道自己站在哪个空间里
+      // （笔记像是凭空少了）。留一个显眼的出口，顺便说明当前在看什么。
+      if (state.privacyMode)
+        _Pill(
+          label: '隐私空间 · 退出',
+          icon: Icons.lock_open_rounded,
+          selected: true,
+          accent: c.palette[6],
+          onTap: state.exitPrivacyMode,
+        ),
       _Pill(
         label: '全部',
         selected: f.collectionId == null && f.tag == null && !f.favoritesOnly,
