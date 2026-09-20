@@ -24,6 +24,7 @@ import '../../data/models.dart';
 import 'editor/body_segments.dart';
 import 'editor/note_editor_page.dart';
 import 'widgets/content_view.dart';
+import 'widgets/toc_panel.dart';
 import 'widgets/field_blocks.dart';
 import 'widgets/note_actions.dart';
 
@@ -70,184 +71,7 @@ class NoteDetailPage extends StatefulWidget {
 }
 
 /// 目录栏与正文之间的拖拽分隔条。
-///
-/// 命中区域 8px、视觉只有 1px —— 1px 的线鼠标根本抓不住。
-class _TocResizer extends StatefulWidget {
-  const _TocResizer({required this.onDrag});
-
-  final void Function(double delta) onDrag;
-
-  @override
-  State<_TocResizer> createState() => _TocResizerState();
-}
-
-class _TocResizerState extends State<_TocResizer> {
-  bool _hover = false;
-  bool _dragging = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final active = _hover || _dragging;
-
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeLeftRight,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onHorizontalDragStart: (_) => setState(() => _dragging = true),
-        onHorizontalDragUpdate: (d) => widget.onDrag(d.delta.dx),
-        onHorizontalDragEnd: (_) => setState(() => _dragging = false),
-        onHorizontalDragCancel: () => setState(() => _dragging = false),
-        child: SizedBox(
-          width: 8,
-          child: Align(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 120),
-              width: active ? 2 : 0.5,
-              height: double.infinity,
-              color: active ? c.tint : c.separator,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 目录侧栏。
-///
-/// **停靠**在正文旁边（对齐 Word 的导航窗格），不是浮在内容上的外挂件：
-/// 正文该多宽就多宽，目录不遮字；位置可左右切换，宽度可拖。
-class _TocPanel extends StatelessWidget {
-  const _TocPanel({
-    required this.entries,
-    required this.minLevel,
-    required this.width,
-    required this.side,
-    required this.onTap,
-    required this.onFlipSide,
-    required this.onClose,
-  });
-
-  final List<TocEntry> entries;
-  final int minLevel;
-  final double width;
-
-  /// `left` | `right`
-  final String side;
-
-  final void Function(TocEntry entry) onTap;
-  final VoidCallback onFlipSide;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-
-    return Container(
-      width: width,
-      decoration: BoxDecoration(
-        color: c.groupedBackground,
-        // 只在与正文相邻的那一侧画分隔线，看起来才像"窗格"而不是"卡片"
-        border: Border(
-          right: side == 'left'
-              ? BorderSide(color: c.separator, width: 0.5)
-              : BorderSide.none,
-          left: side == 'right'
-              ? BorderSide(color: c.separator, width: 0.5)
-              : BorderSide.none,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 6, 8),
-            child: Row(
-              children: [
-                Icon(Icons.toc_rounded, size: 15, color: c.secondaryLabel),
-                const SizedBox(width: 7),
-                Text(
-                  '目录',
-                  style: AppText.footnote.copyWith(
-                    color: c.label,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                Pressable(
-                  onTap: onFlipSide,
-                  scale: 0.86,
-                  child: Tooltip(
-                    message: side == 'left' ? '移到右侧' : '移到左侧',
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: Icon(
-                        side == 'left'
-                            ? Icons.keyboard_double_arrow_right_rounded
-                            : Icons.keyboard_double_arrow_left_rounded,
-                        size: 16,
-                        color: c.tertiaryLabel,
-                      ),
-                    ),
-                  ),
-                ),
-                Pressable(
-                  onTap: onClose,
-                  scale: 0.86,
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: Icon(Icons.close_rounded,
-                        size: 15, color: c.tertiaryLabel),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Divider(height: 1, color: c.separator),
-          Flexible(
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              shrinkWrap: true,
-              itemCount: entries.length,
-              itemBuilder: (context, i) {
-                final e = entries[i];
-                return Pressable(
-                  onTap: () => onTap(e),
-                  scale: 0.99,
-                  haptic: false,
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      14 + e.depthOf(minLevel) * 13.0,
-                      6,
-                      12,
-                      6,
-                    ),
-                    child: Text(
-                      e.text,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppText.footnote.copyWith(
-                        color: e.level == minLevel ? c.label : c.secondaryLabel,
-                        fontWeight: e.level == minLevel
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                        height: 1.4,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
+/// 目录侧栏（实现见 `widgets/toc_panel.dart`，编辑器共用同一个）。
 class _NoteDetailPageState extends State<NoteDetailPage> {
   final ScrollController _scroll = ScrollController();
   final ValueNotifier<double> _collapse = ValueNotifier<double>(0);
@@ -544,7 +368,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     // 目录**停靠**在正文旁边（对齐 Word 的导航窗格），不是浮在内容上的外挂件：
     // 正文该多宽就多宽，目录不遮字。位置可左右切换，宽度可拖。
     final showToc = _tocOpen && _toc.isNotEmpty;
-    final tocPanel = _TocPanel(
+    final tocPanel = TocPanel(
       entries: _toc,
       minLevel: minTocLevel(_toc),
       width: _tocWidth,
@@ -562,11 +386,11 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             children: [
               if (_tocSide == 'left') ...[
                 tocPanel,
-                _TocResizer(onDrag: (d) => _resizeToc(d)),
+                TocResizer(onDrag: _resizeToc, onEnd: () {}),
               ],
               Expanded(child: scrollView),
               if (_tocSide == 'right') ...[
-                _TocResizer(onDrag: (d) => _resizeToc(-d)),
+                TocResizer(onDrag: (d) => _resizeToc(-d), onEnd: () {}),
                 tocPanel,
               ],
             ],

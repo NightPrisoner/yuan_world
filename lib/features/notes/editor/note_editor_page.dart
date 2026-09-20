@@ -14,6 +14,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
@@ -26,6 +27,7 @@ import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/text_stats.dart';
+import '../../../core/utils/toc.dart';
 import '../../../core/widgets/app_menu.dart';
 import '../../../data/media/media_importer.dart';
 import 'body_segments.dart';
@@ -33,6 +35,7 @@ import 'markdown_controller.dart';
 import 'markdown_editing.dart';
 import '../widgets/field_blocks.dart';
 import '../widgets/media_card.dart';
+import '../widgets/toc_panel.dart';
 
 /// 媒体块外面套的悬停壳：鼠标进来才把删除键露出来。
 ///
@@ -159,6 +162,14 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   List<BodySegment> _segments = const <BodySegment>[];
   final List<MarkdownEditingController> _segControllers = [];
   final List<FocusNode> _segFocus = [];
+
+  /// 每段落一个 GlobalKey（目录跳转用）。
+  final List<GlobalKey> _segKeys = [];
+
+  /// 目录面板：开关、停靠侧、宽度。侧向和宽度跟设置走，和阅读页共享。
+  bool _tocOpen = false;
+  String _tocSide = 'right';
+  double _tocWidth = 220;
   int? _focusedSegment;
 
   /// 是否正有文件悬停在编辑区上方（画那层"松手即插入"的蒙层用）。
@@ -190,6 +201,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     }
     _segControllers.clear();
     _segFocus.clear();
+    _segKeys.clear();
     _focusedSegment = null;
   }
 
@@ -212,6 +224,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       if (seg is TextSegment) controller.addListener(_onSegmentChanged);
       _segControllers.add(controller);
       _segFocus.add(node);
+      // 每段落一个 key：目录跳转要靠它 ensureVisible
+      _segKeys.add(GlobalKey());
     }
   }
 
@@ -254,6 +268,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   void initState() {
     super.initState();
     final state = context.read<AppState>();
+    _tocSide = state.tocSide;
+    _tocWidth = state.tocWidth;
     final note = state.repo.getNote(widget.noteId);
     if (note != null) {
       _title.text = note.title;
@@ -666,16 +682,25 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 编辑器本身就是所见即所得（语法符号已隐藏），不再需要"预览"模式
     final content = _buildEditor(c);
     final toolbar = _toolbar(c, chars, words);
+    // 目录：和阅读页共用同一个面板（编辑长文时要能跳段）
+    final toc = extractToc(_body.text);
 
     // 嵌入三栏布局：工具栏放顶部（桌面端顶部工具栏更顺手），
     // 且不套 Scaffold —— 外层面板已经提供了边框与背景。
     if (widget.embedded) {
       final body = widget.fullscreen
-          // 全屏时把正文限宽居中：一行横跨 1900px 反而没法读
-          ? Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 860),
-                child: content,
+          // 全屏（占满页面）时给正文限个宽：一行横跨 1900px 没法读。
+          // 但也不能限太死 —— 以前写死 860，在大屏上左右各留一大片空白，
+          // 用户的原话是"全屏不要左右两边留白那么多"。
+          // 现在跟着窗口走：宽屏给到 1200，窄屏留 96 的边距。
+          ? LayoutBuilder(
+              builder: (context, box) => Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: math.min(1200, box.maxWidth - 96),
+                  ),
+                  child: content,
+                ),
               ),
             )
           : content;
@@ -719,6 +744,18 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                     const Spacer(),
                     _saveHint(c),
                     const SizedBox(width: 8),
+                    // 目录：正文里有标题时才给入口（编辑长文要能跳段）
+                    if (toc.isNotEmpty) ...[
+                      GlassIconButton(
+                        icon: Icons.toc_rounded,
+                        size: 28,
+                        iconSize: 16,
+                        color: _tocOpen ? c.tint : null,
+                        tooltip: _tocOpen ? '关闭目录' : '目录',
+                        onTap: () => setState(() => _tocOpen = !_tocOpen),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
                     // 占满页面：收起三栏，文章铺满应用窗口。窗口本身不动。
                     if (widget.onToggleFullscreen != null)
                       GlassIconButton(
@@ -767,7 +804,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                 ),
               ),
               toolbar,
-              Expanded(child: body),
+              Expanded(child: _withToc(context, body, toc)),
             ],
           ),
         ),
@@ -792,6 +829,16 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           style: AppText.headline.copyWith(color: c.label),
         ),
         actions: [
+          // 目录：正文里有两个以上标题才给入口（没标题时它是空面板）
+          if (toc.isNotEmpty)
+            GlassIconButton(
+              icon: Icons.toc_rounded,
+              size: 30,
+              iconSize: 17,
+              color: _tocOpen ? c.tint : null,
+              tooltip: _tocOpen ? '关闭目录' : '目录',
+              onTap: () => setState(() => _tocOpen = !_tocOpen),
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 14),
             child: Center(child: _saveHint(c)),
@@ -802,7 +849,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         top: false,
         child: Column(
           children: [
-            Expanded(child: content),
+            Expanded(child: _withToc(context, content, toc)),
             // 手机上工具栏放底部：键盘弹起时会跟着抬起，手指够得着
             toolbar,
           ],
@@ -811,6 +858,95 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       ),
       c,
     );
+  }
+
+  /// 把正文和目录并排：目录**停靠**在旁边，位置与宽度跟着设置走。
+  ///
+  /// 和阅读页共用同一个 [TocPanel]，两边长得一样、行为也一样；
+  /// 但编辑器里的跳转是"滚到那一段并把光标放进去"，见 [_jumpToHeading]。
+  Widget _withToc(BuildContext context, Widget body, List<TocEntry> toc) {
+    if (!_tocOpen || toc.isEmpty) return body;
+    final app = context.read<AppState>();
+    final panel = TocPanel(
+      entries: toc,
+      minLevel: minTocLevel(toc),
+      width: _tocWidth,
+      side: _tocSide,
+      onTap: (e) => _jumpToHeading(toc.indexOf(e)),
+      onFlipSide: () => setState(() {
+        _tocSide = _tocSide == 'left' ? 'right' : 'left';
+        app.setTocSide(_tocSide);
+      }),
+      onClose: () => setState(() => _tocOpen = false),
+    );
+    return Row(
+      children: [
+        if (_tocSide == 'left') ...[panel, TocResizer(onDrag: _resizeToc)],
+        Expanded(child: body),
+        if (_tocSide == 'right') ...[
+          TocResizer(onDrag: (d) => _resizeToc(-d)),
+          panel,
+        ],
+      ],
+    );
+  }
+
+  void _resizeToc(double delta) {
+    final app = context.read<AppState>();
+    setState(() => _tocWidth = (_tocWidth + delta).clamp(160.0, 420.0));
+    app.setTocWidth(_tocWidth);
+  }
+
+  /// 跳到第 [order] 个标题（0 起，按正文出现顺序）。
+  ///
+  /// 目录条目给的是"在 parseContent 结果里的下标"，而编辑器是按**分段**
+  /// 渲染的 ——— 两者的坐标系不同。所以走"第 N 个标题"这个中间量：
+  /// 先数出它在正文的第几行，再找那一行落在哪个分段里。
+  /// 这样不用给两个坐标系做映射，也不会因为分段里混了图片而错位。
+  Future<void> _jumpToHeading(int order) async {
+    if (order < 0) return;
+    final lines = _body.text.split('\n');
+    final isHeading = RegExp(r'^\s{0,3}#{1,6}\s');
+    var seen = -1;
+    var lineIndex = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (!isHeading.hasMatch(lines[i])) continue;
+      seen++;
+      if (seen == order) {
+        lineIndex = i;
+        break;
+      }
+    }
+    if (lineIndex < 0) return;
+
+    // 这一行属于哪个分段：文字段按行数累加，图片段占一行
+    var cursor = 0;
+    var segIndex = -1;
+    for (var i = 0; i < _segments.length; i++) {
+      final seg = _segments[i];
+      final span = seg is TextSegment ? seg.text.split('\n').length : 1;
+      if (lineIndex < cursor + span) {
+        segIndex = i;
+        break;
+      }
+      cursor += span;
+    }
+    if (segIndex < 0 || segIndex >= _segKeys.length) return;
+    final ctx = _segKeys[segIndex].currentContext;
+    if (ctx == null) return;
+    await Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      alignment: 0.02,
+    );
+    // 顺便把光标放进那一段：跳过去就是为了接着改
+    if (segIndex < _segFocus.length) {
+      _segFocus[segIndex].requestFocus();
+      final text = _segControllers[segIndex].text;
+      _segControllers[segIndex].selection =
+          TextSelection.collapsed(offset: text.length);
+    }
   }
 
   /// 保存状态提示：让"有没有存上"这件事一眼可见。
@@ -859,7 +995,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         const SizedBox(height: 12),
         // 正文：文字段各是一个输入框，图片段渲染成真正的图 ——
         // 这样编辑时就能看到图片，而不是一串 ![](path)
-        for (var i = 0; i < _segments.length; i++) _segmentView(c, i),
+        for (var i = 0; i < _segments.length; i++)
+          KeyedSubtree(
+            // key 给目录跳转用：靠它 ensureVisible 到那一段
+            key: i < _segKeys.length ? _segKeys[i] : null,
+            child: _segmentView(c, i),
+          ),
         // ── 尾参数：文章末尾，右对齐一行 `——2026年9月14日18:43` ──
         if (context.watch<AppState>().tailFieldsEnabled)
           TailFieldsLine(noteId: widget.noteId),
