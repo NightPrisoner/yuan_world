@@ -222,5 +222,24 @@ void main() {
       expect(find.textContaining('[[克拉拉与太阳'), findsNothing);
       expect(find.textContaining('那本书'), findsWidgets);
     });
+
+    testWidgets('双链**点得动**：点一下真的跳到那篇笔记', (tester) async {
+      // 这条是真机上抓到的 bug 换来的：段落原来用 `SelectableText.rich`，
+      // 它把整段当一个选区处理，span 上的手势识别器收不到点击 ——
+      // 链接看着是链接、点了毫无反应。只测"渲染成链接样子"是抓不到的。
+      add('链接目标');
+      final id = add('源笔记', content: '[[链接目标]]');
+
+      await pumpReader(tester, id);
+      // 注意**不能**直接 `tap(find.text(...))`：那是点 Text 组件矩形的正中，
+      // 而段落 Text 是整行宽、文字只占左边一小截 —— 正中落在文字右边的空白上，
+      // 谁也不会被点到。要点就点在**字的身上**（左边缘往里一点）。
+      final r = tester.getRect(find.text('链接目标'));
+      await tester.tapAt(Offset(r.left + 12, r.center.dy));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('被引用 1'), findsOneWidget,
+          reason: '跳过去之后，目标笔记下面要列出"谁引用了我"');
+    });
   });
 }
