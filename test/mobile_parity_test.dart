@@ -17,6 +17,7 @@ import 'package:yuan_world/core/theme/app_theme.dart';
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
+import 'package:yuan_world/features/collections/collection_sheets.dart';
 import 'package:yuan_world/features/notes/note_detail_page.dart';
 import 'package:yuan_world/features/settings/settings_page.dart';
 import 'package:yuan_world/features/shell/home_shell.dart';
@@ -185,6 +186,99 @@ void main() {
 
       expect(state.notes, isEmpty);
       expect(state.trashedNotes.length, 1, reason: '应该在回收站里，不是被抹掉');
+    });
+  });
+
+  group('手机端文集嵌套', () {
+    testWidgets('编辑弹窗里能选上级（桌面靠拖拽嵌套，手机拖不了）', (tester) async {
+      final a = await state.createCollection('甲');
+      final b = await state.createCollection('乙');
+      await state.refresh();
+
+      tester.view.physicalSize = const Size(420, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppState>.value(
+          value: state,
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: Builder(
+              builder: (c) => Scaffold(
+                body: Center(
+                  child: TextButton(
+                    onPressed: () => showCollectionEditor(
+                      c,
+                      existing: state.collections.firstWhere((x) => x.id == b),
+                    ),
+                    child: const Text('编辑乙'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('编辑乙'));
+      await tester.pumpAndSettle();
+
+      // 编辑弹窗里必须有「上级文集」这一项
+      expect(find.text('上级文集'), findsOneWidget);
+      expect(find.text('顶层'), findsOneWidget, reason: '默认应该在顶层');
+
+      await tester.tap(find.text('上级文集'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('甲'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+
+      final saved = state.repo
+          .allCollections()
+          .firstWhere((x) => x.id == b);
+      expect(saved.parentId, a, reason: '选完上级要真的写进库');
+    });
+
+    testWidgets('不能把文集塞进自己的子孙里（会成环）', (tester) async {
+      final a = await state.createCollection('甲');
+      await state.createCollection('乙', parentId: a);
+      await state.refresh();
+
+      tester.view.physicalSize = const Size(420, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppState>.value(
+          value: state,
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: Builder(
+              builder: (c) => Scaffold(
+                body: Center(
+                  child: TextButton(
+                    onPressed: () => showCollectionEditor(
+                      c,
+                      existing: state.collections.firstWhere((x) => x.id == a),
+                    ),
+                    child: const Text('编辑甲'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('编辑甲'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('上级文集'));
+      await tester.pumpAndSettle();
+
+      // 选项里不该有自己，也不该有子孙（乙）
+      expect(find.text('顶层（不在任何文集里）'), findsOneWidget);
+      expect(find.text('乙'), findsNothing, reason: '子孙不能当上级，否则树成环');
     });
   });
 }

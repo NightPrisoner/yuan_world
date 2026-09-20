@@ -16,6 +16,9 @@ import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_menu.dart';
 import '../../data/models.dart';
+// 仓库的一些方法（`setCollectionParent` / `descendantCollectionIds`）在
+// **扩展**里，扩展必须在本 library 可见才能调 —— 所以这里要 import 仓库。
+import '../../data/repositories/note_repository.dart';
 
 /// 可选的主题色。取自系统的多彩配色，保证互相之间可区分。
 const List<int> kCollectionColors = <int>[
@@ -83,7 +86,7 @@ Future<int?> showCollectionEditor(
     final id = await state.createCollection(
       result.name,
       color: result.color,
-      parentId: parentId,
+      parentId: result.parentChanged ? result.parentId : parentId,
     );
     if (id == null && context.mounted) {
       _toast(context, '已有同名文集');
@@ -99,6 +102,11 @@ Future<int?> showCollectionEditor(
     return null;
   }
   await state.setCollectionColor(existing.id, result.color);
+  // 上级动过才写：没动过就别碰父子关系（拖动排序、置顶那些都靠它）
+  if (result.parentChanged && result.parentId != existing.parentId) {
+    state.repo.setCollectionParent(existing.id, result.parentId);
+    await state.refresh();
+  }
   if (context.mounted) _toast(context, '已更新「${result.name}」');
   return existing.id;
 }
@@ -172,9 +180,23 @@ void _toast(BuildContext context, String msg) {
 }
 
 class _CollectionDraft {
-  const _CollectionDraft(this.name, this.color);
+  const _CollectionDraft(
+    this.name,
+    this.color, {
+    this.parentId,
+    this.parentChanged = false,
+  });
   final String name;
   final int color;
+
+  /// 目标上级文集（null = 顶层）。
+  final int? parentId;
+
+  /// 用户**动过**上级没有。
+  ///
+  /// 必须和"值等于 null"分开：null 是合法目标（移到顶层），
+  /// 只看值的话分不清"没改"和"要挪到顶层"。
+  final bool parentChanged;
 }
 
 class _CollectionEditor extends StatefulWidget {
@@ -189,6 +211,8 @@ class _CollectionEditorState extends State<_CollectionEditor> {
   late final TextEditingController _name =
       TextEditingController(text: widget.initial?.name ?? '');
   late int _color = widget.initial?.color ?? kCollectionColors.first;
+  late int? _parentId = widget.initial?.parentId;
+  bool _parentChanged = false;
 
   @override
   void initState() {
@@ -200,6 +224,86 @@ class _CollectionEditorState extends State<_CollectionEditor> {
   void dispose() {
     _name.dispose();
     super.dispose();
+  }
+
+  /// 「上级文集」那一行：显示当前选择，点一下换。
+  Widget _parentPicker(AppColors c) {
+    final state = context.read<AppState>();
+    final name = _parentId == null
+        ? '顶层'
+        : state.collections
+                .where((x) => x.id == _parentId)
+                .map((x) => x.name)
+                .firstOrNull ??
+            '顶层';
+
+    return Pressable(
+      onTap: _pickParent,
+      child: Container(
+        height: 44,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: c.fill,
+          borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _parentId == null ? Icons.layers_outlined : Icons.folder_rounded,
+              size: 18,
+              color: c.secondaryLabel,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              '上级文集',
+              style: AppText.footnote.copyWith(color: c.secondaryLabel),
+            ),
+            const Spacer(),
+            Text(name, style: AppText.callout.copyWith(color: c.label)),
+            const SizedBox(width: 4),
+            Icon(Icons.expand_more_rounded, size: 18, color: c.tertiaryLabel),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 选上级。**排除自己和自己的子孙**：不然能把一个文件夹塞进它自己的
+  /// 子树里，树就成了环，之后所有遍历（面包屑、展开、统计）都会卡死。
+  Future<void> _pickParent() async {
+    final state = context.read<AppState>();
+    final self = widget.initial?.id;
+    final blocked = <int>{};
+    if (self != null) {
+      blocked
+        ..add(self)
+        ..addAll(state.repo.descendantCollectionIds(self));
+    }
+    // -1 = 顶层（null 会和"取消"撞在一起）
+    final picked = await showAppMenu<int>(
+      context,
+      header: '上级文集',
+      items: <AppMenuItem<int>>[
+        const AppMenuItem(
+          value: -1,
+          label: '顶层（不在任何文集里）',
+          icon: Icons.layers_outlined,
+        ),
+        for (final col in state.collections)
+          if (!blocked.contains(col.id))
+            AppMenuItem(
+              value: col.id,
+              label: col.name,
+              icon: Icons.folder_rounded,
+              color: Color(col.color),
+            ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _parentId = picked == -1 ? null : picked;
+      _parentChanged = true;
+    });
   }
 
   @override
@@ -230,7 +334,12 @@ class _CollectionEditorState extends State<_CollectionEditor> {
                 if (canSave) {
                   Navigator.pop(
                     context,
-                    _CollectionDraft(_name.text.trim(), _color),
+                    _CollectionDraft(
+                    _name.text.trim(),
+                    _color,
+                    parentId: _parentId,
+                    parentChanged: _parentChanged,
+                  ),
                   );
                 }
               },
@@ -240,6 +349,12 @@ class _CollectionEditorState extends State<_CollectionEditor> {
                 prefixIcon: Icon(Icons.folder_rounded, size: 18, color: Color(_color)),
               ),
             ),
+            const SizedBox(height: 14),
+
+            // 上级文集：桌面靠"把文件夹拖到另一个上面"来嵌套，
+            // **手机上拖不了**，所以这里给一个显式的选择项 ——
+            // 没有它，安卓用户永远建不出子文件夹。
+            _parentPicker(c),
             const SizedBox(height: 18),
 
             Text(
@@ -289,7 +404,12 @@ class _CollectionEditorState extends State<_CollectionEditor> {
                     onTap: canSave
                         ? () => Navigator.pop(
                               context,
-                              _CollectionDraft(_name.text.trim(), _color),
+                              _CollectionDraft(
+                    _name.text.trim(),
+                    _color,
+                    parentId: _parentId,
+                    parentChanged: _parentChanged,
+                  ),
                             )
                         : null,
                     child: AnimatedOpacity(
