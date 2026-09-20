@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
+import 'data/backup/backup_service.dart';
 import 'data/db/app_database.dart';
 import 'data/importer/import_service.dart';
 import 'data/models.dart';
@@ -24,6 +25,35 @@ class AppState extends ChangeNotifier {
   final AppDatabase db;
   final NoteRepository repo;
   final ImportService importer;
+
+  /// 备份/恢复。数据层的纯 Dart 服务，UI 只是它的一个入口。
+  late final BackupService backup = BackupService(db);
+
+  /// 每天自动快照（默认开）。关掉的话就只能靠手动备份了。
+  bool get backupAutoSnapshot => repo.getSetting('backup.auto') != '0';
+
+  /// 自动快照保留几份。
+  int get backupKeep => int.tryParse(repo.getSetting('backup.keep') ?? '') ?? 7;
+
+  void setBackupAutoSnapshot(bool v) {
+    repo.setSetting('backup.auto', v ? '1' : '0');
+    notifyListeners();
+  }
+
+  /// 启动时的自动快照：**一天最多一份**，失败绝不影响启动。
+  ///
+  /// 放在 AppState 里而不是 main() 里，是为了能被测试直接驱动
+  /// （main 里的东西测不到）。
+  void snapshotIfDue() {
+    if (!backupAutoSnapshot) return;
+    try {
+      final keep = backupKeep;
+      if (!backup.snapshotDue(keep: keep)) return;
+      backup.snapshot(keep: keep);
+    } catch (_) {
+      // 备份失败（磁盘满、没权限）不该挡住启动；下次启动再试
+    }
+  }
   final TodoRepository todos;
 
   // ── 状态 ────────────────────────────────────────────────────────────────

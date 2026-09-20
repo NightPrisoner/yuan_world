@@ -42,6 +42,10 @@ Future<void> main() async {
   );
 
   if (kDebugMode) _maybeOpenEditorForTesting(navKey);
+
+  // 每日自动快照：放在界面已经可用之后跑。它只拷数据库（几兆），
+  // 而且内部自己吞掉异常 —— 备份失败绝不能挡住启动。
+  state.snapshotIfDue();
 }
 
 /// 调试用：`YW_EDIT_NOTE=<笔记id>` 启动后直接进入该笔记的编辑器。

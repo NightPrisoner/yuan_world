@@ -15,10 +15,18 @@ import 'schema.dart';
 ///   `<root>/yuanworld.db`      数据库
 ///   `<root>/images/<noteId>/`  该笔记的图片
 class AppDatabase {
-  AppDatabase._(this.db, this.rootDir);
+  AppDatabase._(this._db, this.rootDir);
 
-  final Database db;
+  /// 连接。**不是 final**：恢复备份时要关掉、换掉文件、再打开
+  /// （见 [closeForRestore] / [reopen]），而 repo、importer 里存的是
+  /// 这个 AppDatabase 对象的引用，所以只能是换里面的连接，不能换对象。
+  Database _db;
+  Database get db => _db;
+
   final Directory rootDir;
+
+  /// 数据库文件路径。
+  String get dbPath => p.join(rootDir.path, 'yuanworld.db');
 
   /// 图片根目录。
   Directory get imageRoot {
@@ -32,53 +40,66 @@ class AppDatabase {
     final root = Directory(rootPath);
     if (!root.existsSync()) root.createSync(recursive: true);
 
-    final file = p.join(root.path, 'yuanworld.db');
-    final db = sqlite3.open(file);
-
-    // 每个连接都要单独设置
-    db.execute('PRAGMA foreign_keys = ON');
-    db.execute('PRAGMA journal_mode = WAL');
-    db.execute('PRAGMA synchronous = NORMAL');
-    db.execute('PRAGMA temp_store = MEMORY');
-    // 大页面缓存，笔记列表滚动更顺
-    db.execute('PRAGMA cache_size = -16000');
-
-    final instance = AppDatabase._(db, root);
+    final instance = AppDatabase._(sqlite3.open(p.join(root.path, 'yuanworld.db')), root);
+    instance._tune();
     instance._migrate();
     return instance;
   }
 
   /// 内存数据库，仅测试用。
   static AppDatabase inMemory() {
-    final db = sqlite3.openInMemory();
-    db.execute('PRAGMA foreign_keys = ON');
-    final instance = AppDatabase._(db, Directory.systemTemp);
+    final instance = AppDatabase._(sqlite3.openInMemory(), Directory.systemTemp);
+    instance._db.execute('PRAGMA foreign_keys = ON');
     instance._migrate();
     return instance;
+  }
+
+  /// 每个连接都要单独设置的 PRAGMA。
+  void _tune() {
+    _db.execute('PRAGMA foreign_keys = ON');
+    _db.execute('PRAGMA journal_mode = WAL');
+    _db.execute('PRAGMA synchronous = NORMAL');
+    _db.execute('PRAGMA temp_store = MEMORY');
+    // 大页面缓存，笔记列表滚动更顺
+    _db.execute('PRAGMA cache_size = -16000');
+  }
+
+  /// 关掉连接，好让调用方替换数据库文件（恢复备份用）。
+  ///
+  /// 替换完必须调 [reopen]，否则后面所有查询都会打在已关闭的连接上。
+  void closeForRestore() => close();
+
+  /// 重新打开（恢复完调用）。会重新跑一遍迁移/自愈 ——
+  /// 恢复进来的可能是**更旧的**库，得让它升级到当前 schema。
+  void reopen() {
+    _db = sqlite3.open(dbPath);
+    _closed = false;
+    _tune();
+    _migrate();
   }
 
   void _migrate() {
     // PRAGMA 语句不支持 AS 别名，只能按下标取值
     final current =
-        db.select('PRAGMA user_version').first.columnAt(0) as int;
+        _db.select('PRAGMA user_version').first.columnAt(0) as int;
 
     if (current == 0) {
-      db.execute('BEGIN');
+      _db.execute('BEGIN');
       try {
         for (final sql in kCreateStatements) {
-          db.execute(sql);
+          _db.execute(sql);
         }
-        db.execute('PRAGMA user_version = $kSchemaVersion');
-        db.execute('COMMIT');
+        _db.execute('PRAGMA user_version = $kSchemaVersion');
+        _db.execute('COMMIT');
       } catch (_) {
-        db.execute('ROLLBACK');
+        _db.execute('ROLLBACK');
         rethrow;
       }
       return;
     }
 
     if (current < kSchemaVersion) {
-      db.execute('BEGIN');
+      _db.execute('BEGIN');
       try {
         for (var v = current + 1; v <= kSchemaVersion; v++) {
           final steps = kMigrations[v];
@@ -93,13 +114,13 @@ class AppDatabase {
             );
           }
           for (final sql in steps) {
-            db.execute(sql);
+            _db.execute(sql);
           }
         }
-        db.execute('PRAGMA user_version = $kSchemaVersion');
-        db.execute('COMMIT');
+        _db.execute('PRAGMA user_version = $kSchemaVersion');
+        _db.execute('COMMIT');
       } catch (_) {
-        db.execute('ROLLBACK');
+        _db.execute('ROLLBACK');
         rethrow;
       }
     }
@@ -122,14 +143,18 @@ class AppDatabase {
 
   /// 表里没有这一列就加上。已经有就什么都不做。
   void _ensureColumn(String table, String column, String type) {
-    final cols = db.select('PRAGMA table_info($table)');
+    final cols = _db.select('PRAGMA table_info($table)');
     for (final r in cols) {
       if (r['name'] == column) return;
     }
-    db.execute('ALTER TABLE $table ADD COLUMN $column $type');
+    _db.execute('ALTER TABLE $table ADD COLUMN $column $type');
   }
 
   void close() {
-    db.close();
+    if (_closed) return;
+    _closed = true;
+    _db.close();
   }
+
+  bool _closed = false;
 }

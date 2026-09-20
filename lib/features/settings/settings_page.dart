@@ -3,6 +3,7 @@ library;
 
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -17,6 +18,152 @@ import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
 import '../privacy/privacy_page.dart';
 import 'field_manager_page.dart';
+
+/// 快照目录（还没建就建出来，用户点"打开"时才不会是空路径）。
+Directory _snapshotDir(AppState state) {
+  final d = Directory(
+    '${state.db.rootDir.path}${Platform.pathSeparator}snapshots',
+  );
+  if (!d.existsSync()) d.createSync(recursive: true);
+  return d;
+}
+
+/// 底部那句小字：告诉用户上一次快照是什么时候、有几份。
+String _lastSnapshotHint(AppState state) {
+  final shots = state.backup.snapshots();
+  if (shots.isEmpty) return '还没有快照，明天关掉再开就有第一份了。';
+  final last = shots.first.statSync().modified;
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '最近一次快照：${last.year}-${two(last.month)}-${two(last.day)} '
+      '${two(last.hour)}:${two(last.minute)}，共 ${shots.length} 份。';
+}
+
+/// 点一下就有动作的设置行（备份、恢复这类）。
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return _RowShell(
+      icon: icon,
+      iconColor: iconColor,
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: AppText.body.copyWith(color: c.label)),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 立刻导出一份全量备份到用户选的位置。
+Future<void> _backupNow(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+  try {
+    final bytes = state.backup.exportAll();
+    final stamp = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final name = '元世界备份-${stamp.year}${two(stamp.month)}${two(stamp.day)}'
+        '-${two(stamp.hour)}${two(stamp.minute)}.zip';
+    final target = await FilePicker.saveFile(
+      dialogTitle: '保存备份',
+      fileName: name,
+      bytes: bytes,
+      type: FileType.custom,
+      allowedExtensions: <String>['zip'],
+    );
+    if (target == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('已备份到 ${target.toFilePath()}（${_mb(bytes.length)}）'),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('备份失败：$e')));
+  }
+}
+
+/// 从备份恢复。**先确认，再动手** —— 这会覆盖现有数据。
+Future<void> _restoreFromBackup(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+
+  PlatformFile? picked;
+  try {
+    picked = await FilePicker.pickFile(
+      dialogTitle: '选择备份文件',
+      type: FileType.custom,
+      allowedExtensions: <String>['zip', 'db'],
+    );
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('选择文件失败：$e')));
+    return;
+  }
+  final path = picked?.path;
+  if (path == null || !context.mounted) return;
+
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('用这份备份覆盖当前数据？'),
+      content: Text(
+        '当前数据会被替换成备份里的内容。\n\n'
+        '恢复前会自动把现在的数据库存一份到快照目录，万一恢复错了还能找回来。\n\n'
+        '$path',
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('覆盖恢复'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+
+  try {
+    final r = state.backup.restore(File(path));
+    // 恢复进来的可能是个旧库、也可能带着另一套设置 —— 重新读一遍
+    await state.init();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('${r.summary}。建议重启一下应用。'),
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('恢复失败：$e')));
+  }
+}
+
+String _mb(int bytes) => bytes < 1024 * 1024
+    ? '${(bytes / 1024).toStringAsFixed(1)} KB'
+    : '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+
 /// 多选一的设置行。用它而不是开关，是因为「大小」有中间档。
 class _ChoiceRow<T> extends StatelessWidget {
   const _ChoiceRow({
@@ -387,6 +534,55 @@ class SettingsPage extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
               child: Text(
                 '全部数据都在本机，不上传任何服务器。备份时直接复制上面两个目录即可。',
+                style: AppText.caption1.copyWith(
+                  color: c.tertiaryLabel,
+                  height: 1.6,
+                ),
+              ),
+            ),
+
+            // ── 备份与恢复 ─────────────────────────────────────────────
+            _SectionHeader('备份与恢复'),
+            _Group(
+              children: [
+                _SwitchRow(
+                  icon: Icons.history_rounded,
+                  iconColor: c.palette[5],
+                  label: '每天自动快照',
+                  subtitle: '只含数据库（几兆），图片视频不重复备份；保留最近 7 份',
+                  value: state.backupAutoSnapshot,
+                  onChanged: (v) => state.setBackupAutoSnapshot(v),
+                ),
+                _RowDivider(),
+                _ActionRow(
+                  icon: Icons.archive_rounded,
+                  iconColor: c.palette[2],
+                  label: '立即完整备份…',
+                  subtitle: '数据库 + 全部图片视频，打成一个压缩包给你保存',
+                  onTap: () => _backupNow(context, state),
+                ),
+                _RowDivider(),
+                _ActionRow(
+                  icon: Icons.settings_backup_restore_rounded,
+                  iconColor: c.palette[0],
+                  label: '从备份恢复…',
+                  subtitle: '会覆盖当前数据（恢复前会自动存一份安全副本）',
+                  onTap: () => _restoreFromBackup(context, state),
+                ),
+                _RowDivider(),
+                _PathRow(
+                  icon: Icons.folder_special_rounded,
+                  iconColor: c.palette[3],
+                  label: '快照目录',
+                  path: _snapshotDir(state).path,
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              child: Text(
+                '全部数据都在本机，不上传任何服务器。'
+                '${_lastSnapshotHint(state)}',
                 style: AppText.caption1.copyWith(
                   color: c.tertiaryLabel,
                   height: 1.6,
