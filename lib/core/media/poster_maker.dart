@@ -19,6 +19,16 @@
 ///   3. **要在界面起来之后调**：`VideoController` 的原生画面输出是在
 ///      "下一帧"里创建的，在 `runApp` 之前建会永远等不到那一帧
 ///      （实测直接卡死在 `open()`）。
+///
+/// ## 两端都实测过
+///
+///   · Windows：`YW_MAKE_POSTER=<视频路径>` 钩子，258MB 的老视频抓到
+///     1920×1080 的真帧；
+///   · Android（Redmi Note 12 Turbo / Android 13）：`adb push` 一个 1.3MB
+///     视频进沙盒 `files/images/999/test.mp4`，正文写 `![](999/test.mp4)`，
+///     打开那篇笔记后沙盒里出现 `test_first_frame.png`（223KB），
+///     卡片上显示的就是抓到的首帧 —— Android 这条路径没问题。
+///     （验完把那篇测试笔记连同媒体一起清了，没动用户自己的文集。）
 library;
 
 import 'dart:async';
