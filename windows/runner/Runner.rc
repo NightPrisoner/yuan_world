@@ -97,7 +97,7 @@ BEGIN
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "yuan_world" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.yuanworld. All rights reserved." "\0"
-            VALUE "OriginalFilename", "yuan_world.exe" "\0"
+            VALUE "OriginalFilename", "元世界.exe" "\0"
             VALUE "ProductName", "元世界" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
