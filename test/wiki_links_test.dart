@@ -155,6 +155,62 @@ void main() {
     });
   });
 
+  group('阅读页外链也是控件（和双链同一套改法）', () {
+    late AppDatabase db;
+    late AppState state;
+
+    setUp(() async {
+      db = AppDatabase.inMemory();
+      final repo = NoteRepository(db);
+      state = AppState(db, repo, ImportService(db, repo));
+      await state.init();
+    });
+
+    tearDown(() => db.close());
+
+    Future<void> pumpBody(WidgetTester tester, String body) async {
+      final id = state.repo.insertNote(
+        title: '带链接的',
+        content: body,
+        excerpt: 'x',
+        publishedAt: DateTime.now(),
+        charCount: body.length,
+      );
+      await state.refresh();
+      tester.view.physicalSize = const Size(1000, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppState>.value(
+          value: state,
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: NoteDetailPage(noteId: id),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('裸 https://… 点得动：弹出"打开链接？"确认框', (tester) async {
+      await pumpBody(tester, 'https://example.com/x');
+      await tester.tap(find.text('https://example.com/x'));
+      await tester.pumpAndSettle();
+      expect(find.text('打开链接？'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('[文字](url) 点得动', (tester) async {
+      await pumpBody(tester, '[这个](https://example.com/y)');
+      await tester.tap(find.text('这个'));
+      await tester.pumpAndSettle();
+      expect(find.text('打开链接？'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+    });
+  });
+
   group('阅读页', () {
     late AppDatabase db;
     late NoteRepository repo;

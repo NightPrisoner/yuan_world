@@ -9,7 +9,6 @@ library;
 
 import 'dart:io';
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -387,15 +386,20 @@ class RichParagraph extends StatelessWidget {
     final links = parseWikiLinks(token);
     if (links.isEmpty) return TextSpan(text: token, style: base);
     final link = links.first;
-    return TextSpan(
-      text: link.label,
-      style: base.copyWith(
-        color: c.tint,
-        // 双链不用下划线（那是外链的样子），换成浅浅的底色
-        backgroundColor: c.tint.withValues(alpha: 0.10),
-      ),
-      recognizer: TapGestureRecognizer()
-        ..onTap = () {
+    // **用 WidgetSpan 而不是给 TextSpan 挂 recognizer。**
+    //
+    // span 上的 `TapGestureRecognizer` 在真机上点不动（安卓实测：`input tap`、
+    // `input motionevent`、极短 swipe 都试过，回调根本不进；`SelectableText`
+    // 那条路更是框架机制上就不通）。WidgetSpan 里是个**真控件**，命中测试
+    // 走正常控件那条路，跟选区/段落无关。
+    //
+    // 代价：这一小段文字不参与选区（复制全文有单独的入口，可以接受）。
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.middle,
+      child: GestureDetector(
+        // 用 translucent：文字周围的空白也别漏掉这一次点击
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
           final state = context.read<AppState>();
           final id = state.repo.noteIdByTitle(link.target);
           if (id == null) {
@@ -411,8 +415,40 @@ class RichParagraph extends StatelessWidget {
             ApplePageRoute<void>(pageBuilder: (_) => NoteDetailPage(noteId: id)),
           );
         },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+          decoration: BoxDecoration(
+            // 双链不用下划线（那是外链的样子），换成浅浅的底色
+            color: c.tint.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            link.label,
+            style: base.copyWith(color: c.tint),
+          ),
+        ),
+      ),
     );
   }
+
+  /// 外链的样子（下划线 + 强调色），点一下走 [onTap]。
+  ///
+  /// **必须是 WidgetSpan**：span 上的 `TapGestureRecognizer` 在真机上点不动
+  /// （安卓实测，`[[双链]]` 那条走了同样的弯路，见提交说明）。
+  /// 于外链、双链共用同一个可点小控件，长相按调用方给的样式走。
+  static InlineSpan _tapSpan(
+    String label,
+    TextStyle style,
+    VoidCallback onTap,
+  ) =>
+      WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: onTap,
+          child: Text(label, style: style),
+        ),
+      );
 
   /// 裸链接（正文里直接躺着一串 https://…）。
   /// Word 文档导进来常常是这种形态，不认它用户就会觉得"链接点了没反应"。
@@ -432,25 +468,21 @@ class RichParagraph extends StatelessWidget {
     final tail = url.substring(clean.length);
     return TextSpan(
       children: <InlineSpan>[
-        TextSpan(
-          text: clean,
-          style: base.copyWith(
+        _tapSpan(
+          clean,
+          base.copyWith(
             color: c.tint,
             decoration: TextDecoration.underline,
             decorationColor: c.tint.withValues(alpha: 0.4),
           ),
-          recognizer: TapGestureRecognizer()
-            ..onTap = () => _confirmOpen(context, clean),
+          () => _confirmOpen(context, clean),
         ),
         if (tail.isNotEmpty) TextSpan(text: tail),
       ],
     );
   }
 
-  /// 把 `[文字](url)` 变成一个可点的 span。
-  ///
-  /// 用 `TapGestureRecognizer` 而不是 WidgetSpan：后者会打断
-  /// `SelectableText` 的选区，链接所在段落就没法整段复制了。
+  /// 把 `[文字](url)` 变成一个可点的链接。
   static InlineSpan _linkSpan(
     BuildContext context,
     String token,
@@ -467,15 +499,14 @@ class RichParagraph extends StatelessWidget {
       return TextSpan(text: label);
     }
 
-    return TextSpan(
-      text: label,
-      style: base.copyWith(
+    return _tapSpan(
+      label,
+      base.copyWith(
         color: c.tint,
         decoration: TextDecoration.underline,
         decorationColor: c.tint.withValues(alpha: 0.4),
       ),
-      recognizer: TapGestureRecognizer()
-        ..onTap = () => _confirmOpen(context, url),
+      () => _confirmOpen(context, url),
     );
   }
 
