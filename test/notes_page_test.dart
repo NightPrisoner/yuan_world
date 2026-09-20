@@ -506,6 +506,21 @@ void main() {
       expect(find.text('未保存的临时内容'), findsOneWidget);
       expect(find.text('原文内容'), findsNothing);
 
+      // **而且要真的看得见**：曾经出过"占满页面后一片白" ——
+      // 那一层 Opacity 被设成了 0，控件都还在树里（所以上面那条断言照样过），
+      // 但屏幕上什么都没有。所以这里查透明度。
+      final opacities = tester.widgetList<Opacity>(
+        find.ancestor(
+          of: find.text('未保存的临时内容'),
+          matching: find.byType(Opacity),
+        ),
+      );
+      expect(
+        opacities.every((o) => o.opacity > 0.99),
+        isTrue,
+        reason: '全屏时正文不能是透明的，否则就是白屏',
+      );
+
       // 导航栏与列表栏都收起来了
       expect(find.text('全部笔记'), findsNothing);
       expect(find.text('未分类'), findsNothing);
@@ -754,6 +769,27 @@ void main() {
       final saved = int.tryParse(state.repo.getSetting('layout.navWidth') ?? '');
       expect(saved, isNotNull, reason: '拖动后要写库');
       expect(saved, greaterThan(240), reason: '往右拖应该变宽');
+    });
+
+    testWidgets('连续拖动不会中断（分隔条不能被从树里拿掉）', (tester) async {
+      await state.refresh();
+      await pumpApp(tester, size: const Size(1400, 900));
+
+      // 分 6 步慢慢拖。以前分隔条的"在不在"是看**动画值**算的：
+      // 拖一下宽度变了，动画值跟着掉，分隔条就被从树里拿掉 ——
+      // 手还按着，后面的位移全丢了（用户说的"拉着拉着断掉"）。
+      // 每步 6px、共 36px，全部生效才算没断。
+      final g = await tester.startGesture(const Offset(240, 400));
+      for (var i = 0; i < 6; i++) {
+        await g.moveBy(const Offset(6, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await g.up();
+      await tester.pumpAndSettle();
+
+      final saved = int.tryParse(state.repo.getSetting('layout.navWidth') ?? '') ?? 0;
+      expect(saved, greaterThanOrEqualTo(236 + 30),
+          reason: '只吃掉第一步的位移，说明中途分隔条没了、拖拽断了');
     });
 
     testWidgets('宽度有上下限，拖过头也不会把别的栏挤没', (tester) async {

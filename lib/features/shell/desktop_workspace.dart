@@ -70,7 +70,8 @@ class DesktopWorkspace extends StatefulWidget {
   State<DesktopWorkspace> createState() => _DesktopWorkspaceState();
 }
 
-class _DesktopWorkspaceState extends State<DesktopWorkspace> {
+class _DesktopWorkspaceState extends State<DesktopWorkspace>
+    with SingleTickerProviderStateMixin {
   _Section _section = _Section.notes;
   int? _selectedNoteId;
   bool _editing = false;
@@ -344,6 +345,32 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
   double _navWidth = 236;
   double _listWidth = 316;
 
+  /// 导航栏"收起 ↔ 展开"的进度：1 = 展开，0 = 收起。
+  ///
+  /// 单独用一个 controller，而不是从宽度反推：
+  /// **拖动宽度**时宽度在变，但从"收起度"这个角度看它一直是"展开"的。
+  /// 以前用 `(当前宽 - 58) / (目标宽 - 58)` 当进度，一拖就把自己算成
+  /// "收起了一半"，于是内容开始交叉淡入、分隔条还被从树里拿掉 ——
+  /// 拖拽当场中断。分成两个量之后，拖动只动宽度，收起/展开只动进度。
+  late final AnimationController _navAnim = AnimationController(
+    vsync: this,
+    duration: AppMotion.normal,
+    value: 1,
+  );
+
+  void _setNavCollapsed(bool collapsed) {
+    if (_navCollapsed == collapsed) return;
+    setState(() => _navCollapsed = collapsed);
+    collapsed ? _navAnim.reverse() : _navAnim.forward();
+  }
+
+  /// 拖左侧分隔条：**直接跟手**，不走动画。
+  void _dragNavWidth(double delta) {
+    setState(() => _navWidth = (_navWidth + delta).clamp(_navMin, _navMax));
+    // 拖动期间进度锁死在"展开"，缩放的补间也就不需要了
+    _navAnim.value = 1;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -367,6 +394,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
 
   @override
   void dispose() {
+    _navAnim.dispose();
     _search.dispose();
     _folderScroll.dispose();
     super.dispose();
@@ -551,15 +579,16 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
       builder: (context, box) {
         final avail = box.maxWidth;
 
-        return TweenAnimationBuilder<double>(
-          tween: Tween<double>(end: _navCollapsed ? railWidth : _navWidth),
-          duration: AppMotion.normal,
-          curve: AppMotion.enter,
-          builder: (context, navW, _) {
-            // 0 = 完全收起，1 = 完全展开
-            final navT =
-                ((navW - railWidth) / math.max(1, _navWidth - railWidth))
-                    .clamp(0.0, 1.0);
+        return AnimatedBuilder(
+          animation: _navAnim,
+          builder: (context, _) {
+            // 宽度 = 收起宽 → 用户设的宽度，按进度插值。
+            // 拖动时进度锁在 1，所以宽度**直接跟手**，没有 300ms 的拖尾。
+            final progress =
+                CurvedAnimation(parent: _navAnim, curve: AppMotion.enter).value;
+            final navW = railWidth + (_navWidth - railWidth) * progress;
+            // 0 = 完全收起，1 = 完全展开（用于内容交叉淡入）
+            final navT = _navAnim.value;
             final navPaneW = fullscreenEditor ? 0.0 : navW;
 
             return TweenAnimationBuilder<double>(
@@ -574,8 +603,13 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
               builder: (context, t, _) {
                 // 分隔条也要算进宽度：**漏算就是 8px 溢出**（Row 里
                 // 每多一个分隔条就少 8px 可用宽度）
+                //
+                // 注意判断用的是 `_navCollapsed`（**目标状态**）而不是动画值
+                // `navT`：拖动宽度时 navT 会因为"当前宽度 / 目标宽度"的比值
+                // 掉到 1 以下，分隔条就会被从树里拿掉 —— 手正按着它，
+                // 结果是"拉着拉着就断了"（用户报的正是这个）。
                 final navResW =
-                    (!fullscreenEditor && navT > 0.99) ? resizerWidth : 0.0;
+                    (!fullscreenEditor && !_navCollapsed) ? resizerWidth : 0.0;
                 final areaW = math.max(0.0, avail - navPaneW - navResW);
                 // 关闭动画还在跑的时候**必须继续渲染**（否则没有滑出动画），
                 // 动画归零后立刻拆掉 —— 留一个 0 宽的编辑器在树里，
@@ -640,13 +674,13 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                           ),
                         ),
                       ),
-                    // 展开态才给分隔条：收起时那 58px 没什么好拖的
-                    if (!fullscreenEditor && navT > 0.99)
+                    // 分隔条按**目标状态**给：展开着就一直有。
+                    // 以前按动画值 navT 判断，拖动时 navT 会掉下来，
+                    // 分隔条被从树里拿掉 —— 手还按着，拖拽就此中断
+                    // （用户说的"拉着拉着断掉"）。
+                    if (!fullscreenEditor && !_navCollapsed)
                       _PaneResizer(
-                        onDrag: (d) => setState(
-                          () => _navWidth =
-                              (_navWidth + d).clamp(_navMin, _navMax),
-                        ),
+                        onDrag: _dragNavWidth,
                         onDragEnd: _saveWidths,
                       ),
 
@@ -685,7 +719,14 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                       width: withDetail ? detailW : areaW,
                       child: ClipRect(
                         child: Opacity(
-                          opacity: isDetailPane ? Curves.easeOut.transform(t) : 1,
+                          // **只用 withDetail 判断淡入淡出。**
+                          //
+                          // 之前写的是 `isDetailPane ? f(t) : 1`，而 t 是
+                          // "正文栏展开度"：全屏编辑时它的目标值是 0（那种情况
+                          // 压根不是"滑入"），于是整层被设成透明度 0 ——
+                          // 编辑器在树里、鼠标也点得到（widget 测试查得到文字），
+                          // 但屏幕上**一片白**。这就是"占满页面后白屏"。
+                          opacity: withDetail ? Curves.easeOut.transform(t) : 1,
                           child: OverflowBox(
                             // 内容按最终宽度排版、被右侧裁掉 ——
                             // 观感就是"面板从右边推进来"，而不是被压扁重排
@@ -918,7 +959,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
                           icon: Icons.chevron_left_rounded,
                           label: '收起侧栏',
                           selected: false,
-                          onTap: () => setState(() => _navCollapsed = true),
+                          onTap: () => _setNavCollapsed(true),
                         ),
                   _NavRow(
                     icon: Icons.article_rounded,
@@ -1202,7 +1243,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace> {
             Tooltip(
               message: '展开侧栏',
               child: Pressable(
-                onTap: () => setState(() => _navCollapsed = false),
+                onTap: () => _setNavCollapsed(false),
                 scale: 0.9,
                 child: Container(
                   // **和展开态那个 _NavRow 用同一套 margin + padding**。
