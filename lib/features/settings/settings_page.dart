@@ -344,8 +344,11 @@ class SettingsPage extends StatelessWidget {
   ///
   /// **刻意不显示"几个文件夹几篇笔记"** —— 那等于把藏了多少东西
   /// 直接写在设置页上，谁路过都能看见。
+  ///
+  /// 但**必须说清它不是加密**：数据库仍旧是明文文件，绕开应用直接看
+  /// 文件就能读到。用户以为"进了隐私空间就安全了"，才是真的危险。
   static String _privacySubtitle(BuildContext context) =>
-      '数据与外面完全隔离，界面一致';
+      '密码保护 + 从列表与搜索里隐藏（数据库本身未加密）';
 
   @override
   Widget build(BuildContext context) {
@@ -506,6 +509,19 @@ class SettingsPage extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              child: Text(
+                '隐私空间做的是两件事：进门要密码、内容不再出现在列表与搜索里。'
+                '它不做加密 —— 数据仍是本机的明文文件，绕开应用直接看文件就能读到。'
+                '要防"电脑/硬盘被别人拿到"，请配合系统级加密'
+                '（Windows 的 BitLocker、手机的锁屏加密）。',
+                style: AppText.caption1.copyWith(
+                  color: c.tertiaryLabel,
+                  height: 1.6,
+                ),
+              ),
             ),
 
             // ── 存储位置 ───────────────────────────────────────────────
