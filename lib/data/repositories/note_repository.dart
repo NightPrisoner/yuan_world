@@ -259,7 +259,16 @@ class NoteRepository {
         where.add('notes_fts MATCH ?');
         args.add('"${q.replaceAll('"', '""')}"');
       } else {
-        where.add('(n.title LIKE ? ESCAPE ? OR n.excerpt LIKE ? ESCAPE ?)');
+        // **短词（1~2 个字）也要搜正文。**
+        //
+        // FTS5 的 trigram 分词器要求至少 3 个字符，所以两字词只能走 LIKE；
+        // 而以前这里只 LIKE 标题和摘要 —— 中文里两字词恰恰最常见
+        // （"读书""会议""旅行"），用户的感受就是"明明在正文里，搜不到"。
+        // 全表扫 content 在几百篇的量级完全无感（每篇几 KB）。
+        where.add(
+          '(n.title LIKE ? ESCAPE ? OR n.excerpt LIKE ? ESCAPE ? '
+          'OR n.content LIKE ? ESCAPE ?)',
+        );
         // **必须转义 % 和 _**。这两个字符在 LIKE 里是通配符，
         // 不转义的话搜一个 "%" 会把整库都匹配出来，搜 "a_b" 也会命中
         // "axb" —— 用户的感受是"搜什么都出一堆"。
@@ -268,11 +277,11 @@ class NoteRepository {
             .replaceAll('%', r'\%')
             .replaceAll('_', r'\_');
         final pat = '%$esc%';
-        args
-          ..add(pat)
-          ..add(r'\')
-          ..add(pat)
-          ..add(r'\');
+        for (var i = 0; i < 3; i++) {
+          args
+            ..add(pat)
+            ..add(r'\');
+        }
       }
     }
 
