@@ -147,4 +147,52 @@ void main() {
     // 已经是"没被定时器改回 false"之外还要保证不抛异常
     expect(v.barVisible, isTrue);
   });
+
+  // ── 触摸设备（手机）：没有悬停，只能靠"点画面" ──────────────────────────
+  //
+  // 用户原话：「播放的时候看不到视频控件无法各种调整或者全屏什么的」——
+  // 因为显隐全靠 onEnter/onHover，手指根本不产生这两个事件。
+
+  test('手机上点一下画面就亮出控制条（没有悬停）', () {
+    final v = make();
+    addTearDown(v.dispose);
+    expect(v.hovering, isFalse, reason: '手机就是没有悬停');
+    v.reveal();
+    expect(v.barVisible, isTrue);
+  });
+
+  test('点出来之后播放中静止一段时间仍会收起（和桌面同一套倒计时）', () async {
+    final v = make();
+    addTearDown(v.dispose);
+    v.setPlaying(true);
+    v.reveal();
+    expect(v.barVisible, isTrue);
+    await waitIdle();
+    expect(v.barVisible, isFalse);
+  });
+
+  test('点过之后"鼠标离开"不该把控制条收掉（手机上没有鼠标）', () {
+    final v = make();
+    addTearDown(v.dispose);
+    v.setPlaying(true);
+    v.reveal();
+    v.exit();
+    expect(v.barVisible, isTrue, reason: '触摸设备上 exit 不该生效');
+  });
+
+  test('没点过、也没有悬停时开始播放：仍然不冒控制条', () async {
+    final v = make();
+    addTearDown(v.dispose);
+    v.setPlaying(true);
+    await waitIdle();
+    expect(v.barVisible, isFalse);
+  });
+
+  test('暂停时控制条一定显示（手机上暂停了却看不到 = 没法拖进度/全屏）', () {
+    final v = make();
+    addTearDown(v.dispose);
+    v.setPlaying(true);
+    v.setPlaying(false);
+    expect(v.barVisible, isTrue, reason: '暂停必须能看到控制条，哪怕没悬停过');
+  });
 }

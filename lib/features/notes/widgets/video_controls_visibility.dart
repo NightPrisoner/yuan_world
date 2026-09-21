@@ -30,6 +30,14 @@ class VideoControlsVisibility {
   bool _hovering = false;
   bool _playing = false;
   bool _barVisible = false;
+
+  /// **触摸设备上的"亮出来"授权。**
+  ///
+  /// 手机上根本没有悬停：手指不会 `onEnter`，于是 `_hovering` 永远是 false，
+  /// 控制条一次都不会出现 —— 用户的原话就是"播放的时候看不到视频控件，
+  /// 无法调整或者全屏"。所以加一条不依赖悬停的路径：**点一下画面就亮**，
+  /// 之后按同一套倒计时自动收起。
+  bool _revealed = false;
   Timer? _timer;
 
   /// 鼠标是否在画面范围内。
@@ -53,8 +61,16 @@ class VideoControlsVisibility {
   /// 鼠标离开画面。
   void exit() {
     _hovering = false;
+    // 触摸设备（或已经点过画面）不该因为"鼠标走了"就收起来
+    if (_revealed) return;
     _timer?.cancel();
     _setBar(false);
+  }
+
+  /// 点了一下画面：把控制条亮出来（触摸设备唯一的入口）。
+  void reveal() {
+    _revealed = true;
+    _show();
   }
 
   /// 播放状态变化。
@@ -62,12 +78,14 @@ class VideoControlsVisibility {
     if (playing == _playing) return;
     _playing = playing;
     if (playing) {
-      // 开始播放：鼠标多半还在画面上（刚点的播放），亮出来再计时收起
-      if (_hovering) _show();
+      // 开始播放：刚点过就开始计时收起
+      if (_revealed || _hovering) _show();
     } else {
-      // 暂停/播完：停止自动收起，让用户能从容拖进度、改倍速
+      // 暂停/播完：停止自动收起，让用户能从容拖进度、改倍速。
+      // **这里不再要求"鼠标在画面上"** —— 手机上暂停了却看不到控制条，
+      // 等于没法拖进度、没法全屏。
       _timer?.cancel();
-      if (_hovering) _setBar(true);
+      _setBar(true);
     }
   }
 
@@ -81,9 +99,8 @@ class VideoControlsVisibility {
   }
 
   void _autoHide() {
-    // 只在"正在播 + 鼠标还在画面上"时收起：
-    // 鼠标都走了就该由 exit() 收，暂停了就该让它留着
-    if (!_playing || !_hovering) return;
+    // 只在"正在播 + 用户还在跟它互动"时收起：暂停了就该让它留着
+    if (!_playing || !(_revealed || _hovering)) return;
     _setBar(false);
   }
 

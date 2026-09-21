@@ -724,7 +724,12 @@ class _VideoControlsState extends State<_VideoControls> {
           // 命中测试会停在那一条，这里就不会跟着误触发播放。
           Listener(
             behavior: HitTestBehavior.opaque,
-            onPointerUp: (_) => unawaited(_toggle()),
+            onPointerUp: (_) {
+              // **先亮控制条**：手机上唯一的入口就是"点一下画面"
+              // （没有悬停，鼠标那套永远不触发）。
+              _vis.reveal();
+              unawaited(_toggle());
+            },
             child: const SizedBox.expand(),
           ),
 
