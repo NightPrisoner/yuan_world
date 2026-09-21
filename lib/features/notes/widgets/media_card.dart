@@ -745,13 +745,22 @@ class _VideoControlsState extends State<_VideoControls> {
           //    而且是 Stack 里最上面的一层 —— 用户的原话就是
           //    "不能做进视频控件里？"，那就让它和能用的那些按钮完全同构。
           //
-          //    **一直显示**：播放中是"暂停"、暂停时是"播放"、播完是"重播" ——
-          //    用户要的规则是"只有点中间这个按钮才暂停/重播"，那它就得在场。
-          //    点它的同时不动控制条（空白处才管显隐）。
-          Center(
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: _centerButton(),
+          //    **只在"没在播"的时候出现**（暂停→播放、播完→重播）。
+          //    用户的话：「播放的时候不显示，点暂停或者视频播放完了才出来」，
+          //    上一版我把它做成常显，中间老杵着一个圆钮，很怪。
+          //    同时也跟着控制条一起显隐、收起时不接收点击：
+          //    否则那个看不见的圆钮会吃掉画面正中的点击。
+          AnimatedOpacity(
+            opacity: (!_playing && barVisible) ? 1 : 0,
+            duration: AppMotion.fast,
+            child: IgnorePointer(
+              ignoring: _playing || !barVisible,
+              child: Center(
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: _centerButton(),
+                ),
+              ),
             ),
           ),
 
