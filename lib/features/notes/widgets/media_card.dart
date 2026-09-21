@@ -647,6 +647,18 @@ class _VideoControlsState extends State<_VideoControls> {
     if (player.state.duration == Duration.zero) {
       await widget.onReload();
       _watchdog(player);
+      // **补完 open 要把"播"这件事做完。**
+      //
+      // 以前这里 `return` 就走了：媒体还没就绪时点一下，界面只亮了个控制条、
+      // 什么都没发生（用户的原话是"点击空白的地方只是唤起控件"），
+      // 于是"第一次点"经常落空。补完再踢一脚 play，并且让 watchdog 兜底。
+      if (!player.state.playing) {
+        try {
+          await player.play();
+        } catch (_) {
+          // 打开失败已经由 stream.error 报给界面了，这里不再重复处理
+        }
+      }
       return;
     }
 
@@ -724,12 +736,7 @@ class _VideoControlsState extends State<_VideoControls> {
           // 命中测试会停在那一条，这里就不会跟着误触发播放。
           Listener(
             behavior: HitTestBehavior.opaque,
-            onPointerUp: (_) {
-              // **先亮控制条**：手机上唯一的入口就是"点一下画面"
-              // （没有悬停，鼠标那套永远不触发）。
-              _vis.reveal();
-              unawaited(_toggle());
-            },
+            onPointerUp: (_) => _onSurfaceTap(),
             child: const SizedBox.expand(),
           ),
 
@@ -773,11 +780,26 @@ class _VideoControlsState extends State<_VideoControls> {
   ///
   /// 和底部那排控件**完全同构**（Tooltip + Pressable，自己吃手势）：
   /// 用户反馈底部那排能用、中间这个不能，那就别让中间那条路特殊。
+  /// 点画面任意处（含正中央那个大按钮）：**先亮控制条，再切播放/暂停**。
+  ///
+  /// 用户明确要的行为：「点击正中间的暂停或者重播才有效，点击空白的地方只是
+  /// 唤起控件」是**问题**，他要的是整块画面都能播/暂停。所以：
+  ///   · 任何位置的点按都等于播放/暂停（第一次点也算，见 [_toggle] 里那条
+  ///     "媒体还没就绪就先补 open 再播"）；
+  ///   · 控制条跟着亮出来，播放中到点自动收起（暂停时留着）；
+  ///   · **不存在"再点一下只是把控件关掉"**这种状态 —— 控制条要么自己超时收，
+  ///     要么因为暂停而留着。
+  /// 桌面和手机共用这一条（桌面原来只有悬停驱动，现在是"悬停 + 点按"两套都行）。
+  void _onSurfaceTap() {
+    _vis.reveal();
+    unawaited(_toggle());
+  }
+
   Widget _centerButton({required IconData icon, required String tip}) =>
       _BigPlayButton(
         icon: icon,
         tip: tip,
-        onTap: () => unawaited(_toggle()),
+        onTap: _onSurfaceTap,
       );
 
   // ── 底部控制条 ──────────────────────────────────────────────────────────
