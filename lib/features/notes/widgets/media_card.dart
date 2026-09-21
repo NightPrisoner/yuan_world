@@ -744,18 +744,16 @@ class _VideoControlsState extends State<_VideoControls> {
           //    **和底部那排控件同一套做法**（Pressable，直接吃手势），
           //    而且是 Stack 里最上面的一层 —— 用户的原话就是
           //    "不能做进视频控件里？"，那就让它和能用的那些按钮完全同构。
-          if (!_playing)
-            Center(
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: _centerButton(
-                  icon: _completed
-                      ? Icons.replay_rounded
-                      : Icons.play_arrow_rounded,
-                  tip: _completed ? '重新播放' : '播放',
-                ),
-              ),
+          //
+          //    **一直显示**：播放中是"暂停"、暂停时是"播放"、播完是"重播" ——
+          //    用户要的规则是"只有点中间这个按钮才暂停/重播"，那它就得在场。
+          //    点它的同时不动控制条（空白处才管显隐）。
+          Center(
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: _centerButton(),
             ),
+          ),
 
           // 3) 底部控制条
           Align(
@@ -780,26 +778,27 @@ class _VideoControlsState extends State<_VideoControls> {
   ///
   /// 和底部那排控件**完全同构**（Tooltip + Pressable，自己吃手势）：
   /// 用户反馈底部那排能用、中间这个不能，那就别让中间那条路特殊。
-  /// 点画面任意处（含正中央那个大按钮）：**先亮控制条，再切播放/暂停**。
+  /// 点画面**空白处**：只切控制条的显示/隐藏。
   ///
-  /// 用户明确要的行为：「点击正中间的暂停或者重播才有效，点击空白的地方只是
-  /// 唤起控件」是**问题**，他要的是整块画面都能播/暂停。所以：
-  ///   · 任何位置的点按都等于播放/暂停（第一次点也算，见 [_toggle] 里那条
-  ///     "媒体还没就绪就先补 open 再播"）；
-  ///   · 控制条跟着亮出来，播放中到点自动收起（暂停时留着）；
-  ///   · **不存在"再点一下只是把控件关掉"**这种状态 —— 控制条要么自己超时收，
-  ///     要么因为暂停而留着。
-  /// 桌面和手机共用这一条（桌面原来只有悬停驱动，现在是"悬停 + 点按"两套都行）。
-  void _onSurfaceTap() {
-    _vis.reveal();
-    unawaited(_toggle());
-  }
+  /// 用户明确要的分工：
+  ///   · **正中央那个按钮** —— 播放 / 暂停 / 重播；
+  ///   · **空白处** —— 显示 ↔ 隐藏控制条。
+  /// 以前空白处一点就播/暂停，于是"点一下亮控件、再点一下想收起来"会变成
+  /// 暂停，手感很怪。两端同一套（桌面悬停照旧能显示/隐藏）。
+  void _onSurfaceTap() => _vis.toggle();
 
-  Widget _centerButton({required IconData icon, required String tip}) =>
-      _BigPlayButton(
-        icon: icon,
-        tip: tip,
-        onTap: _onSurfaceTap,
+  /// 正中央那个按钮：播放 / 暂停 / 重播。
+  ///
+  /// 一直显示（播放中是"暂停"、暂停时是"播放"、播完是"重播"），
+  /// 这样"点中间才管播放"这条规则在任何状态下都成立。
+  Widget _centerButton() => _BigPlayButton(
+        icon: _playing
+            ? Icons.pause_rounded
+            : (_completed ? Icons.replay_rounded : Icons.play_arrow_rounded),
+        tip: _playing
+            ? '暂停'
+            : (_completed ? '重新播放' : '播放'),
+        onTap: () => unawaited(_toggle()),
       );
 
   // ── 底部控制条 ──────────────────────────────────────────────────────────

@@ -1,20 +1,19 @@
-/// 视频控制条的显隐规则。
+/// 视频控制条什么时候显示、什么时候收起。
 ///
-/// 抽成独立的一个类、并且和 UI 完全无关，是因为这套规则是"悬停 / 是否在播放 /
-/// 鼠标静止超时"三个条件的组合 —— 藏在 widget 的私有 state 里就只能靠手点验证，
-/// 而这恰恰是最容易被改坏的地方（用户报的就是"那一堆控件老是杵在画面上"）。
+/// 规则（用户逐条提过，这里钉住）：
+///   · 桌面：鼠标进画面就显示、静止一段时间收起、离开立刻收起；
+///   · **手机**：没有悬停，所以"点画面空白处"= 显示/隐藏控制条；
+///   · **播放/暂停/重播只归正中央那个按钮**，空白处不碰播放状态；
+///   · 暂停时控制条留着不收（手机上要能拖进度、改倍速、全屏）。
 ///
-/// 规则（和 [MediaCard] 的说明一致）：
-///   · 鼠标不在画面上 → 不显示
-///   · 鼠标在画面上 → 显示；**播放中**一旦静止 [idleHide] 就自动收起
-///   · 暂停时不自动收起 —— 用户正盯着进度条准备拖，藏了纯属添乱
+/// 规则本身和 UI 无关，单独放这里是为了能直接测。
 library;
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-/// 鼠标在画面上静止多久后收起控制条。
+/// 播放中静止多久后收起控制条。
 const Duration kControlsIdleHide = Duration(seconds: 3);
 
 class VideoControlsVisibility {
@@ -30,14 +29,6 @@ class VideoControlsVisibility {
   bool _hovering = false;
   bool _playing = false;
   bool _barVisible = false;
-
-  /// **触摸设备上的"亮出来"授权。**
-  ///
-  /// 手机上根本没有悬停：手指不会 `onEnter`，于是 `_hovering` 永远是 false，
-  /// 控制条一次都不会出现 —— 用户的原话就是"播放的时候看不到视频控件，
-  /// 无法调整或者全屏"。所以加一条不依赖悬停的路径：**点一下画面就亮**，
-  /// 之后按同一套倒计时自动收起。
-  bool _revealed = false;
   Timer? _timer;
 
   /// 鼠标是否在画面范围内。
@@ -61,15 +52,22 @@ class VideoControlsVisibility {
   /// 鼠标离开画面。
   void exit() {
     _hovering = false;
-    // 触摸设备（或已经点过画面）不该因为"鼠标走了"就收起来
-    if (_revealed) return;
     _timer?.cancel();
     _setBar(false);
   }
 
-  /// 点了一下画面：把控制条亮出来（触摸设备唯一的入口）。
-  void reveal() {
-    _revealed = true;
+  /// **点画面空白处：显示 ↔ 隐藏。**
+  ///
+  /// 这是用户明确要的行为：空白处只管控件的显隐，播放/暂停归正中央那个按钮
+  /// （以前空白处一点就播/暂停，反而"点一下亮控件、再点一下把控件收掉"
+  /// 这种期望落空）。
+  void toggle() {
+    if (_barVisible) {
+      // 手动收起：把自动收起的倒计时也取消，否则它还会再来一次
+      _timer?.cancel();
+      _setBar(false);
+      return;
+    }
     _show();
   }
 
@@ -78,11 +76,11 @@ class VideoControlsVisibility {
     if (playing == _playing) return;
     _playing = playing;
     if (playing) {
-      // 开始播放：刚点过就开始计时收起
-      if (_revealed || _hovering) _show();
+      // 开始播放：控制条要是正显示着，就开始计时收起
+      if (_barVisible) _show();
     } else {
       // 暂停/播完：停止自动收起，让用户能从容拖进度、改倍速。
-      // **这里不再要求"鼠标在画面上"** —— 手机上暂停了却看不到控制条，
+      // **这里不要求"鼠标在画面上"** —— 手机上暂停了却看不到控制条，
       // 等于没法拖进度、没法全屏。
       _timer?.cancel();
       _setBar(true);
@@ -91,16 +89,16 @@ class VideoControlsVisibility {
 
   void dispose() => _timer?.cancel();
 
-  /// 亮出控制条，并把"收起"的倒计时重新开始。
+  /// 亮出控制条；**只在播放中**才开始"到点自动收起"的倒计时
+  /// （暂停时让它一直留着）。
   void _show() {
     _timer?.cancel();
     _setBar(true);
-    _timer = Timer(idleHide, _autoHide);
+    if (_playing) _timer = Timer(idleHide, _autoHide);
   }
 
   void _autoHide() {
-    // 只在"正在播 + 用户还在跟它互动"时收起：暂停了就该让它留着
-    if (!_playing || !(_revealed || _hovering)) return;
+    if (!_playing) return;
     _setBar(false);
   }
 
