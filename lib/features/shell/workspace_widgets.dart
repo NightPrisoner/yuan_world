@@ -261,7 +261,13 @@ enum DropSpot {
 /// 上/下 30% 是同级排序，中间 40% 是嵌套 —— 这是树形拖拽的通行做法：
 /// 只给一种行为的话，用户就没法既排序又调层级。
 class _DropZone extends StatefulWidget {
-  const _DropZone({required this.child, this.onNote, this.onCollectionDrop});
+  const _DropZone({
+    required this.child,
+    this.onNote,
+    this.onCollectionDrop,
+    this.indent = false,
+    this.depth = 0,
+  });
 
   final Widget child;
 
@@ -270,6 +276,11 @@ class _DropZone extends StatefulWidget {
 
   /// 接收文件夹：按落点决定排序还是嵌套。
   final void Function(Collection col, DropSpot spot)? onCollectionDrop;
+
+  /// 这一行的缩进参数：提示线要跟着"将要落到的那一层"缩进，
+  /// 否则线画在整行宽度上，用户看不出是插到同级还是塞进里面。
+  final bool indent;
+  final int depth;
 
   @override
   State<_DropZone> createState() => _DropZoneState();
@@ -312,13 +323,19 @@ class _DropZoneState extends State<_DropZone> {
         if (data is NoteDrag) {
           widget.onNote?.call(data.note);
         } else if (data is CollectionDrag) {
-          widget.onCollectionDrop?.call(data.collection, _spot);
+          // 落点按**松手那一刻的指针位置**现算，不用 onMove 缓存下来的值：
+          // 快速拖动时最后一次 onMove 的位置可能离松手位置有十几像素，
+          // 缓存值就还是「中间 = 塞进子文件夹」—— 于是"我明明放在它后面，
+          // 怎么就进去了"。现算保证落点和提示线是同一件事。
+          widget.onCollectionDrop?.call(data.collection, _spotFor(d.offset));
           setState(() => _spot = DropSpot.into);
         }
       },
       builder: (context, candidates, rejected) {
         final active = candidates.isNotEmpty;
         final nest = active && _spot == DropSpot.into;
+        // 同级插入的提示线：左端对齐"它将落到的那一层"的缩进
+        final lineLeft = (widget.indent ? 22.0 : 10.0) + widget.depth * 13 - 6;
 
         // 用 Stack 叠加提示线，而不是在上下插入新行 ——
         // 后者会在拖拽过程中改变布局高度，导致整列抖一下。
@@ -340,9 +357,9 @@ class _DropZoneState extends State<_DropZone> {
               child: widget.child,
             ),
             if (active && _spot == DropSpot.before)
-              Positioned(top: 0, left: 4, right: 4, child: _line(c)),
+              Positioned(top: 0, left: lineLeft, right: 4, child: _line(c)),
             if (active && _spot == DropSpot.after)
-              Positioned(bottom: 0, left: 4, right: 4, child: _line(c)),
+              Positioned(bottom: 0, left: lineLeft, right: 4, child: _line(c)),
           ],
         );
       },

@@ -31,6 +31,8 @@ extension _WsFolders on _DesktopWorkspaceState {
       order: _revealOrder[col.id],
       exiting: exiting,
       child: _DropZone(
+        indent: true,
+        depth: depth,
         // 笔记拖进来 = 归入这个文件夹
         onNote: (note) async {
           await state.moveNoteToCollection(note.id, col.id);

@@ -446,6 +446,36 @@ void main() {
       expect(all.map((x) => x.name).toList(), <String>['父', '顶层', '深的']);
       expect(top, isNotNull);
     });
+
+    test('先"移到顶层"再排到某个子文件夹后面：落在它的同级，不会再陷进去', () {
+      // 用户报的现象：「移到顶层后再放到子文件夹后会出现这个bug」。
+      // 拖到某个子文件夹**后面**，落点应该是那一层的同级（跟它平级），
+      // 而不是继续往下钻一层 —— 层级错了，行缩进就会和旁边的对不齐。
+      final top = repo.createCollection('顶层')!;
+      final sub = repo.createCollection('子')!;
+      repo.setCollectionParent(sub, top);
+      final moving = repo.createCollection('搬家的')!;
+      repo.setCollectionParent(moving, sub); // 原本嵌在子文件夹里
+
+      repo.moveCollectionToTopLevel(moving);
+      expect(
+        repo.allCollections().firstWhere((x) => x.id == moving).parentId,
+        isNull,
+        reason: '第一步要真的升到顶层',
+      );
+
+      repo.moveCollection(moving, sub, asChild: false, after: true);
+
+      expect(
+        repo.allCollections().firstWhere((x) => x.id == moving).parentId,
+        top,
+        reason: '第二步是「子的同级」，不是变成「子」的子文件夹',
+      );
+      expect(
+        repo.childCollections(top).map((x) => x.name).toList(),
+        <String>['子', '搬家的'],
+      );
+    });
   });
 
   // ── 统计筛选 ────────────────────────────────────────────────────────────
