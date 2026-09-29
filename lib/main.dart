@@ -9,6 +9,7 @@ import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'core/app_localization.dart';
 import 'core/app_paths.dart';
 import 'core/media/poster_maker.dart';
 import 'core/theme/app_theme.dart';
@@ -147,6 +148,12 @@ class YuanWorldApp extends StatelessWidget {
       title: '元世界',
       navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
+      // 框架自带的文案（框选后的剪切/复制/粘贴/全选、日期选择器、
+      // 无障碍标签）必须显式接上中文，否则跟随系统语言 —— 英文系统上
+      // 就是英文。定义在 core/app_localization.dart，测试拿的是同一份常量。
+      locale: kAppLocale,
+      supportedLocales: kAppSupportedLocales,
+      localizationsDelegates: kAppLocalizationsDelegates,
       // 只有带 --dart-define=YW_PERF=true 的构建才有，见 kShowPerfOverlay
       showPerformanceOverlay: kShowPerfOverlay,
       themeMode: state.themeMode,

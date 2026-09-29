@@ -31,6 +31,12 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # 框架内置的文案要走中文（文字选中后的"剪切/复制/粘贴/全选"、日期选择器、
+  # 无障碍语义标签等都由它提供）。不加这一条，那些菜单跟随系统语言 ——
+  # 英文系统上就是英文，而本应用其余文案全是手写中文，所以必须接上。
+  flutter_localizations:
+    sdk: flutter
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
