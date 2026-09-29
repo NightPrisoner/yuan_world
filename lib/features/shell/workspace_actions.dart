@@ -40,22 +40,26 @@ extension _WsActions on _DesktopWorkspaceState {
             ),
           ),
           const Spacer(),
-          btn('全选', () => _setState(() {
-                _selected
-                  ..clear()
-                  ..addAll(ids);
-              })),
-          btn('反选', () => _setState(() {
-                final next = ids.difference(_selected);
-                _selected
-                  ..clear()
-                  ..addAll(next);
-              })),
+          btn(
+            '全选',
+            () => _setState(() {
+              _selected
+                ..clear()
+                ..addAll(ids);
+            }),
+          ),
+          btn(
+            '反选',
+            () => _setState(() {
+              final next = ids.difference(_selected);
+              _selected
+                ..clear()
+                ..addAll(next);
+            }),
+          ),
           btn(
             '批量操作',
-            _selected.isEmpty
-                ? null
-                : () => _batchMenu(state, notes),
+            _selected.isEmpty ? null : () => _batchMenu(state, notes),
           ),
         ],
       ),

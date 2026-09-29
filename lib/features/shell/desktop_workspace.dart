@@ -76,10 +76,13 @@ class DesktopWorkspace extends StatefulWidget {
 }
 
 class _DesktopWorkspaceState extends State<DesktopWorkspace>
-    with SingleTickerProviderStateMixin {
+        // 两个 controller（侧栏收放 + 占满收放），所以不能再用 Single
+        with
+        TickerProviderStateMixin {
   _Section _section = _Section.notes;
   int? _selectedNoteId;
   bool _editing = false;
+
   /// 是否处于"占满页面"（三栏收起，阅读/编辑共用）。
   bool _editorFullscreen = false;
 
@@ -137,10 +140,152 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     value: 1,
   );
 
+  /// 导航栏曲线的只读视图：**只建一次**。
+  ///
+  /// `CurvedAnimation` 的构造函数会给 controller 挂一个 status 监听，
+  /// 只有 `dispose()` 才摘掉 —— 写在 build 里的话，每帧都会漏一个监听，
+  /// 而且曲线每帧重算。用 `drive` 不产生额外对象。
+  late final Animation<double> _navCurve = _navAnim.drive(
+    CurveTween(curve: AppMotion.enter),
+  );
+
+  /// "占满页面"的进度：0 = 三栏都在，1 = 三栏收起（正文占满整窗）。
+  ///
+  /// 以前这里是个 bool，布局直接写 `fullscreenEditor ? 0 : navW` ——
+  /// 于是**退出**占满的第一帧，列表栏宽度瞬间等于"整块剩余宽度"，
+  /// 先铺满全屏，正文再从右边插进来。用户看到的就是
+  /// "退出占满怎么是从右边冒出来的动画"。改成补间之后，收放方向由
+  /// 宽度本身表达：列表从左边长回来、正文原地缩回右边。
+  late final AnimationController _fsAnim = AnimationController(
+    vsync: this,
+    duration: AppMotion.normal,
+    value: _editorFullscreen ? 1 : 0,
+  );
+
+  /// 三栏布局要跟着**两个**动画走：侧栏收放 + 占满收放。
+  /// `Listenable.merge` 的返回值只会被 AnimatedBuilder 订阅一次，
+  /// 所以把它存下来，别每帧新建（每帧新建就是每帧重新订阅一遍）。
+  late final Listenable _paneTicker = Listenable.merge(<Listenable>[
+    _navAnim,
+    _fsAnim,
+  ]);
+
+  /// 切"占满页面"（三栏收起）。所有入口都走这里，动画才跟得上。
+  void _setEditorFullscreen(bool fullscreen) {
+    if (_editorFullscreen == fullscreen) return;
+    setState(() => _editorFullscreen = fullscreen);
+    _syncFullscreenAnim();
+  }
+
+  /// 让 [_fsAnim] 跟上"占满"的目标状态。
+  ///
+  /// 目标不只看 `_editorFullscreen`：换分栏、选中态被清掉、关掉详情栏
+  /// 都会让 [fullscreenEditor] 变成 false —— 那些路径不必各自记得收动画，
+  /// 只要在改完之后调一次这里。
+  void _syncFullscreenAnim() {
+    if (fullscreenEditor) {
+      if (_fsAnim.value < 1 && _fsAnim.status != AnimationStatus.forward) {
+        _fsAnim.forward();
+      }
+    } else {
+      if (_fsAnim.value > 0 && _fsAnim.status != AnimationStatus.reverse) {
+        _fsAnim.reverse();
+      }
+    }
+  }
+
   void _setNavCollapsed(bool collapsed) {
     if (_navCollapsed == collapsed) return;
     setState(() => _navCollapsed = collapsed);
     collapsed ? _navAnim.reverse() : _navAnim.forward();
+  }
+
+  // ── 文件夹树：展开/收起"一个一个来" ──────────────────────────────────────
+  //
+  // 以前 `_collapsed` 一翻，子树就在同一帧里整块出现/消失，一片东西
+  // "啪"地闪一下，看不出谁挂在谁底下。现在给本批次里的每一行派一个
+  // 出场序号（[_revealOrder]），行自己延迟 28ms × 序号再淡入滑出。
+  //
+  // 收起比展开多一件事：动画期间子树必须**留在树里**滑出去，
+  // 所以先记进 [_collapsing]（[_flattenTree] 把它当"还开着"），
+  // 等最后一行收完再真正写进 `_collapsed`。
+
+  /// 本批次每一行的出场序号（文件夹 id → 序号，0 起）。
+  /// 不在表里 = 不动画（首屏、直接切文件夹）。
+  final Map<int, int> _revealOrder = <int, int>{};
+
+  /// 正在播"收起"动画的文件夹：子树还要留一会儿滑出去。
+  final Set<int> _collapsing = <int>{};
+
+  /// 收起动画播完、真正折叠的定时器（连着点就换新的）。
+  Timer? _collapseTimer;
+
+  /// 收完整个子树的时长：最后一行开始时间 + 单行动画时长。
+  Duration _collapseTotal(int count) {
+    final last = math.min(math.max(count - 1, 0), _treeRevealMaxStagger);
+    return _treeRevealDuration + _treeRevealStagger * last;
+  }
+
+  /// 按左栏显示顺序取出某文件夹的全部后代 id（从浅到深）。
+  List<int> _descendantsInOrder(int rootId, List<Collection> all) {
+    final byParent = <int?, List<Collection>>{};
+    for (final c in all) {
+      (byParent[c.parentId] ??= <Collection>[]).add(c);
+    }
+    final out = <int>[];
+    void walk(int parentId, int depth) {
+      if (depth > 8) return;
+      for (final c in byParent[parentId] ?? const <Collection>[]) {
+        out.add(c.id);
+        walk(c.id, depth + 1);
+      }
+    }
+
+    walk(rootId, 0);
+    return out;
+  }
+
+  /// 正在收起的文件夹 + 它们的全部后代（用来给每一行标 `exiting`）。
+  Set<int> _collapsingRows(List<Collection> all) {
+    if (_collapsing.isEmpty) return const <int>{};
+    final out = <int>{};
+    for (final id in _collapsing) {
+      out.add(id);
+      out.addAll(_descendantsInOrder(id, all));
+    }
+    return out;
+  }
+
+  /// 点小三角：展开，或者带着交错动画收起。
+  void _toggleFolderCollapsed(Collection col, List<Collection> all) {
+    _collapseTimer?.cancel();
+    final opening = _collapsed.contains(col.id);
+    final kids = _descendantsInOrder(col.id, all);
+    setState(() {
+      _revealOrder.clear();
+      if (opening) {
+        _collapsing.remove(col.id);
+        _collapsed.remove(col.id);
+        // 从父项往下：第 1 个子项先出来，越深越晚
+        for (var i = 0; i < kids.length; i++) {
+          _revealOrder[kids[i]] = i + 1;
+        }
+      } else {
+        _collapsing.add(col.id);
+        // 收起倒着来：最深的那条先走，像回卷一样
+        for (var i = 0; i < kids.length; i++) {
+          _revealOrder[kids[i]] = kids.length - i - 1;
+        }
+        _collapseTimer = Timer(_collapseTotal(kids.length), () {
+          if (!mounted) return;
+          setState(() {
+            _collapsing.remove(col.id);
+            _collapsed.add(col.id);
+            _revealOrder.clear();
+          });
+        });
+      }
+    });
   }
 
   /// 拖左侧分隔条：**直接跟手**，不走动画。
@@ -184,6 +329,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   void dispose() {
     FocusManager.instance.removeListener(_refocusIfDangling);
     _navAnim.dispose();
+    _fsAnim.dispose();
     _search.dispose();
     _searchFocus.dispose();
     _workspaceFocus.dispose();
@@ -228,6 +374,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
       _editorFullscreen = false;
       _detailOpen = true;
     });
+    _syncFullscreenAnim();
   }
 
   /// 收起正文栏。顺手清掉选中态和编辑态，
@@ -239,6 +386,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
       _editorFullscreen = false;
       _selectedNoteId = null;
     });
+    _syncFullscreenAnim();
   }
 
   /// Ctrl+F：把光标送进搜索框，并**选中已有内容**。
@@ -282,7 +430,8 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   void _refocusIfDangling() {
     final f = FocusManager.instance.primaryFocus;
     final ours = _workspaceFocus.nearestScope;
-    final dangling = f == null ||
+    final dangling =
+        f == null ||
         identical(f, FocusManager.instance.rootScope) ||
         (f is FocusScopeNode && identical(f, ours));
     if (!dangling) return;
@@ -292,12 +441,12 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
 
   /// 打开标签管理页（左栏标签区那个小齿轮、以及设置里那一行都走这里）。
   void _openTagManager(BuildContext context) {
-    Navigator.of(context).push(
-      ApplePageRoute<void>(pageBuilder: (_) => const ManageTagsPage()),
-    );
+    Navigator.of(context)
+        .push(ApplePageRoute<void>(pageBuilder: (_) => const ManageTagsPage()));
   }
 
-  void _goSection(_Section s) {    setState(() {
+  void _goSection(_Section s) {
+    setState(() {
       _section = s;
       if (s != _Section.notes) {
         _editing = false;
@@ -338,6 +487,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
             _editing = false;
             _editorFullscreen = false;
           });
+          _syncFullscreenAnim();
         }
       });
     }
@@ -400,7 +550,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
             return;
           }
           if (_editorFullscreen) {
-            setState(() => _editorFullscreen = false);
+            _setEditorFullscreen(false);
           }
         },
       }),
@@ -448,28 +598,63 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     final showNotesSection =
         _section == _Section.notes || _section == _Section.archived;
 
+    // ── 先把三栏里"贵"的子树建好，再进动画 ──────────────────────────────
+    //
+    // 以前它们在动画 builder **里面**构造：收起/展开侧栏的每一帧都要重建
+    // 导航树（文件夹递归展开、每个文件夹一行）+ 笔记列表 + 正文（一篇文章
+    // 可能有几百个段落控件）。这就是"收起侧栏有明显卡顿感"的主因。
+    //
+    // 现在每次 build 只构造一次，动画的每一帧都复用**同一批 widget 实例**——
+    // Flutter 对 identical 的 widget 会直接跳过 rebuild，只重新布局。
+    final navRail = _navRail(context, state);
+    final navPane = _navPane(context, state);
+    final listPane = _listPane(context, state, notes);
+    final sectionPage = _sectionSwitcher(state);
+    final detailPane = _detailPane(
+      context,
+      state,
+      fullscreen: fullscreenEditor,
+    );
+
     return LayoutBuilder(
       builder: (context, box) {
         final avail = box.maxWidth;
 
+        // 正文（阅读/编辑）内容的**排版宽度**：按三栏"稳定下来之后"的宽度
+        // 算，与两个动画的当前进度无关。这样动画期间文字只**裁切**、
+        // 不回流重排：
+        //   · 收起侧栏：正文按收起后的宽度排版、左边多出来的部分被裁掉，
+        //     随侧栏收窄逐步露出来；
+        //   · 退出"占满"：正文按三栏态下的宽度右对齐，列表从左边长回来
+        //     把它左边那块空白盖住 —— 正文自己一动不动（"缩回右边"）。
+        final settledNavW = _navCollapsed ? railWidth : _navWidth;
+        final settledNavResW = _navCollapsed ? 0.0 : resizerWidth;
+        final settledDetailW = math.max(
+          0.0,
+          avail - settledNavW - settledNavResW - _listWidth - resizerWidth,
+        );
+        // 占满时内容按整窗宽排版（进入动画的第一帧就换好，之后不再变）
+        final contentW = fullscreenEditor ? avail : settledDetailW;
+
         return AnimatedBuilder(
-          animation: _navAnim,
+          // 侧栏收放 + 占满收放共用同一段布局，只是"谁在变宽变窄"不同
+          animation: _paneTicker,
           builder: (context, _) {
             // 宽度 = 收起宽 → 用户设的宽度，按进度插值。
             // 拖动时进度锁在 1，所以宽度**直接跟手**，没有 300ms 的拖尾。
-            final progress =
-                CurvedAnimation(parent: _navAnim, curve: AppMotion.enter).value;
-            final navW = railWidth + (_navWidth - railWidth) * progress;
-            // 0 = 完全收起，1 = 完全展开（用于内容交叉淡入）
             final navT = _navAnim.value;
-            final navPaneW = fullscreenEditor ? 0.0 : navW;
+            final navW = railWidth + (_navWidth - railWidth) * _navCurve.value;
+            // 0 = 三栏，1 = 三栏收起（占满）
+            final fs = _fsAnim.value;
+            final navPaneW = navW * (1 - fs);
 
             return TweenAnimationBuilder<double>(
-              // 正文栏：只有"笔记分栏 + 非全屏"才展开
+              // 正文栏：只有"笔记分栏"才展开。
+              // **不写 `!fullscreenEditor`**：占满时正文本来就是展开的，
+              // 让 t 掉到 0 会让正文淡出（就是以前那个"占满后白屏"的坑），
+              // 也会让退出占满时列表按"整块宽度"插值，铺满全屏。
               tween: Tween<double>(
-                end: (_detailOpen && showNotesSection && !fullscreenEditor)
-                    ? 1.0
-                    : 0.0,
+                end: (_detailOpen && showNotesSection) ? 1.0 : 0.0,
               ),
               duration: AppMotion.normal,
               curve: AppMotion.enter,
@@ -477,44 +662,41 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                 // 分隔条也要算进宽度：**漏算就是 8px 溢出**（Row 里
                 // 每多一个分隔条就少 8px 可用宽度）
                 //
-                // 注意判断用的是 `_navCollapsed`（**目标状态**）而不是动画值
-                // `navT`：拖动宽度时 navT 会因为"当前宽度 / 目标宽度"的比值
-                // 掉到 1 以下，分隔条就会被从树里拿掉 —— 手正按着它，
-                // 结果是"拉着拉着就断了"（用户报的正是这个）。
-                final navResW =
-                    (!fullscreenEditor && !_navCollapsed) ? resizerWidth : 0.0;
+                // 占满时分隔条跟着一起收窄到 0，不再占宽度。
+                final navResW = _navCollapsed ? 0.0 : resizerWidth * (1 - fs);
                 final areaW = math.max(0.0, avail - navPaneW - navResW);
                 // 关闭动画还在跑的时候**必须继续渲染**（否则没有滑出动画），
                 // 动画归零后立刻拆掉 —— 留一个 0 宽的编辑器在树里，
                 // 既浪费又会让"正文栏收起"这件事在语义上说不清。
-                //
-                // 全屏编辑时**立即**不渲染列表栏：那时 t 还在从 1 掉到 0，
-                // 若跟着 t 走，列表会在全屏的第一帧里闪一下。
-                final withDetail = !fullscreenEditor &&
-                    showNotesSection &&
-                    (_detailOpen || t > 0.001);
+                final withDetail =
+                    showNotesSection && (_detailOpen || t > 0.001);
+
                 /// 这一栏渲染的是"正文/笔记内容"（而不是列表或统计页）
                 final isDetailPane = withDetail || fullscreenEditor;
-                final listResW =
-                    (withDetail && t > 0.001) ? resizerWidth : 0.0;
+                final listResW = (withDetail && t > 0.001)
+                    ? resizerWidth * (1 - fs)
+                    : 0.0;
 
-                // 列表栏：从"占满"补间到用户设的宽度
-                var listW = (!withDetail) ? areaW : areaW * (1 - t) + _listWidth * t;
+                // 列表栏：从"整块让给正文"补间到用户设的宽度，再乘上
+                // "占满"的收放 —— 占满时收到 0 宽（滑向左边），退出占满时
+                // 从左往右长回来，正文**原地缩回右边**。
+                var listW = (!withDetail)
+                    ? areaW
+                    : (areaW * (1 - t) + _listWidth * t) * (1 - fs);
                 // 列表栏最多占到"剩余空间减去正文栏分隔条"，否则会挤爆
                 listW = listW.clamp(0.0, math.max(0.0, areaW - listResW));
-                final detailW =
-                    math.max(0.0, areaW - listW - listResW);
-                // 正文栏内容按**最终**宽度排版（动画过程中不回流重排）
-                final settledDetailW = math.max(
-                  0.0,
-                  areaW - _listWidth - resizerWidth,
-                );
+                final detailW = math.max(0.0, areaW - listW - listResW);
+                // 内容槽里装的是正文时按 [contentW] 排版；装的是列表或
+                // 统计页时就按它自己的格子宽（否则列表会被挤到右边去）
+                final layoutW = isDetailPane ? contentW : areaW;
 
                 return Row(
                   children: [
-                    if (!fullscreenEditor)
+                    // 导航栏：占满时收到 0 宽（滑向左边）。
+                    // 宽度还没归零就继续渲染，归零后拆掉 —— 不留 0 宽的树。
+                    if (fs < 0.999)
                       SizedBox(
-                        width: navW,
+                        width: navPaneW,
                         child: ClipRect(
                           child: Stack(
                             fit: StackFit.expand,
@@ -530,7 +712,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                                     // （动画途中直接抛 assertion）
                                     minWidth: 0,
                                     maxWidth: railWidth,
-                                    child: _navRail(context, state),
+                                    child: navRail,
                                   ),
                                 ),
                               if (navT > 0)
@@ -540,7 +722,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                                     alignment: Alignment.centerLeft,
                                     minWidth: 0,
                                     maxWidth: _navWidth,
-                                    child: _navPane(context, state),
+                                    child: navPane,
                                   ),
                                 ),
                             ],
@@ -550,25 +732,53 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                     // 分隔条按**目标状态**给：展开着就一直有。
                     // 以前按动画值 navT 判断，拖动时 navT 会掉下来，
                     // 分隔条被从树里拿掉 —— 手还按着，拖拽就此中断
-                    // （用户说的"拉着拉着断掉"）。
-                    if (!fullscreenEditor && !_navCollapsed)
-                      _PaneResizer(
-                        onDrag: _dragNavWidth,
-                        onDragEnd: _saveWidths,
+                    // （用户说的"拉着拉着断掉"）。占满时它跟着收窄到 0。
+                    // 占满过程中分隔条要**跟着一起变窄**：宽度按 navResW
+                    // 给死。不夹这一下的话，公式里只扣了 8*(1-fs)，
+                    // 而分隔条自己仍按 8 宽渲染 —— 多出来的 8*fs 就是
+                    // 退出/进入占满时那几像素的 Row 溢出。
+                    if (navResW > 0.5)
+                      SizedBox(
+                        width: navResW,
+                        child: _PaneResizer(
+                          onDrag: _dragNavWidth,
+                          onDragEnd: _saveWidths,
+                        ),
                       ),
 
-                    if (withDetail) ...[
+                    // 列表栏：占满的动画**收完之后**才整块拆掉（不留 0 宽的树），
+                    // 但动画期间必须留着 —— 退出占满时它就是从那 0 宽长回来的，
+                    // 拆早了就没有"从左边长回来"这回事了。
+                    if (withDetail && fs < 0.999) ...[
                       SizedBox(
+                        // 只给测试/调试用：量"列表栏这一格"的宽度，
+                        // 用它钉住"退出占满时列表从左边长回来"
+                        key: const ValueKey<String>('list-column'),
                         width: listW,
-                        child: _listPane(context, state, notes),
-                      ),
-                      if (t > 0.001)
-                        _PaneResizer(
-                          onDrag: (d) => setState(
-                            () => _listWidth =
-                                (_listWidth + d).clamp(_listMin, _listMax),
+                        // 列表内容按**用户设的宽度**排版，外层用"帘子"
+                        // 裁切（左侧对齐）：占满/退出时列表是滑出去、滑回来，
+                        // 而不是每帧重新排一遍卡片。
+                        child: ClipRect(
+                          child: OverflowBox(
+                            alignment: Alignment.centerLeft,
+                            minWidth: _listWidth,
+                            maxWidth: _listWidth,
+                            child: listPane,
                           ),
-                          onDragEnd: _saveWidths,
+                        ),
+                      ),
+                      if (listResW > 0.5)
+                        SizedBox(
+                          width: listResW,
+                          child: _PaneResizer(
+                            onDrag: (d) => setState(
+                              () => _listWidth = (_listWidth + d).clamp(
+                                _listMin,
+                                _listMax,
+                              ),
+                            ),
+                            onDragEnd: _saveWidths,
+                          ),
                         ),
                     ],
                     // **正文栏/内容栏只在这一处渲染。**
@@ -601,20 +811,17 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                           // 但屏幕上**一片白**。这就是"占满页面后白屏"。
                           opacity: withDetail ? Curves.easeOut.transform(t) : 1,
                           child: OverflowBox(
-                            // 内容按最终宽度排版、被右侧裁掉 ——
-                            // 观感就是"面板从右边推进来"，而不是被压扁重排
+                            // 内容按最终宽度排版、被两侧裁掉 ——
+                            // 观感就是"面板从右边推进来 / 退出时缩回右边"，
+                            // 而不是被压扁重排
                             alignment: Alignment.centerRight,
                             minWidth: 0,
-                            maxWidth: withDetail ? settledDetailW : areaW,
+                            maxWidth: layoutW,
                             child: isDetailPane
-                                ? _detailPane(
-                                    context,
-                                    state,
-                                    fullscreen: fullscreenEditor,
-                                  )
+                                ? detailPane
                                 : showNotesSection
-                                    ? _listPane(context, state, notes)
-                                    : _sectionSwitcher(state),
+                                ? listPane
+                                : sectionPage,
                           ),
                         ),
                       ),
@@ -645,6 +852,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
       // 新建必然要把正文栏拉出来，否则用户看不到自己刚建的东西
       _detailOpen = true;
     });
+    _syncFullscreenAnim();
   }
 
   /// 是否处于"占满页面"（三栏收起）。
@@ -663,7 +871,12 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   void _exitAllFullscreen() {
     if (_windowFullscreen) setAppFullscreen(false);
     _windowFullscreen = false;
-    _editorFullscreen = false;
+    // 这个函数可能正被别的 setState 闭包调用，所以这里只改字段 + 让动画
+    // 跟上，不再套一层 setState（调用方随后一定会重建）。
+    if (_editorFullscreen) {
+      _editorFullscreen = false;
+      _syncFullscreenAnim();
+    }
   }
 
   /// 分栏页面之间的切换动画。
@@ -716,7 +929,6 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   // ── 文集的右键/⋯ 菜单 ───────────────────────────────────────────────────
 
   // ── 右栏：阅读 / 编辑 ───────────────────────────────────────────────────
-
 }
 
 // ── 瀑布流列数 ────────────────────────────────────────────────────────────

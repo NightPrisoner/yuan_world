@@ -56,7 +56,11 @@ class _HomeShellState extends State<HomeShell> {
 
   static const _tabs = <_TabSpec>[
     _TabSpec('笔记', Icons.article_outlined, Icons.article),
-    _TabSpec('待办', Icons.check_circle_outline_rounded, Icons.check_circle_rounded),
+    _TabSpec(
+      '待办',
+      Icons.check_circle_outline_rounded,
+      Icons.check_circle_rounded,
+    ),
     _TabSpec('统计', Icons.insights_outlined, Icons.insights),
     _TabSpec('设置', Icons.tune_outlined, Icons.tune),
   ];
@@ -72,12 +76,7 @@ class _HomeShellState extends State<HomeShell> {
     // 窄屏：底部标签栏
     final body = IndexedStack(
       index: _index,
-      children: const [
-        NotesPage(),
-        TodosPage(),
-        StatsPage(),
-        SettingsPage(),
-      ],
+      children: const [NotesPage(), TodosPage(), StatsPage(), SettingsPage()],
     );
 
     // **窄屏也要能按快捷键。**
@@ -91,9 +90,8 @@ class _HomeShellState extends State<HomeShell> {
     return CallbackShortcuts(
       bindings: bindShortcuts(<String, VoidCallback>{
         AppShortcutIds.newNote: () => createAndOpenNote(context),
-        AppShortcutIds.search: () => Navigator.of(context).push(
-          ApplePageRoute<void>(pageBuilder: (_) => const SearchPage()),
-        ),
+        AppShortcutIds.search: () => Navigator.of(context)
+            .push(ApplePageRoute<void>(pageBuilder: (_) => const SearchPage())),
         AppShortcutIds.allNotes: () => setState(() => _index = 0),
         AppShortcutIds.todos: () => setState(() => _index = 1),
         AppShortcutIds.stats: () => setState(() => _index = 2),
@@ -174,8 +172,9 @@ class _MobileTabBar extends StatelessWidget {
                           tabs[i].label,
                           style: AppText.caption2.copyWith(
                             color: index == i ? c.tint : c.tertiaryLabel,
-                            fontWeight:
-                                index == i ? FontWeight.w600 : FontWeight.w400,
+                            fontWeight: index == i
+                                ? FontWeight.w600
+                                : FontWeight.w400,
                           ),
                         ),
                       ],

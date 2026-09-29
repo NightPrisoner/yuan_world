@@ -40,10 +40,7 @@ void main() {
     await tester.pumpWidget(
       ChangeNotifierProvider<AppState>.value(
         value: state,
-        child: MaterialApp(
-          theme: AppTheme.light(),
-          home: const HomeShell(),
-        ),
+        child: MaterialApp(theme: AppTheme.light(), home: const HomeShell()),
       ),
     );
     await tester.pumpAndSettle();
@@ -333,10 +330,7 @@ void main() {
 
       // 关键断言：不是底部面板，而是锚定弹出的下拉菜单
       expect(find.byType(BottomSheet), findsNothing);
-      expect(
-        find.byWidgetPredicate((w) => w is PopupMenuItem),
-        findsWidgets,
-      );
+      expect(find.byWidgetPredicate((w) => w is PopupMenuItem), findsWidgets);
 
       // 菜单位于屏幕上半部分（贴着上方列表行），而不是贴在窗口底部
       // 断言**菜单本身**贴着上方，而不是某一项的位置 ——
@@ -396,18 +390,17 @@ void main() {
   group('拖拽', () {
     testWidgets('把笔记拖到文件夹上就归入该文件夹', (tester) async {
       final cid = state.repo.createCollection('目标文件夹')!;
-      final noteId =
-          state.repo.insertNote(title: '待归类的文章', content: '正文', excerpt: '');
+      final noteId = state.repo.insertNote(
+        title: '待归类的文章',
+        content: '正文',
+        excerpt: '',
+      );
       await state.refresh();
       await pumpApp(tester, size: const Size(1400, 900));
 
       expect(state.repo.getNote(noteId)!.collectionId, isNull);
 
-      await dragTo(
-        tester,
-        find.text('待归类的文章').first,
-        find.text('目标文件夹').first,
-      );
+      await dragTo(tester, find.text('待归类的文章').first, find.text('目标文件夹').first);
 
       expect(state.repo.getNote(noteId)!.collectionId, cid);
     });
@@ -425,11 +418,7 @@ void main() {
 
       expect(state.repo.getNote(noteId)!.collectionId, cid);
 
-      await dragTo(
-        tester,
-        find.text('要搬走的文章').first,
-        find.text('未分类').first,
-      );
+      await dragTo(tester, find.text('要搬走的文章').first, find.text('未分类').first);
 
       expect(state.repo.getNote(noteId)!.collectionId, isNull);
     });
@@ -447,14 +436,9 @@ void main() {
       );
       expect(state.collections.every((c) => c.parentId == null), isTrue);
 
-      await dragTo(
-        tester,
-        find.text('要嵌套的').first,
-        find.text('父文件夹').first,
-      );
+      await dragTo(tester, find.text('要嵌套的').first, find.text('父文件夹').first);
 
-      final nested =
-          state.collections.firstWhere((c) => c.name == '要嵌套的');
+      final nested = state.collections.firstWhere((c) => c.name == '要嵌套的');
       final parent = state.collections.firstWhere((c) => c.name == '父文件夹');
       expect(nested.parentId, parent.id, reason: '应该挂到父文件夹下面');
     });
@@ -521,7 +505,11 @@ void main() {
         reason: '全屏时正文不能是透明的，否则就是白屏',
       );
 
-      // 导航栏与列表栏都收起来了
+      // 导航栏与列表栏都收起来了。
+      // 这里要先等动画走完：收三栏是**补间**过去的（退出占满时它们还得
+      // 从 0 宽长回来），动画途中列表栏还在树里、只是宽度收到 0 被裁掉，
+      // 直接按"树里有没有"断言会误判。视觉上的"收起来了"看的是宽度归零。
+      await tester.pumpAndSettle();
       expect(find.text('全部笔记'), findsNothing);
       expect(find.text('未分类'), findsNothing);
       expect(find.text('搜索全部笔记'), findsNothing);
@@ -683,26 +671,28 @@ void main() {
         SortField.title,
         reason: '点「名称」应该把排序字段换成名称',
       );
-      expect(
-        state.filter.sort.dir,
-        SortDir.desc,
-        reason: '换字段要保留原来的方向',
-      );
+      expect(state.filter.sort.dir, SortDir.desc, reason: '换字段要保留原来的方向');
     });
 
     testWidgets('切到创建日期递增后，列表顺序真的跟着变', (tester) async {
       // 之前那条只断言了「筛选状态变了」，没断言**列表顺序**，
       // 所以"菜单勾上了但列表没动"这种情况它抓不到。
       state.repo.insertNote(
-        title: '最早的', content: 'x', excerpt: 'x',
+        title: '最早的',
+        content: 'x',
+        excerpt: 'x',
         createdAt: DateTime(2020, 1, 1),
       );
       state.repo.insertNote(
-        title: '中间的', content: 'x', excerpt: 'x',
+        title: '中间的',
+        content: 'x',
+        excerpt: 'x',
         createdAt: DateTime(2022, 1, 1),
       );
       state.repo.insertNote(
-        title: '最新的', content: 'x', excerpt: 'x',
+        title: '最新的',
+        content: 'x',
+        excerpt: 'x',
         createdAt: DateTime(2024, 1, 1),
       );
       await state.refresh();
@@ -711,18 +701,19 @@ void main() {
       state.setSort(NoteSort.createdAsc);
       await tester.pumpAndSettle();
 
-      expect(
-        state.notes.map((n) => n.title).toList(),
-        <String>['最早的', '中间的', '最新的'],
-        reason: '递增就该从早到晚',
-      );
+      expect(state.notes.map((n) => n.title).toList(), <String>[
+        '最早的',
+        '中间的',
+        '最新的',
+      ], reason: '递增就该从早到晚');
 
       state.setSort(NoteSort.createdDesc);
       await tester.pumpAndSettle();
-      expect(
-        state.notes.map((n) => n.title).toList(),
-        <String>['最新的', '中间的', '最早的'],
-      );
+      expect(state.notes.map((n) => n.title).toList(), <String>[
+        '最新的',
+        '中间的',
+        '最早的',
+      ]);
     });
 
     testWidgets('点方向项只换方向，字段不动', (tester) async {
@@ -738,8 +729,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(state.filter.sort.dir, SortDir.asc);
-      expect(state.filter.sort.field, SortField.updated,
-          reason: '换方向不该把字段重置掉');
+      expect(state.filter.sort.field, SortField.updated, reason: '换方向不该把字段重置掉');
     });
 
     testWidgets('切到瀑布流时中栏会自动撑开，避免两列挤成一团', (tester) async {
@@ -747,12 +737,14 @@ void main() {
       await pumpApp(tester, size: const Size(1400, 900));
 
       final before =
-          double.tryParse(state.repo.getSetting('layout.listWidth') ?? '') ?? 316;
+          double.tryParse(state.repo.getSetting('layout.listWidth') ?? '') ??
+          316;
       await tester.tap(find.byTooltip('瀑布流视图'));
       await tester.pumpAndSettle();
 
       final after =
-          double.tryParse(state.repo.getSetting('layout.listWidth') ?? '') ?? 316;
+          double.tryParse(state.repo.getSetting('layout.listWidth') ?? '') ??
+          316;
       expect(after, greaterThan(before));
     });
 
@@ -766,7 +758,9 @@ void main() {
       await tester.dragFrom(const Offset(240, 400), const Offset(70, 0));
       await tester.pumpAndSettle();
 
-      final saved = int.tryParse(state.repo.getSetting('layout.navWidth') ?? '');
+      final saved = int.tryParse(
+        state.repo.getSetting('layout.navWidth') ?? '',
+      );
       expect(saved, isNotNull, reason: '拖动后要写库');
       expect(saved, greaterThan(240), reason: '往右拖应该变宽');
     });
@@ -787,9 +781,13 @@ void main() {
       await g.up();
       await tester.pumpAndSettle();
 
-      final saved = int.tryParse(state.repo.getSetting('layout.navWidth') ?? '') ?? 0;
-      expect(saved, greaterThanOrEqualTo(236 + 30),
-          reason: '只吃掉第一步的位移，说明中途分隔条没了、拖拽断了');
+      final saved =
+          int.tryParse(state.repo.getSetting('layout.navWidth') ?? '') ?? 0;
+      expect(
+        saved,
+        greaterThanOrEqualTo(236 + 30),
+        reason: '只吃掉第一步的位移，说明中途分隔条没了、拖拽断了',
+      );
     });
 
     testWidgets('宽度有上下限，拖过头也不会把别的栏挤没', (tester) async {
@@ -966,7 +964,11 @@ void main() {
     });
 
     testWidgets('点编辑会打开编辑器', (tester) async {
-      final id = state.repo.insertNote(title: '去编辑', content: '原文', excerpt: '');
+      final id = state.repo.insertNote(
+        title: '去编辑',
+        content: '原文',
+        excerpt: '',
+      );
       await state.refresh();
       await pumpDetail(tester, id);
 

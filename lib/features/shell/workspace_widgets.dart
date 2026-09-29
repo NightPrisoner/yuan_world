@@ -261,11 +261,7 @@ enum DropSpot {
 /// 上/下 30% 是同级排序，中间 40% 是嵌套 —— 这是树形拖拽的通行做法：
 /// 只给一种行为的话，用户就没法既排序又调层级。
 class _DropZone extends StatefulWidget {
-  const _DropZone({
-    required this.child,
-    this.onNote,
-    this.onCollectionDrop,
-  });
+  const _DropZone({required this.child, this.onNote, this.onCollectionDrop});
 
   final Widget child;
 
@@ -337,8 +333,9 @@ class _DropZoneState extends State<_DropZone> {
                   color: nest ? c.tint : Colors.transparent,
                   width: 1.5,
                 ),
-                color:
-                    nest ? c.tint.withValues(alpha: 0.10) : Colors.transparent,
+                color: nest
+                    ? c.tint.withValues(alpha: 0.10)
+                    : Colors.transparent,
               ),
               child: widget.child,
             ),
@@ -454,6 +451,104 @@ class _NavGroupLabel extends StatelessWidget {
   }
 }
 
+// ── 文件夹树的一条一行 ────────────────────────────────────────────────────
+
+/// 交错出现的节奏：每一行比上一行晚 [_treeRevealStagger]，
+/// 最多错开 [_treeRevealMaxStagger] 行 —— 再深的子树就一起出来，
+/// 免得最底下那行要等半秒才现身。
+const Duration _treeRevealDuration = Duration(milliseconds: 200);
+const Duration _treeRevealStagger = Duration(milliseconds: 28);
+const int _treeRevealMaxStagger = 8;
+
+/// 文件夹树里"一个一个冒出来 / 一个一个缩回去"的包装。
+///
+/// 展开时：从左边一点点滑出来 + 淡入，越深的子项出场越晚；
+/// 收起时反过来（最深的那条先走）。这样一眼就能看出
+/// "这些是刚才那个文件夹底下的"，而不是整片内容在同一帧里闪一下。
+///
+/// [order] 是本批次里的出场序号（0 起）；`null` 表示不动画（首屏、
+/// 直接切文件夹等）—— 那种情况下直接是最终的可见状态。
+class _TreeReveal extends StatefulWidget {
+  const _TreeReveal({required this.child, this.order, this.exiting = false});
+
+  final Widget child;
+  final int? order;
+
+  /// 所属的父文件夹正在收起：该轮到这一行滑出去了。
+  final bool exiting;
+
+  @override
+  State<_TreeReveal> createState() => _TreeRevealState();
+}
+
+class _TreeRevealState extends State<_TreeReveal>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: _treeRevealDuration,
+    // 不需要动画的（首屏就有的行）直接停在"已出现"
+    value: widget.order == null ? 1 : 0,
+  );
+
+  /// 本行的延迟：等前面几行先出来。
+  Timer? _delay;
+
+  /// 前面还有几行（更深的子树一起出来，所以封顶）
+  int get _rank => math.min(widget.order ?? 0, _treeRevealMaxStagger);
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.order != null) {
+      _delay = Timer(_treeRevealStagger * _rank, () {
+        if (mounted) _c.forward();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _TreeReveal oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 只在"开始收起"那一刻排一次反向动画，之后 rebuild 不再重复排队
+    if (widget.exiting && !oldWidget.exiting) {
+      _delay?.cancel();
+      _delay = Timer(_treeRevealStagger * _rank, () {
+        if (mounted) _c.reverse();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _delay?.cancel();
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (AppMotion.reduceMotion(context)) return widget.child;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, child) {
+        final t =
+            (_c.status == AnimationStatus.reverse
+                    ? AppMotion.exit
+                    : AppMotion.enter)
+                .transform(_c.value);
+        return Opacity(
+          opacity: t.clamp(0.0, 1.0),
+          child: Transform.translate(
+            offset: Offset(-10 * (1 - t), 0),
+            child: child,
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
 /// 文件夹前面的收起/展开小三角。
 ///
 /// 命中区域给到 15px 见方，比图标本身大 —— 这个小东西点起来本来就费劲，
@@ -485,11 +580,7 @@ class _CollapseToggle extends StatelessWidget {
           spring: AppMotion.bouncy,
           builder: (context, v) => Transform.rotate(
             angle: v * 2 * math.pi,
-            child: Icon(
-              Icons.chevron_right_rounded,
-              size: 16,
-              color: color,
-            ),
+            child: Icon(Icons.chevron_right_rounded, size: 16, color: color),
           ),
         ),
       ),
@@ -497,7 +588,8 @@ class _CollapseToggle extends StatelessWidget {
   }
 }
 
-class _NavRow extends StatefulWidget {  const _NavRow({
+class _NavRow extends StatefulWidget {
+  const _NavRow({
     required this.icon,
     required this.label,
     required this.selected,
@@ -617,38 +709,41 @@ class _NavRowState extends State<_NavRow> {
                     overflow: TextOverflow.ellipsis,
                     style: AppText.footnote.copyWith(
                       color: Color.lerp(c.label, accent, t)!,
-                      fontWeight:
-                          widget.selected ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: widget.selected
+                          ? FontWeight.w600
+                          : FontWeight.w400,
                     ),
                   ),
                 ),
-                    if (widget.pinned)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 5),
-                        child: Icon(Icons.push_pin, size: 11, color: c.tint),
-                      ),
-                    if (widget.onMenu != null && _hover)
-                      Builder(
-                        builder: (btnCtx) => GestureDetector(
-                          onTap: () =>
-                              widget.onMenu!(AppMenuAnchor(context: btnCtx)),
-                          behavior: HitTestBehavior.opaque,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 2),
-                            child: Icon(Icons.more_horiz_rounded,
-                                size: 15, color: c.tertiaryLabel),
-                          ),
+                if (widget.pinned)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 5),
+                    child: Icon(Icons.push_pin, size: 11, color: c.tint),
+                  ),
+                if (widget.onMenu != null && _hover)
+                  Builder(
+                    builder: (btnCtx) => GestureDetector(
+                      onTap: () =>
+                          widget.onMenu!(AppMenuAnchor(context: btnCtx)),
+                      behavior: HitTestBehavior.opaque,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: Icon(
+                          Icons.more_horiz_rounded,
+                          size: 15,
+                          color: c.tertiaryLabel,
                         ),
                       ),
-                    if (widget.count != null && widget.count! > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Text(
-                          '${widget.count}',
-                          style:
-                              AppText.caption1.copyWith(color: c.tertiaryLabel),
-                        ),
-                      ),
+                    ),
+                  ),
+                if (widget.count != null && widget.count! > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text(
+                      '${widget.count}',
+                      style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -731,8 +826,11 @@ class _SortButton extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.swap_vert_rounded,
-                    size: 14, color: c.secondaryLabel),
+                Icon(
+                  Icons.swap_vert_rounded,
+                  size: 14,
+                  color: c.secondaryLabel,
+                ),
                 const SizedBox(width: 4),
                 Text(
                   '排序',
@@ -805,18 +903,19 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                 color: widget.selected
                     ? c.tint
                     : (_hover
-                        ? c.separator.withValues(alpha: c.isDark ? 0.9 : 0.8)
-                        : (c.isDark
-                            ? c.separator.withValues(alpha: 0.4)
-                            : const Color(0x0F000000))),
+                          ? c.separator.withValues(alpha: c.isDark ? 0.9 : 0.8)
+                          : (c.isDark
+                                ? c.separator.withValues(alpha: 0.4)
+                                : const Color(0x0F000000))),
                 width: widget.selected ? 1.5 : 0.5,
               ),
               // 悬停时给一点投影：只有"抬起来"配上影子才成立
               boxShadow: _hover && !widget.selected
                   ? <BoxShadow>[
                       BoxShadow(
-                        color: Colors.black
-                            .withValues(alpha: c.isDark ? 0.35 : 0.10),
+                        color: Colors.black.withValues(
+                          alpha: c.isDark ? 0.35 : 0.10,
+                        ),
                         blurRadius: 14,
                         offset: const Offset(0, 5),
                       ),
@@ -851,97 +950,105 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                           ),
                         ),
                       ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
-                            if (n.isPinned)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 3),
-                                child:
-                                    Icon(Icons.push_pin, size: 10, color: c.tint),
-                              ),
-                            Expanded(
-                              child: Text(
-                                n.title.isEmpty ? '无标题笔记' : n.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppText.caption1.copyWith(
-                                  color:
-                                      n.title.isEmpty ? c.tertiaryLabel : c.label,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.35,
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              if (n.isPinned)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 3),
+                                  child: Icon(
+                                    Icons.push_pin,
+                                    size: 10,
+                                    color: c.tint,
+                                  ),
+                                ),
+                              Expanded(
+                                child: Text(
+                                  n.title.isEmpty ? '无标题笔记' : n.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppText.caption1.copyWith(
+                                    color: n.title.isEmpty
+                                        ? c.tertiaryLabel
+                                        : c.label,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.35,
+                                  ),
                                 ),
                               ),
-                            ),
-                            if (n.isFavorite)
-                              Icon(Icons.star_rounded,
-                                  size: 11, color: c.palette[7]),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          [
-                            formatRelative(widget.displayTime),
-                            if (n.charCount > 0) '${n.charCount} 字',
-                          ].join(' · '),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              AppText.caption2.copyWith(color: c.tertiaryLabel),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              // ⋯ 按钮必须放在**整张卡片**这一层，不能塞进封面里 ——
-              // 之前放在封面 Stack 内，导致没有封面的笔记（新建的都是纯文字）
-              // 完全没有操作入口。
-              //
-              // 出现时淡入 + 从 0.8 放大到 1（SpringAnimatedValue 之外
-              // 最省事的一招）；不在悬停态时树里是真没有它，
-              // "只有悬停才出现"这条语义不变。
-              if (_hover)
-                Positioned(
-                  top: 4,
-                  right: 4,
-                  child: _FadePopIn(
-                    child: Builder(
-                      builder: (btnCtx) => Pressable(
-                        onTap: () =>
-                            widget.onActions(AppMenuAnchor(context: btnCtx)),
-                        scale: 0.88,
-                        child: Container(
-                          width: 22,
-                          height: 22,
-                          decoration: BoxDecoration(
-                            // 有封面时压在图上，用深色底 + 白图标才看得清；
-                            // 纯文字卡片用浅色底，否则会像块膏药
-                            color: hasCover
-                                ? Colors.black.withValues(alpha: 0.45)
-                                : c.fill,
-                            shape: BoxShape.circle,
+                              if (n.isFavorite)
+                                Icon(
+                                  Icons.star_rounded,
+                                  size: 11,
+                                  color: c.palette[7],
+                                ),
+                            ],
                           ),
-                          child: Icon(
-                            Icons.more_horiz_rounded,
-                            size: 14,
-                            color: hasCover ? Colors.white : c.secondaryLabel,
+                          const SizedBox(height: 4),
+                          Text(
+                            [
+                              formatRelative(widget.displayTime),
+                              if (n.charCount > 0) '${n.charCount} 字',
+                            ].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.caption2.copyWith(
+                              color: c.tertiaryLabel,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                // ⋯ 按钮必须放在**整张卡片**这一层，不能塞进封面里 ——
+                // 之前放在封面 Stack 内，导致没有封面的笔记（新建的都是纯文字）
+                // 完全没有操作入口。
+                //
+                // 出现时淡入 + 从 0.8 放大到 1（SpringAnimatedValue 之外
+                // 最省事的一招）；不在悬停态时树里是真没有它，
+                // "只有悬停才出现"这条语义不变。
+                if (_hover)
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: _FadePopIn(
+                      child: Builder(
+                        builder: (btnCtx) => Pressable(
+                          onTap: () =>
+                              widget.onActions(AppMenuAnchor(context: btnCtx)),
+                          scale: 0.88,
+                          child: Container(
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              // 有封面时压在图上，用深色底 + 白图标才看得清；
+                              // 纯文字卡片用浅色底，否则会像块膏药
+                              color: hasCover
+                                  ? Colors.black.withValues(alpha: 0.45)
+                                  : c.fill,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.more_horiz_rounded,
+                              size: 14,
+                              color: hasCover ? Colors.white : c.secondaryLabel,
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -1050,127 +1157,137 @@ class _NoteListRowState extends State<_NoteListRow> {
             // 不会"啪"地一下弹回原色 —— 那种一行行开关式的明暗跳变
             // 就是用户说的"很快的颜色变动 / 闪眼"。
             duration: _hover ? AppMotion.instant : AppMotion.normal,
-          curve: AppMotion.enter,
-          margin: const EdgeInsets.only(bottom: 4),
-          padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
-          decoration: BoxDecoration(
-            // 悬停底色用**极低透明度**的墨色/白色薄薄一层：
-            // 以前用 secondaryBackground（一整块面板色），明暗差太大，
-            // 鼠标扫过一排就是一遍明暗闪烁。反馈还在，但只是"掠过"的量级。
-            color: widget.selected
-                ? c.tint.withValues(alpha: c.isDark ? 0.20 : 0.12)
-                : (_hover
-                    ? c.label.withValues(alpha: c.isDark ? 0.07 : 0.04)
-                    : Colors.transparent),
-            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        if (n.isPinned)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(Icons.push_pin, size: 11, color: c.tint),
-                          ),
-                        Expanded(
-                          child: Text(
-                            n.title.isEmpty ? '无标题笔记' : n.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppText.footnote.copyWith(
-                              color: n.title.isEmpty
-                                  ? c.tertiaryLabel
-                                  : c.label,
-                              fontWeight: FontWeight.w600,
+            curve: AppMotion.enter,
+            margin: const EdgeInsets.only(bottom: 4),
+            padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
+            decoration: BoxDecoration(
+              // 悬停底色用**极低透明度**的墨色/白色薄薄一层：
+              // 以前用 secondaryBackground（一整块面板色），明暗差太大，
+              // 鼠标扫过一排就是一遍明暗闪烁。反馈还在，但只是"掠过"的量级。
+              color: widget.selected
+                  ? c.tint.withValues(alpha: c.isDark ? 0.20 : 0.12)
+                  : (_hover
+                        ? c.label.withValues(alpha: c.isDark ? 0.07 : 0.04)
+                        : Colors.transparent),
+              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          if (n.isPinned)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Icon(
+                                Icons.push_pin,
+                                size: 11,
+                                color: c.tint,
+                              ),
+                            ),
+                          Expanded(
+                            child: Text(
+                              n.title.isEmpty ? '无标题笔记' : n.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.footnote.copyWith(
+                                color: n.title.isEmpty
+                                    ? c.tertiaryLabel
+                                    : c.label,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
-                        ),
-                        if (n.isFavorite)
-                          Icon(Icons.star_rounded,
-                              size: 12, color: c.palette[7]),
-                        // **给 ⋯ 预留固定宽度**（21px），悬停时只做淡入。
-                        //
-                        // 以前是"出现时才占位"，于是鼠标扫过时标题会被
-                        // 挤窄一下再弹回来 —— 一行行地挤，看起来就是闪。
-                        // 位置恒定的槽位 + 只改透明度，标题一个字都不会动。
-                        SizedBox(
-                          width: 21,
-                          child: _hover
-                              ? _FadePopIn(
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: Builder(
-                                      builder: (btnCtx) => GestureDetector(
-                                        onTap: () => widget.onActions(
-                                          AppMenuAnchor(context: btnCtx),
-                                        ),
-                                        behavior: HitTestBehavior.opaque,
-                                        child: Icon(
-                                          Icons.more_horiz_rounded,
-                                          size: 15,
-                                          color: c.tertiaryLabel,
+                          if (n.isFavorite)
+                            Icon(
+                              Icons.star_rounded,
+                              size: 12,
+                              color: c.palette[7],
+                            ),
+                          // **给 ⋯ 预留固定宽度**（21px），悬停时只做淡入。
+                          //
+                          // 以前是"出现时才占位"，于是鼠标扫过时标题会被
+                          // 挤窄一下再弹回来 —— 一行行地挤，看起来就是闪。
+                          // 位置恒定的槽位 + 只改透明度，标题一个字都不会动。
+                          SizedBox(
+                            width: 21,
+                            child: _hover
+                                ? _FadePopIn(
+                                    child: Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Builder(
+                                        builder: (btnCtx) => GestureDetector(
+                                          onTap: () => widget.onActions(
+                                            AppMenuAnchor(context: btnCtx),
+                                          ),
+                                          behavior: HitTestBehavior.opaque,
+                                          child: Icon(
+                                            Icons.more_horiz_rounded,
+                                            size: 15,
+                                            color: c.tertiaryLabel,
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                )
-                              : const SizedBox.shrink(),
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
+                        ],
+                      ),
+                      if (n.excerpt.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          n.excerpt,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppText.caption1.copyWith(
+                            color: c.secondaryLabel,
+                            height: 1.45,
+                          ),
                         ),
                       ],
-                    ),
-              if (n.excerpt.isNotEmpty) ...[
-                const SizedBox(height: 3),
-                Text(
-                  n.excerpt,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppText.caption1.copyWith(
-                    color: c.secondaryLabel,
-                    height: 1.45,
+                      const SizedBox(height: 5),
+                      Row(
+                        children: [
+                          if (n.collectionColor != null) ...[
+                            Container(
+                              width: 5,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: Color(n.collectionColor!),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                          ],
+                          Expanded(
+                            child: Text(
+                              <String>[
+                                formatRelative(widget.displayTime),
+                                if (n.collectionName != null &&
+                                    n.collectionName!.isNotEmpty)
+                                  n.collectionName!,
+                                if (n.charCount > 0) '${n.charCount} 字',
+                              ].join(' · '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.caption2.copyWith(
+                                color: c.tertiaryLabel,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ],
-              const SizedBox(height: 5),
-              Row(
-                children: [
-                  if (n.collectionColor != null) ...[
-                    Container(
-                      width: 5,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: Color(n.collectionColor!),
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                  ],
-                  Expanded(
-                    child: Text(
-                      <String>[
-                        formatRelative(widget.displayTime),
-                        if (n.collectionName != null && n.collectionName!.isNotEmpty)
-                          n.collectionName!,
-                        if (n.charCount > 0) '${n.charCount} 字',
-                      ].join(' · '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppText.caption2.copyWith(color: c.tertiaryLabel),
-                    ),
-                  ),
-                ],
-              ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
         ),
       ),
     );

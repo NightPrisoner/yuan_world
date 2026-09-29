@@ -19,46 +19,50 @@ extension _WsFolders on _DesktopWorkspaceState {
     int depth,
     int? selectedId, {
     required bool hasKids,
+    bool exiting = false,
   }) {
     final collapsed = _collapsed.contains(col.id);
-    return _DropZone(
-      // 笔记拖进来 = 归入这个文件夹
-      onNote: (note) async {
-        await state.moveNoteToCollection(note.id, col.id);
-      },
-      // 文件夹拖过来：按落点位置决定排序还是嵌套
-      onCollectionDrop: (dragged, spot) =>
-          _dropCollectionAt(context, state, dragged, col, spot),
-      child: _DraggableItem(
-        data: CollectionDrag(col),
-        label: col.name,
-        icon: Icons.folder_rounded,
-        accent: Color(col.color),
-        child: _NavRow(
-          icon: depth > 0
-              ? Icons.subdirectory_arrow_right_rounded
-              : Icons.folder_rounded,
+    // 小三角要**立刻**翻过来：真等到动画播完再翻，点下去像没反应
+    final showsCollapsed = collapsed || _collapsing.contains(col.id);
+    return _TreeReveal(
+      order: _revealOrder[col.id],
+      exiting: exiting,
+      child: _DropZone(
+        // 笔记拖进来 = 归入这个文件夹
+        onNote: (note) async {
+          await state.moveNoteToCollection(note.id, col.id);
+        },
+        // 文件夹拖过来：按落点位置决定排序还是嵌套
+        onCollectionDrop: (dragged, spot) =>
+            _dropCollectionAt(context, state, dragged, col, spot),
+        child: _DraggableItem(
+          data: CollectionDrag(col),
           label: col.name,
-          color: Color(col.color),
-          count: col.noteCount,
-          indent: true,
-          depth: depth,
-          pinned: col.isPinned,
-          hasChildren: hasKids,
-          collapsed: collapsed,
-          onToggleCollapse: hasKids
-              ? () => _setState(() {
-                    // 点一下收起、再点展开
-                    if (!_collapsed.remove(col.id)) _collapsed.add(col.id);
-                  })
-              : null,
-          selected: _section == _Section.notes && selectedId == col.id,
-          onTap: () {
-            state.selectCollection(col.id);
-            _goSection(_Section.notes);
-          },
-          onMenu: (anchor) =>
-              _showCollectionMenu(context, col, anchor: anchor),
+          icon: Icons.folder_rounded,
+          accent: Color(col.color),
+          child: _NavRow(
+            icon: depth > 0
+                ? Icons.subdirectory_arrow_right_rounded
+                : Icons.folder_rounded,
+            label: col.name,
+            color: Color(col.color),
+            count: col.noteCount,
+            indent: true,
+            depth: depth,
+            pinned: col.isPinned,
+            hasChildren: hasKids,
+            collapsed: showsCollapsed,
+            onToggleCollapse: hasKids
+                ? () => _toggleFolderCollapsed(col, state.collections)
+                : null,
+            selected: _section == _Section.notes && selectedId == col.id,
+            onTap: () {
+              state.selectCollection(col.id);
+              _goSection(_Section.notes);
+            },
+            onMenu: (anchor) =>
+                _showCollectionMenu(context, col, anchor: anchor),
+          ),
         ),
       ),
     );
@@ -82,8 +86,10 @@ extension _WsFolders on _DesktopWorkspaceState {
       if (depth > 8) return;
       for (final c in byParent[parentId] ?? const <Collection>[]) {
         out.add((seq++, c, depth));
-        // 收起来的节点不再往下走 —— 这就是「每一级都能收纳」
-        if (!_collapsed.contains(c.id)) walk(c.id, depth + 1);
+        // 收起来的节点不再往下走（**正在收起**的还要留着，让它滑出去）
+        if (!_collapsed.contains(c.id) || _collapsing.contains(c.id)) {
+          walk(c.id, depth + 1);
+        }
       }
     }
 
@@ -123,7 +129,7 @@ extension _WsFolders on _DesktopWorkspaceState {
     final afterIndex = after.indexWhere((e) => e.$2.id == dragged.id);
     final stillSameParent =
         state.collections.firstWhere((c) => c.id == dragged.id).parentId ==
-            beforeParent;
+        beforeParent;
 
     if (asChild && stillSameParent && beforeIndex == afterIndex) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -138,8 +144,8 @@ extension _WsFolders on _DesktopWorkspaceState {
     final msg = asChild
         ? '「${dragged.name}」已移入「${target.name}」'
         : spot == DropSpot.before
-            ? '「${dragged.name}」已移到「${target.name}」前面'
-            : '「${dragged.name}」已移到「${target.name}」后面';
+        ? '「${dragged.name}」已移到「${target.name}」前面'
+        : '「${dragged.name}」已移到「${target.name}」后面';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
     );
@@ -256,9 +262,7 @@ extension _WsFolders on _DesktopWorkspaceState {
       builder: (ctx) => AlertDialog(
         title: Text('删除「${col.name}」？'),
         content: Text(
-          n == 0
-              ? '文件夹会移入回收站，之后仍可恢复。'
-              : '文件夹连同里面的 $n 篇笔记一起移入回收站，之后仍可恢复。',
+          n == 0 ? '文件夹会移入回收站，之后仍可恢复。' : '文件夹连同里面的 $n 篇笔记一起移入回收站，之后仍可恢复。',
           style: AppText.callout.copyWith(color: c.secondaryLabel, height: 1.6),
         ),
         actions: [
@@ -281,9 +285,7 @@ extension _WsFolders on _DesktopWorkspaceState {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          n == 0
-              ? '已把「${col.name}」移入回收站'
-              : '已把「${col.name}」和 $n 篇笔记移入回收站',
+          n == 0 ? '已把「${col.name}」移入回收站' : '已把「${col.name}」和 $n 篇笔记移入回收站',
         ),
         duration: const Duration(seconds: 3),
       ),

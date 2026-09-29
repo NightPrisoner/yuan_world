@@ -21,10 +21,18 @@ import 'package:yuan_world/data/repositories/note_repository.dart';
 import 'package:yuan_world/features/shell/home_shell.dart';
 
 const Key detailPaneKey = ValueKey<String>('detail-pane');
+const Key listColumnKey = ValueKey<String>('list-column');
 
 /// 正文栏当前宽度。不存在时返回 null。
 double? paneWidth(WidgetTester tester) {
   final f = find.byKey(detailPaneKey);
+  if (f.evaluate().isEmpty) return null;
+  return tester.getSize(f).width;
+}
+
+/// 列表栏那一格的宽度（只有"列表在场"时才有这一格）。
+double? listColumnWidth(WidgetTester tester) {
+  final f = find.byKey(listColumnKey);
   if (f.evaluate().isEmpty) return null;
   return tester.getSize(f).width;
 }
@@ -87,8 +95,11 @@ void main() {
       await tester.pumpAndSettle();
       final settled = paneWidth(tester);
       expect(settled, isNotNull);
-      expect(mid, lessThan(settled!),
-          reason: '途中宽度必须小于最终宽度 —— 说明是从右边长出来的，而不是瞬间出现');
+      expect(
+        mid,
+        lessThan(settled!),
+        reason: '途中宽度必须小于最终宽度 —— 说明是从右边长出来的，而不是瞬间出现',
+      );
     });
 
     testWidgets('收起时先滑出去，动画结束才从树里拆掉', (tester) async {
@@ -124,13 +135,62 @@ void main() {
       await tester.tap(find.byTooltip('占满页面'));
       await tester.pumpAndSettle();
 
-      expect(paneWidth(tester), 1400,
-          reason: '全屏时列表栏不在场，正文栏应占满，否则按钮会被推到屏幕外');
+      expect(paneWidth(tester), 1400, reason: '全屏时列表栏不在场，正文栏应占满，否则按钮会被推到屏幕外');
       // 按钮必须仍然点得到
       expect(find.byTooltip('退出占满页面'), findsOneWidget);
       final at = tester.getCenter(find.byTooltip('退出占满页面'));
       expect(at.dx, greaterThan(0));
       expect(at.dx, lessThan(1400));
+    });
+  });
+
+  group('「占满页面」进出方向', () {
+    testWidgets('退出占满：列表栏从左边长回来，正文原地缩回右边', (tester) async {
+      await state.refresh();
+      await pumpWide(tester);
+
+      await tester.tap(find.text('笔记 0').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('编辑'));
+      await tester.pumpAndSettle();
+
+      final twoCol = listColumnWidth(tester);
+      final twoColPane = paneWidth(tester);
+      expect(twoCol, isNotNull, reason: '编辑态也是三栏，列表栏在场');
+      expect(twoColPane, isNotNull);
+
+      await tester.tap(find.byTooltip('占满页面'));
+      await tester.pumpAndSettle();
+      expect(listColumnWidth(tester), isNull, reason: '占满时列表栏让位给正文');
+      expect(paneWidth(tester), 1400);
+
+      // 退出占满：抓中途
+      await tester.tap(find.byTooltip('退出占满页面'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 90));
+
+      final listMid = listColumnWidth(tester);
+      final paneMid = paneWidth(tester);
+      expect(listMid, isNotNull, reason: '退出时列表栏要滑回来，不能等结束才插进树里');
+      expect(listMid!, greaterThan(0));
+      expect(
+        listMid,
+        lessThan(twoCol!),
+        reason:
+            '列表栏只能从左边一点一点长回来 —— '
+            '一上来就铺满整块宽度，正是用户看到的"退出时像从右边冒出来"',
+      );
+      expect(paneMid, isNotNull);
+      expect(paneMid!, lessThan(1400), reason: '正文栏要跟着往右缩，而不是被列表栏盖住');
+      expect(paneMid, greaterThan(0));
+
+      await tester.pumpAndSettle();
+      expect(listColumnWidth(tester)!, closeTo(twoCol, 0.5));
+      expect(
+        paneWidth(tester)!,
+        closeTo(twoColPane!, 0.5),
+        reason: '收尾要精确回到三栏宽度，不能留缝',
+      );
     });
   });
 
@@ -146,8 +206,7 @@ void main() {
       await tester.tap(find.text('收起侧栏'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 90));
-      expect(find.text('收起侧栏'), findsWidgets,
-          reason: '动画途中面板还没消失，标签应该还在');
+      expect(find.text('收起侧栏'), findsWidgets, reason: '动画途中面板还没消失，标签应该还在');
 
       await tester.pumpAndSettle();
       expect(find.byTooltip('展开侧栏'), findsOneWidget);
@@ -158,8 +217,7 @@ void main() {
       await tester.tap(find.byTooltip('展开侧栏'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 90));
-      expect(find.text('未分类'), findsOneWidget,
-          reason: '展开动画途中导航项就该在了');
+      expect(find.text('未分类'), findsOneWidget, reason: '展开动画途中导航项就该在了');
       await tester.pumpAndSettle();
       expect(find.text('未分类'), findsOneWidget);
     });

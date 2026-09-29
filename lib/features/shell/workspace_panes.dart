@@ -15,16 +15,16 @@ extension _WsPanes on _DesktopWorkspaceState {
     final title = f.query.isNotEmpty
         ? '搜索结果'
         : f.favoritesOnly
-            ? '收藏'
-            : f.uncategorizedOnly
-                ? '未分类'
-                : f.collectionId != null
-                    ? (state.collections
-                            .where((x) => x.id == f.collectionId)
-                            .firstOrNull
-                            ?.name ??
-                        '文集')
-                    : '全部笔记';
+        ? '收藏'
+        : f.uncategorizedOnly
+        ? '未分类'
+        : f.collectionId != null
+        ? (state.collections
+                  .where((x) => x.id == f.collectionId)
+                  .firstOrNull
+                  ?.name ??
+              '文集')
+        : '全部笔记';
 
     return Container(
       decoration: BoxDecoration(color: c.groupedBackground),
@@ -67,7 +67,11 @@ extension _WsPanes on _DesktopWorkspaceState {
                       child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.add_rounded, size: 18, color: Colors.white),
+                          Icon(
+                            Icons.add_rounded,
+                            size: 18,
+                            color: Colors.white,
+                          ),
                           SizedBox(width: 4),
                           Text(
                             '新建',
@@ -157,18 +161,24 @@ extension _WsPanes on _DesktopWorkspaceState {
                         focusedBorder: InputBorder.none,
                         contentPadding: EdgeInsets.zero,
                         hintText: '搜索全部笔记',
-                        hintStyle:
-                            AppText.footnote.copyWith(color: c.tertiaryLabel),
+                        hintStyle: AppText.footnote.copyWith(
+                          color: c.tertiaryLabel,
+                        ),
                       ),
                     ),
                   ),
                   if (f.query.isNotEmpty)
                     IconButton(
                       padding: EdgeInsets.zero,
-                      constraints:
-                          const BoxConstraints(minWidth: 28, minHeight: 28),
-                      icon: Icon(Icons.cancel_rounded,
-                          size: 15, color: c.tertiaryLabel),
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      icon: Icon(
+                        Icons.cancel_rounded,
+                        size: 15,
+                        color: c.tertiaryLabel,
+                      ),
                       onPressed: () {
                         _search.clear();
                         state.setQuery('');
@@ -189,8 +199,8 @@ extension _WsPanes on _DesktopWorkspaceState {
                     ),
                   )
                 : state.gridMode
-                    ? _gridView(context, notes)
-                    : _listView(context, notes),
+                ? _gridView(context, notes)
+                : _listView(context, notes),
           ),
         ],
       ),
@@ -209,13 +219,14 @@ extension _WsPanes on _DesktopWorkspaceState {
         child: _NoteListRow(
           note: notes[i],
           // 显示的时间跟着当前排序字段走
-          displayTime: context.read<AppState>().filter.sort.field.timeOf(notes[i]),
+          displayTime: context.read<AppState>().filter.sort.field.timeOf(
+            notes[i],
+          ),
           selected: _selecting
               ? _selected.contains(notes[i].id)
               : notes[i].id == _selectedNoteId,
-          onTap: () => _selecting
-              ? _toggleSelect(notes[i].id)
-              : _openNote(notes[i].id),
+          onTap: () =>
+              _selecting ? _toggleSelect(notes[i].id) : _openNote(notes[i].id),
           onActions: (anchor) =>
               showNoteActions(context, notes[i], anchor: anchor),
         ),
@@ -240,13 +251,14 @@ extension _WsPanes on _DesktopWorkspaceState {
           note: notes[i],
           imageRoot: imageRoot,
           // 显示的时间跟着当前排序字段走
-          displayTime: context.read<AppState>().filter.sort.field.timeOf(notes[i]),
+          displayTime: context.read<AppState>().filter.sort.field.timeOf(
+            notes[i],
+          ),
           selected: _selecting
               ? _selected.contains(notes[i].id)
               : notes[i].id == _selectedNoteId,
-          onTap: () => _selecting
-              ? _toggleSelect(notes[i].id)
-              : _openNote(notes[i].id),
+          onTap: () =>
+              _selecting ? _toggleSelect(notes[i].id) : _openNote(notes[i].id),
           onActions: (anchor) =>
               showNoteActions(context, notes[i], anchor: anchor),
         ),
@@ -292,8 +304,9 @@ extension _WsPanes on _DesktopWorkspaceState {
           embedded: true,
           fullscreen: fullscreen,
           // 「占满页面」：只收起三栏，**不碰窗口**
-          onToggleFullscreen: () =>
-              _setState(() => _editorFullscreen = !_editorFullscreen),
+          // 走 _setEditorFullscreen 而不是直接翻 bool：布局要跟着
+          // 补间动画收放（见 desktop_workspace.dart 的 _fsAnim）
+          onToggleFullscreen: () => _setEditorFullscreen(!_editorFullscreen),
           // ⛶ 无边框窗口全屏：只放大窗口，**不动版式**
           windowFullscreen: _windowFullscreen,
           onToggleWindowFullscreen: () {
@@ -317,8 +330,7 @@ extension _WsPanes on _DesktopWorkspaceState {
         // 阅读时也能"占满页面" —— 注意它**不动窗口**，
         // 窗口全屏是编辑器里那个 ⛶ 按钮的事
         fullscreen: fullscreen,
-        onToggleFullscreen: () =>
-            _setState(() => _editorFullscreen = !_editorFullscreen),
+        onToggleFullscreen: () => _setEditorFullscreen(!_editorFullscreen),
         onToggleWindowFullscreen: () {
           _setState(() => _windowFullscreen = !_windowFullscreen);
           setAppFullscreen(_windowFullscreen);

@@ -96,7 +96,8 @@ extension _WsNav on _DesktopWorkspaceState {
     final c = context.colors;
     final f = state.filter;
 
-    final allSelected = _section == _Section.notes &&
+    final allSelected =
+        _section == _Section.notes &&
         f.collectionId == null &&
         !f.favoritesOnly &&
         !f.uncategorizedOnly;
@@ -133,46 +134,47 @@ extension _WsNav on _DesktopWorkspaceState {
                           selected: false,
                           onTap: () => _setNavCollapsed(true),
                         ),
-                  _NavRow(
-                    icon: Icons.article_rounded,
-                    label: '全部笔记',
-                    count: state.overview?.noteCount ?? 0,
-                    selected: allSelected,
-                    onTap: () {
-                      state.selectAll();
-                      _goSection(_Section.notes);
-                    },
-                  ),
-                  // 未分类也是一个投放目标：把笔记拖出去就从文件夹里移出来了
-                  _DropZone(
-                    onNote: (note) async {
-                      await state.moveNoteToCollection(note.id, null);
-                    },
-                    child: _NavRow(
-                      icon: Icons.inbox_rounded,
-                      label: '未分类',
-                      color: c.palette[2],
-                      selected:
-                          _section == _Section.notes && f.uncategorizedOnly,
-                      onTap: () {
-                        state.selectUncategorized();
-                        _goSection(_Section.notes);
-                      },
-                    ),
-                  ),
-                  _NavRow(
-                    icon: Icons.star_rounded,
-                    label: '收藏',
-                    color: c.palette[7],
-                    count: state.overview?.favoriteCount ?? 0,
-                    selected: _section == _Section.notes && f.favoritesOnly,
-                    onTap: () {
-                      state.selectAll();
-                      state.toggleFavorites();
-                      _goSection(_Section.notes);
-                    },
-                  ),
-
+                        _NavRow(
+                          icon: Icons.article_rounded,
+                          label: '全部笔记',
+                          count: state.overview?.noteCount ?? 0,
+                          selected: allSelected,
+                          onTap: () {
+                            state.selectAll();
+                            _goSection(_Section.notes);
+                          },
+                        ),
+                        // 未分类也是一个投放目标：把笔记拖出去就从文件夹里移出来了
+                        _DropZone(
+                          onNote: (note) async {
+                            await state.moveNoteToCollection(note.id, null);
+                          },
+                          child: _NavRow(
+                            icon: Icons.inbox_rounded,
+                            label: '未分类',
+                            color: c.palette[2],
+                            selected:
+                                _section == _Section.notes &&
+                                f.uncategorizedOnly,
+                            onTap: () {
+                              state.selectUncategorized();
+                              _goSection(_Section.notes);
+                            },
+                          ),
+                        ),
+                        _NavRow(
+                          icon: Icons.star_rounded,
+                          label: '收藏',
+                          color: c.palette[7],
+                          count: state.overview?.favoriteCount ?? 0,
+                          selected:
+                              _section == _Section.notes && f.favoritesOnly,
+                          onTap: () {
+                            state.selectAll();
+                            state.toggleFavorites();
+                            _goSection(_Section.notes);
+                          },
+                        ),
                       ],
                     ),
                   ),
@@ -180,7 +182,12 @@ extension _WsNav on _DesktopWorkspaceState {
                   // ── 分组分隔：上面三个是「视图」，下面是「我的文件夹」 ──
                   // 一条细线 + 上下留白，让两组一眼分得开
                   const SizedBox(height: 10),
-                  Divider(height: 1, indent: 14, endIndent: 14, color: c.separator),
+                  Divider(
+                    height: 1,
+                    indent: 14,
+                    endIndent: 14,
+                    color: c.separator,
+                  ),
                   const SizedBox(height: 6),
 
                   // ── 固定：文件夹标题（新建按钮始终够得着） ──
@@ -213,103 +220,120 @@ extension _WsNav on _DesktopWorkspaceState {
                         padding: const EdgeInsets.symmetric(horizontal: 10),
                         physics: const BouncingScrollPhysics(),
                         children: [
-                  for (final (_, col, depth) in _flattenTree(state.collections))
-                    Builder(
-                      builder: (rowCtx) => _collectionRow(
-                        rowCtx,
-                        state,
-                        col,
-                        depth,
-                        f.collectionId,
-                        // 有子文件夹的才给收起/展开的小三角
-                        hasKids:
-                            state.collections.any((x) => x.parentId == col.id),
-                      ),
-                    ),
-                  if (state.collections.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(22, 4, 10, 4),
-                      child: Text(
-                        '还没有文件夹',
-                        style:
-                            AppText.caption1.copyWith(color: c.quaternaryLabel),
-                      ),
-                    )
-                  else
-                    // 拖到这里 = 升到顶层。没有这块的话，
-                    // 文件夹全都嵌套着时就没地方把它拎出来了。
-                    _DropZone(
-                      onCollectionDrop: (dragged, _) =>
-                          _dropToTopLevel(context, state, dragged),
-                      child: SizedBox(
-                        height: 26,
-                        child: Center(
-                          child: Text(
-                            '拖到此处移到顶层',
-                            style: AppText.caption2
-                                .copyWith(color: c.quaternaryLabel),
-                          ),
-                        ),
-                      ),
-                    ),
-
-                  // ── 标签 ──
-                  //
-                  // 和文件夹一起放在**滚动区**里：两者都可能很长，固定
-                  // 哪一边都会把另一边挤没。标签是"多对多"的横切分类，
-                  // 和树状的文件夹本来就是两回事，所以中间拉一条分隔线。
-                  if (state.tags.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Divider(height: 1, color: c.separator),
-                    const SizedBox(height: 8),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                      child: Row(
-                        children: [
-                          Text(
-                            '标签',
-                            style: AppText.caption2.copyWith(
-                              color: c.quaternaryLabel,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const Spacer(),
-                          Pressable(
-                            onTap: () => _openTagManager(context),
-                            scale: 0.9,
-                            child: Tooltip(
-                              message: '标签管理',
-                              child: Padding(
-                                padding: const EdgeInsets.all(2),
-                                child: Icon(Icons.tune_rounded,
-                                    size: 14, color: c.tertiaryLabel),
+                          for (final (_, col, depth) in _flattenTree(
+                            state.collections,
+                          ))
+                            Builder(
+                              builder: (rowCtx) => _collectionRow(
+                                rowCtx,
+                                state,
+                                col,
+                                depth,
+                                f.collectionId,
+                                // 有子文件夹的才给收起/展开的小三角
+                                hasKids: state.collections.any(
+                                  (x) => x.parentId == col.id,
+                                ),
+                                // 父文件夹正在收起 → 这一行该滑出去了
+                                exiting: _collapsingRows(state.collections)
+                                    .contains(col.id),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    for (final t in state.tags)
-                      _NavRow(
-                        icon: Icons.label_rounded,
-                        label: t.name,
-                        count: t.count,
-                        color: Color(t.color),
-                        selected: _section == _Section.notes && f.tag == t.name,
-                        onTap: () {
-                          state.selectTag(t.name);
-                          _goSection(_Section.notes);
-                        },
-                      ),
-                  ],
+                          if (state.collections.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(22, 4, 10, 4),
+                              child: Text(
+                                '还没有文件夹',
+                                style: AppText.caption1.copyWith(
+                                  color: c.quaternaryLabel,
+                                ),
+                              ),
+                            )
+                          else
+                            // 拖到这里 = 升到顶层。没有这块的话，
+                            // 文件夹全都嵌套着时就没地方把它拎出来了。
+                            _DropZone(
+                              onCollectionDrop: (dragged, _) =>
+                                  _dropToTopLevel(context, state, dragged),
+                              child: SizedBox(
+                                height: 26,
+                                child: Center(
+                                  child: Text(
+                                    '拖到此处移到顶层',
+                                    style: AppText.caption2.copyWith(
+                                      color: c.quaternaryLabel,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
 
-                      ],
+                          // ── 标签 ──
+                          //
+                          // 和文件夹一起放在**滚动区**里：两者都可能很长，固定
+                          // 哪一边都会把另一边挤没。标签是"多对多"的横切分类，
+                          // 和树状的文件夹本来就是两回事，所以中间拉一条分隔线。
+                          if (state.tags.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Divider(height: 1, color: c.separator),
+                            const SizedBox(height: 8),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    '标签',
+                                    style: AppText.caption2.copyWith(
+                                      color: c.quaternaryLabel,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  Pressable(
+                                    onTap: () => _openTagManager(context),
+                                    scale: 0.9,
+                                    child: Tooltip(
+                                      message: '标签管理',
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(2),
+                                        child: Icon(
+                                          Icons.tune_rounded,
+                                          size: 14,
+                                          color: c.tertiaryLabel,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            for (final t in state.tags)
+                              _NavRow(
+                                icon: Icons.label_rounded,
+                                label: t.name,
+                                count: t.count,
+                                color: Color(t.color),
+                                selected:
+                                    _section == _Section.notes &&
+                                    f.tag == t.name,
+                                onTap: () {
+                                  state.selectTag(t.name);
+                                  _goSection(_Section.notes);
+                                },
+                              ),
+                          ],
+                        ],
                       ),
                     ),
                   ),
 
                   // ── 分组分隔：文件夹区 / 功能区（待办、归档、回收站…） ──
-                  Divider(height: 1, indent: 14, endIndent: 14, color: c.separator),
+                  Divider(
+                    height: 1,
+                    indent: 14,
+                    endIndent: 14,
+                    color: c.separator,
+                  ),
                   const SizedBox(height: 6),
 
                   // ── 固定区：待办 / 统计 ──
@@ -343,7 +367,8 @@ extension _WsNav on _DesktopWorkspaceState {
                           color: c.palette[3],
                           selected: _section == _Section.trash,
                           onTap: () => _goSection(_Section.trash),
-                        ),                        _NavRow(
+                        ),
+                        _NavRow(
                           icon: Icons.insights_rounded,
                           label: '统计',
                           color: c.palette[5],
@@ -486,28 +511,54 @@ extension _WsNav on _DesktopWorkspaceState {
             ),
             // 展开态里开关下面紧跟着第一项，这里也留同样的间距
             const SizedBox(height: 6),
-            item(Icons.article_rounded, '全部笔记',
-                _section == _Section.notes && f.collectionId == null &&
-                    !f.favoritesOnly && !f.uncategorizedOnly, () {
-              state.selectCollection(null);
-              _goSection(_Section.notes);
-            }),
+            item(
+              Icons.article_rounded,
+              '全部笔记',
+              _section == _Section.notes &&
+                  f.collectionId == null &&
+                  !f.favoritesOnly &&
+                  !f.uncategorizedOnly,
+              () {
+                state.selectCollection(null);
+                _goSection(_Section.notes);
+              },
+            ),
             item(Icons.star_rounded, '收藏', f.favoritesOnly, () {
               state.selectAll();
               state.toggleFavorites();
               _goSection(_Section.notes);
             }),
             const Spacer(),
-            item(Icons.check_circle_rounded, '待办',
-                _section == _Section.todos, () => _goSection(_Section.todos)),
-            item(Icons.archive_outlined, '归档',
-                _section == _Section.archived, () => _goSection(_Section.archived)),
-            item(Icons.delete_outline_rounded, '回收站',
-                _section == _Section.trash, () => _goSection(_Section.trash)),
-            item(Icons.insights_rounded, '统计',
-                _section == _Section.stats, () => _goSection(_Section.stats)),
-            item(Icons.tune_rounded, '设置',
-                _section == _Section.settings, () => _goSection(_Section.settings)),
+            item(
+              Icons.check_circle_rounded,
+              '待办',
+              _section == _Section.todos,
+              () => _goSection(_Section.todos),
+            ),
+            item(
+              Icons.archive_outlined,
+              '归档',
+              _section == _Section.archived,
+              () => _goSection(_Section.archived),
+            ),
+            item(
+              Icons.delete_outline_rounded,
+              '回收站',
+              _section == _Section.trash,
+              () => _goSection(_Section.trash),
+            ),
+            item(
+              Icons.insights_rounded,
+              '统计',
+              _section == _Section.stats,
+              () => _goSection(_Section.stats),
+            ),
+            item(
+              Icons.tune_rounded,
+              '设置',
+              _section == _Section.settings,
+              () => _goSection(_Section.settings),
+            ),
             const SizedBox(height: 8),
           ],
         ),
