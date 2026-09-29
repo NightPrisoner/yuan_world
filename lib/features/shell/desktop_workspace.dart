@@ -280,6 +280,14 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
         for (var i = 0; i < kids.length; i++) {
           _revealOrder[kids[i]] = i + 1;
         }
+        // 播完就把序号清掉。**这一条很关键**：[_revealOrder] 里留着序号时，
+        // 任何让这些行重新 mount 的操作（最典型的是收起侧栏再展开 ——
+        // navT 归零时整棵侧栏会被拆掉，展开时重建）都会让它们把入场动画
+        // 再演一遍，看着就是"文件夹在抽搐"。
+        _collapseTimer = Timer(_collapseTotal(kids.length), () {
+          if (!mounted) return;
+          setState(_revealOrder.clear);
+        });
       } else {
         _collapsing.add(col.id);
         // 收起倒着来：最深的那条先走，像回卷一样

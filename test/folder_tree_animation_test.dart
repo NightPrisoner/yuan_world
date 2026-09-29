@@ -197,4 +197,74 @@ void main() {
     expect(find.text('父文件夹'), findsOneWidget);
     expect(rowOpacities().every((o) => o.opacity == 1.0), isTrue);
   });
+
+  testWidgets('收起是展开的倒放：沿原路往左滑出去，不是原地淡出', (tester) async {
+    // 用户原话：「怎么展开就怎么收起」。展开是 -10 → 0 的滑入，
+    // 收起就该是 0 → -10 的滑出，而且用同一条曲线（时间反演）。
+    seedTree();
+    await state.refresh();
+    await pumpWide(tester);
+
+    // 先来一次完整的收起 → 展开，拿到"完全到位"的位置
+    await tester.tap(chevronOf('父文件夹'));
+    await tester.pumpAndSettle();
+    await tester.tap(chevronOf('父文件夹'));
+    await tester.pumpAndSettle();
+    final settled = tester.getTopLeft(find.text('子一')).dx;
+
+    await tester.tap(chevronOf('父文件夹'));
+    final dxs = <double>[];
+    for (var i = 0; i < 14; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      if (find.text('子一').evaluate().isEmpty) break;
+      dxs.add(tester.getTopLeft(find.text('子一')).dx);
+    }
+
+    expect(dxs, isNotEmpty, reason: '收起过程里子项要在树里待一会儿，不能瞬间消失');
+    expect(
+      dxs.any((d) => d < settled - 0.5),
+      isTrue,
+      reason: '收起要沿展开那条位移原路滑回去（往左），不能只在原地淡出',
+    );
+    for (var i = 1; i < dxs.length; i++) {
+      expect(
+        dxs[i],
+        lessThanOrEqualTo(dxs[i - 1] + 0.01),
+        reason: '收起的位移要一路往左，不该中途往右弹回去',
+      );
+    }
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('收起侧栏再展开：文件夹行不该把入场动画再演一遍', (tester) async {
+    // 回归：展开过文件夹之后 _revealOrder 一直留着序号，侧栏收起时整棵
+    // 导航会被拆掉、展开时重建 —— 新建出来的 _TreeReveal 又会从 0 播一遍，
+    // 用户看到的就是"收起/展开侧栏时文件夹抽搐"。
+    seedTree();
+    await state.refresh();
+    await pumpWide(tester);
+
+    await tester.tap(chevronOf('父文件夹'));
+    await tester.pumpAndSettle();
+    await tester.tap(chevronOf('父文件夹'));
+    await tester.pumpAndSettle();
+    final settledDx = tester.getTopLeft(find.text('子一')).dx;
+
+    await tester.tap(find.text('收起侧栏'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('展开侧栏'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+
+    // 量**位置**而不是透明度：侧栏展开时那一栏自己也在交叉淡入，
+    // 找 Opacity 会连"整栏的淡入"一起量进去，不是我们要钉的东西。
+    // 重演入场动画的行会从左边 -10 的位置开始滑，位置对不上。
+    expect(find.text('子一'), findsOneWidget, reason: '侧栏展开后子文件夹应该就在树里');
+    expect(
+      tester.getTopLeft(find.text('子一')).dx,
+      closeTo(settledDx, 0.5),
+      reason: '侧栏重建不该让子文件夹把入场动画再演一遍（用户说的"抽搐"）',
+    );
+    await tester.pumpAndSettle();
+  });
 }

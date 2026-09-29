@@ -579,19 +579,16 @@ class _TreeRevealState extends State<_TreeReveal>
     return AnimatedBuilder(
       animation: _c,
       builder: (context, child) {
-        final t = _stranded
-            ? 1.0
-            : (_c.status == AnimationStatus.reverse
-                      ? AppMotion.exit
-                      : AppMotion.enter)
-                  .transform(_c.value);
-        // 出场（展开）从左边一点点滑进来；**收起时不再平移**，就在原地淡出 ——
-        // 收起的行往左滑，看起来像"这一行跑到左边去了"。
-        final exiting = !_stranded && _c.status == AnimationStatus.reverse;
+        // **收起就是展开的倒放**：同一个曲线、同一个位移。
+        // 控制器回放时值是 1→0，用同一条 enter 曲线取变换，得到的正是
+        // 展开过程的时间反演（展开第 τ 帧的样子 = 收起第 D-τ 帧的样子）。
+        // 以前收起用 exit 曲线、而且不平移，看着就和展开不是一回事。
+        final t = _stranded ? 1.0 : AppMotion.enter.transform(_c.value);
         return Opacity(
           opacity: t.clamp(0.0, 1.0),
           child: Transform.translate(
-            offset: Offset(exiting ? 0.0 : -10 * (1 - t), 0),
+            // 出场从左边一点点滑进来，收起就原路滑回去
+            offset: Offset(-10 * (1 - t), 0),
             child: child,
           ),
         );
