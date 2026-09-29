@@ -469,7 +469,12 @@ const int _treeRevealMaxStagger = 8;
 /// [order] 是本批次里的出场序号（0 起）；`null` 表示不动画（首屏、
 /// 直接切文件夹等）—— 那种情况下直接是最终的可见状态。
 class _TreeReveal extends StatefulWidget {
-  const _TreeReveal({required this.child, this.order, this.exiting = false});
+  const _TreeReveal({
+    super.key,
+    required this.child,
+    this.order,
+    this.exiting = false,
+  });
 
   final Widget child;
   final int? order;
@@ -556,20 +561,33 @@ class _TreeRevealState extends State<_TreeReveal>
     super.dispose();
   }
 
+  /// 这一行的动画停在 0，但它**不该**是看不见的。
+  ///
+  /// 判据：不在离场中、动画已停（dismissed）、也没有"等着出场"的定时器。
+  /// 出现这种情况只有两种可能：状态被 element 顺位复用（列表在动画期间增删行），
+  /// 或者收起被打断而 `didUpdateWidget` 的通知晚了一拍。宁可当成"可见"，
+  /// 也绝不留下一个"文件夹莫名其妙不见了、但位置还占着"的行。
+  bool get _stranded =>
+      !widget.exiting &&
+      _c.value < 1 &&
+      _c.status == AnimationStatus.dismissed &&
+      !(_delay?.isActive ?? false);
+
   @override
   Widget build(BuildContext context) {
     if (AppMotion.reduceMotion(context)) return widget.child;
     return AnimatedBuilder(
       animation: _c,
       builder: (context, child) {
-        final t =
-            (_c.status == AnimationStatus.reverse
-                    ? AppMotion.exit
-                    : AppMotion.enter)
-                .transform(_c.value);
+        final t = _stranded
+            ? 1.0
+            : (_c.status == AnimationStatus.reverse
+                      ? AppMotion.exit
+                      : AppMotion.enter)
+                  .transform(_c.value);
         // 出场（展开）从左边一点点滑进来；**收起时不再平移**，就在原地淡出 ——
         // 收起的行往左滑，看起来像"这一行跑到左边去了"。
-        final exiting = _c.status == AnimationStatus.reverse;
+        final exiting = !_stranded && _c.status == AnimationStatus.reverse;
         return Opacity(
           opacity: t.clamp(0.0, 1.0),
           child: Transform.translate(
