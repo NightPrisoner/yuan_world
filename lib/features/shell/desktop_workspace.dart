@@ -250,12 +250,16 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     return out;
   }
 
-  /// 正在收起的文件夹 + 它们的全部后代（用来给每一行标 `exiting`）。
+  /// 正在收起的那些**后代行**（用来给每一行标 `exiting`）。
+  ///
+  /// 注意**不包括父文件夹自己**：父行要留着（名字还在、小三角当场翻过来），
+  /// 只有子树滑出去。之前把父 id 也塞进这个集合了，于是父行自己也被标成
+  /// `exiting`、反向动画到 0 —— 表现就是"文件夹一收起，它自己也整个不见了"，
+  /// 而且收完之后没人再把它放回可见，只能等组件被重建。
   Set<int> _collapsingRows(List<Collection> all) {
     if (_collapsing.isEmpty) return const <int>{};
     final out = <int>{};
     for (final id in _collapsing) {
-      out.add(id);
       out.addAll(_descendantsInOrder(id, all));
     }
     return out;
@@ -264,7 +268,8 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   /// 点小三角：展开，或者带着交错动画收起。
   void _toggleFolderCollapsed(Collection col, List<Collection> all) {
     _collapseTimer?.cancel();
-    final opening = _collapsed.contains(col.id);
+    // 正在收（还没写进 `_collapsed`）的时候再点一下 = 反悔，改成展开
+    final opening = _collapsed.contains(col.id) || _collapsing.contains(col.id);
     final kids = _descendantsInOrder(col.id, all);
     setState(() {
       _revealOrder.clear();
@@ -653,14 +658,14 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
         //     随侧栏收窄逐步露出来；
         //   · 退出"占满"：正文按三栏态下的宽度右对齐，列表从左边长回来
         //     把它左边那块空白盖住 —— 正文自己一动不动（"缩回右边"）。
+        // 三栏"稳定之后"的正文栏宽度：分栏收起的动画期间也用它排版，
+        // 于是正文只被裁切、不重排。
         final settledNavW = _navCollapsed ? railWidth : _navWidth;
         final settledNavResW = _navCollapsed ? 0.0 : resizerWidth;
         final settledDetailW = math.max(
           0.0,
           avail - settledNavW - settledNavResW - _listWidth - resizerWidth,
         );
-        // 占满时内容按整窗宽排版（进入动画的第一帧就换好，之后不再变）
-        final contentW = fullscreenEditor ? avail : settledDetailW;
 
         return AnimatedBuilder(
           // 侧栏收放 + 占满收放共用同一段布局，只是"谁在变宽变窄"不同
@@ -699,6 +704,17 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
 
                 /// 这一栏渲染的是"正文/笔记内容"（而不是列表或统计页）
                 final isDetailPane = withDetail || fullscreenEditor;
+                // 正文的**排版宽度**在"三栏态"和"占满态"之间按 fs 连续插值。
+                //
+                // 以前这里是个二选一（占满就整窗宽、否则固定栏宽），于是
+                // 切换的第一帧宽度就"啪"地跳过去：进入时正文已经按整窗宽排好、
+                // 从左往右被一点点露出来（看着像"从右边冒出来"），退出时反过来
+                // 先跳回窄栏再让列表长回来。改成插值之后，正文跟着补间连续
+                // 变宽变窄 —— 退出占满就是"缩回右边"。
+                //
+                // 侧栏收放时 fs 是常数、[settledDetailW] 又是按**目标**栏宽算的，
+                // 所以那条路径上这个值不变，正文不重排、只被裁切（这才是流畅的关键）。
+                final contentW = settledDetailW + (avail - settledDetailW) * fs;
                 final listResW = (withDetail && t > 0.001)
                     ? resizerWidth * (1 - fs)
                     : 0.0;
@@ -730,25 +746,32 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                               if (navT < 1)
                                 Opacity(
                                   opacity: 1 - navT,
-                                  child: OverflowBox(
-                                    alignment: Alignment.centerLeft,
-                                    // minWidth 必须显式给 0：外面那个
-                                    // SizedBox 是**紧约束**，不覆盖的话
-                                    // 会出现 minWidth > maxWidth 的非法约束
-                                    // （动画途中直接抛 assertion）
-                                    minWidth: 0,
-                                    maxWidth: railWidth,
-                                    child: navRail,
+                                  // RepaintBoundary 必须是 Opacity 的**直接**
+                                  // 子节点：这样侧栏内容被缓存成一层，每帧只换
+                                  // 透明度，不再逐帧重新光栅化整棵树。
+                                  child: RepaintBoundary(
+                                    child: OverflowBox(
+                                      alignment: Alignment.centerLeft,
+                                      // minWidth 必须显式给 0：外面那个
+                                      // SizedBox 是**紧约束**，不覆盖的话
+                                      // 会出现 minWidth > maxWidth 的非法约束
+                                      // （动画途中直接抛 assertion）
+                                      minWidth: 0,
+                                      maxWidth: railWidth,
+                                      child: navRail,
+                                    ),
                                   ),
                                 ),
                               if (navT > 0)
                                 Opacity(
                                   opacity: navT,
-                                  child: OverflowBox(
-                                    alignment: Alignment.centerLeft,
-                                    minWidth: 0,
-                                    maxWidth: _navWidth,
-                                    child: navPane,
+                                  child: RepaintBoundary(
+                                    child: OverflowBox(
+                                      alignment: Alignment.centerLeft,
+                                      minWidth: 0,
+                                      maxWidth: _navWidth,
+                                      child: navPane,
+                                    ),
                                   ),
                                 ),
                             ],
@@ -785,11 +808,13 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                         // 裁切（左侧对齐）：占满/退出时列表是滑出去、滑回来，
                         // 而不是每帧重新排一遍卡片。
                         child: ClipRect(
-                          child: OverflowBox(
-                            alignment: Alignment.centerLeft,
-                            minWidth: _listWidth,
-                            maxWidth: _listWidth,
-                            child: listPane,
+                          child: RepaintBoundary(
+                            child: OverflowBox(
+                              alignment: Alignment.centerLeft,
+                              minWidth: _listWidth,
+                              maxWidth: _listWidth,
+                              child: listPane,
+                            ),
                           ),
                         ),
                       ),
@@ -843,11 +868,15 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
                             alignment: Alignment.centerRight,
                             minWidth: 0,
                             maxWidth: layoutW,
-                            child: isDetailPane
-                                ? detailPane
-                                : showNotesSection
-                                ? listPane
-                                : sectionPage,
+                            // 正文（一篇文章可能几百个段落控件）单独缓一层：
+                            // 侧栏收放只改这栏的裁切范围，正文不用逐帧重画。
+                            child: RepaintBoundary(
+                              child: isDetailPane
+                                  ? detailPane
+                                  : showNotesSection
+                                  ? listPane
+                                  : sectionPage,
+                            ),
                           ),
                         ),
                       ),

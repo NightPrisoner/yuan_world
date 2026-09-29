@@ -223,7 +223,11 @@ extension _WsNav on _DesktopWorkspaceState {
                           for (final (_, col, depth) in _flattenTree(
                             state.collections,
                           ))
+                            // key 按文件夹 id 给：树在动画里增删行时，
+                            // element 必须跟着**同一行**走，不能顺位复用 ——
+                            // 复用到的可能是别人播到"看不见"的那个状态。
                             Builder(
+                              key: ValueKey<int>(col.id),
                               builder: (rowCtx) => _collectionRow(
                                 rowCtx,
                                 state,

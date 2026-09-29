@@ -123,6 +123,49 @@ void main() {
       expect(paneWidth(tester), isNull, reason: '动画结束后要拆掉');
     });
 
+    testWidgets('退出占满：正文（编辑器）连续缩回右边，没有一步跳到位的跳变', (tester) async {
+      // 回归：正文的排版宽度曾经是"占满=整窗宽 / 否则=固定栏宽"的二选一，
+      // 切换的第一帧就跳过去 —— 退出时正文会先"啪"地跳回右边，
+      // 然后不再动（看着像"从右边冒出来"）。现在按 fs 连续插值。
+      await state.refresh();
+      await pumpWide(tester);
+      await tester.tap(find.text('笔记 0').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('编辑'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('占满页面'));
+      await tester.pumpAndSettle();
+
+      Finder detailField() => find.descendant(
+        of: find.byKey(detailPaneKey),
+        matching: find.byType(TextField),
+      );
+      final fullWidthX = tester.getTopLeft(detailField().first).dx;
+
+      await tester.tap(find.byTooltip('退出占满页面'));
+      final xs = <double>[fullWidthX];
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        xs.add(tester.getTopLeft(detailField().first).dx);
+      }
+      await tester.pumpAndSettle();
+      final settledX = tester.getTopLeft(detailField().first).dx;
+
+      expect(settledX, greaterThan(fullWidthX), reason: '退出后正文应该在更右边');
+      for (var i = 1; i < xs.length; i++) {
+        expect(
+          xs[i],
+          greaterThanOrEqualTo(xs[i - 1] - 0.01),
+          reason: '正文只能一路往右，不能来回跳。轨迹 $xs',
+        );
+        expect(
+          xs[i] - xs[i - 1],
+          lessThan(150),
+          reason: '每一帧的位移都很小（连续补间）；一步跳到位就是这里超过阈值。轨迹 $xs',
+        );
+      }
+    });
+
     testWidgets('全屏编辑时正文栏占满整窗（不会被挤窄或推出屏幕外）', (tester) async {
       await state.refresh();
       await pumpWide(tester);

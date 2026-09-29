@@ -515,6 +515,37 @@ class _TreeRevealState extends State<_TreeReveal>
       _delay = Timer(_treeRevealStagger * _rank, () {
         if (mounted) _c.reverse();
       });
+      return;
+    }
+    // 收起被取消（又展开回来、或者这一行换了归属）：回到可见。
+    // 有出场序号的从当前位置接着往前播（连续），没序号（常驻行）
+    // 的必须立刻回到 1 —— 否则这一行就"消失"了。
+    if (!widget.exiting && oldWidget.exiting) {
+      _delay?.cancel();
+      if (widget.order != null) {
+        _delay = Timer(_treeRevealStagger * _rank, () {
+          if (mounted) _c.forward();
+        });
+      } else {
+        _c.value = 1;
+      }
+      return;
+    }
+    // 新一批展开：从头播一遍
+    if (oldWidget.order == null && widget.order != null) {
+      _delay?.cancel();
+      _c.value = 0;
+      _delay = Timer(_treeRevealStagger * _rank, () {
+        if (mounted) _c.forward();
+      });
+      return;
+    }
+    // 兜底：本该常驻可见的行（order == null 且不在退出中）绝不停在
+    // 半透明/位移状态 —— 列表在动画期间增删行时 element 会被复用，
+    // 复用到的状态可能是别人播到 0 的那个。
+    if (widget.order == null && !widget.exiting && _c.value < 1) {
+      _delay?.cancel();
+      _c.value = 1;
     }
   }
 
@@ -536,10 +567,13 @@ class _TreeRevealState extends State<_TreeReveal>
                     ? AppMotion.exit
                     : AppMotion.enter)
                 .transform(_c.value);
+        // 出场（展开）从左边一点点滑进来；**收起时不再平移**，就在原地淡出 ——
+        // 收起的行往左滑，看起来像"这一行跑到左边去了"。
+        final exiting = _c.status == AnimationStatus.reverse;
         return Opacity(
           opacity: t.clamp(0.0, 1.0),
           child: Transform.translate(
-            offset: Offset(-10 * (1 - t), 0),
+            offset: Offset(exiting ? 0.0 : -10 * (1 - t), 0),
             child: child,
           ),
         );

@@ -802,22 +802,28 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 嵌入三栏布局：工具栏放顶部（桌面端顶部工具栏更顺手），
     // 且不套 Scaffold —— 外层面板已经提供了边框与背景。
     if (widget.embedded) {
-      final body = widget.fullscreen
-          // 全屏（占满页面）时给正文限个宽：一行横跨 1900px 没法读。
-          // 但也不能限太死 —— 以前写死 860，在大屏上左右各留一大片空白，
-          // 用户的原话是"全屏不要左右两边留白那么多"。
-          // 现在跟着窗口走：宽屏给到 1200，窄屏留 96 的边距。
-          ? LayoutBuilder(
-              builder: (context, box) => Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: math.min(1200, box.maxWidth - 96),
-                  ),
-                  child: content,
-                ),
-              ),
-            )
-          : content;
+      // 给正文限个宽：一行横跨 1900px 没法读；但不能限太死 —— 以前写死 860，
+      // 在大屏上左右各留一大片空白，用户的原话是「全屏不要左右两边留白那么多」，
+      // 所以宽屏给到 1200。
+      //
+      // 判据从 `widget.fullscreen` 这个 bool 换成「当前可用宽度」：占满动画的每
+      // 一帧这一栏都在变宽，用 bool 的话退出占满的第一帧正文就从「居中限宽 1200」
+      // 跳到「满宽」，然后才慢慢缩回去 —— 用户看到的「动画很怪」就有这一步。
+      // 按宽度来：栏宽 ≤ 1200 时这个上限不生效（三栏态和以前一模一样），
+      // 只有真超过 1200 才居中限宽，而且随宽度连续变化。
+      final body = LayoutBuilder(
+        builder: (context, box) {
+          // min 与 max 同值：居中且保持「紧」约束，正文该填满就填满，
+          // 不会因为外面套了 Center 就塌成内容宽度。
+          final cap = math.min(1200.0, box.maxWidth);
+          return Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: cap, maxWidth: cap),
+              child: content,
+            ),
+          );
+        },
+      );
 
       return _wrapDrop(
         _shortcuts(

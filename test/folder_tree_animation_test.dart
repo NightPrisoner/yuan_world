@@ -131,11 +131,7 @@ void main() {
     }
 
     expect(sawSlide, isTrue, reason: '子项要从左边滑进来');
-    expect(
-      sawStagger,
-      isTrue,
-      reason: '子一排在孙一前面，应该更早出来 —— 这就是"一个一个来"',
-    );
+    expect(sawStagger, isTrue, reason: '子一排在孙一前面，应该更早出来 —— 这就是"一个一个来"');
 
     await tester.pumpAndSettle();
   });
@@ -163,5 +159,42 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('子一'), findsNothing);
     expect(find.text('孙一'), findsNothing);
+  });
+
+  testWidgets('收起之后父文件夹自己必须留在原位、完全不透明', (tester) async {
+    // 回归：曾经把"父文件夹自己"也当成要离场的行，于是收起一次之后
+    // 文件夹整个看不见了（行还在、只是被淡成了 0）。
+    seedTree();
+    await state.refresh();
+    await pumpWide(tester);
+
+    List<Opacity> rowOpacities() => tester
+        .widgetList<Opacity>(
+          find.ancestor(of: find.text('父文件夹'), matching: find.byType(Opacity)),
+        )
+        .toList();
+
+    final before = tester.getTopLeft(find.text('父文件夹'));
+    expect(rowOpacities().every((o) => o.opacity == 1.0), isTrue);
+
+    await tester.tap(chevronOf('父文件夹'));
+    for (final ms in [16, 100, 300]) {
+      await tester.pump(Duration(milliseconds: ms));
+      expect(find.text('父文件夹'), findsOneWidget, reason: '收起的是子树，父行必须留在树里');
+      expect(
+        rowOpacities().every((o) => o.opacity == 1.0),
+        isTrue,
+        reason: '父行不能跟着子树一起淡掉（+${ms}ms）',
+      );
+      expect(
+        tester.getTopLeft(find.text('父文件夹')).dx,
+        closeTo(before.dx, 0.01),
+        reason: '父行不能跟着子树一起滑走（+${ms}ms）',
+      );
+    }
+
+    await tester.pumpAndSettle();
+    expect(find.text('父文件夹'), findsOneWidget);
+    expect(rowOpacities().every((o) => o.opacity == 1.0), isTrue);
   });
 }
