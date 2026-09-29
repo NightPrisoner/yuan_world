@@ -266,7 +266,12 @@ class AppText {
     fontSize: 13,
     height: 1.38,
     fontWeight: FontWeight.w400,
-    letterSpacing: -0.08,
+    // 这里**不要**给负字距：13px 的中文在 200% 缩放下正好落在整数像素上，
+    // 而 -0.08 这种小数会字距会把每个字的原点推到半个像素外，
+    // Windows 的字形微调（hinting）于是各字独立取整 —— 同一个名字里
+    // 会出现"某个字低了一像素"的观感（选中时换成 w600 字体，栅格化路径
+    // 变了，看着又齐了）。小字号一律保持 0。
+    letterSpacing: 0,
     fontFamilyFallback: _f,
   );
   static const TextStyle caption1 = TextStyle(
