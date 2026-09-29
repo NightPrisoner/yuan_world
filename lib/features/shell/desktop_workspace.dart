@@ -80,6 +80,11 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
         with
         TickerProviderStateMixin {
   _Section _section = _Section.notes;
+
+  /// 切页时的滑入方向：1 = 从右边进来（往后翻），-1 = 从左边进来（往前翻）。
+  ///
+  /// 原来永远从右边滑 2%：点回上一个入口也是从右边冒出来，方向跟视线对不上。
+  int _sectionDir = 1;
   int? _selectedNoteId;
   bool _editing = false;
 
@@ -445,8 +450,29 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
         .push(ApplePageRoute<void>(pageBuilder: (_) => const ManageTagsPage()));
   }
 
+  /// 左栏里这些入口的**视觉顺序**。
+  ///
+  /// 跟枚举顺序不一样：枚举是 notes/archived/todos/...，而左栏底下那组从上往下
+  /// 是 待办 → 归档 → 回收站 → 统计 → 设置。滑入方向按视觉顺序算才对得上视线。
+  static int _sectionRank(_Section s) => switch (s) {
+    _Section.notes => 0,
+    _Section.todos => 1,
+    _Section.archived => 2,
+    _Section.trash => 3,
+    _Section.stats => 4,
+    _Section.settings => 5,
+  };
+
+  /// 记下这次切页该往哪边滑（往后翻进、往前翻退）。
+  void _updateSectionDir(_Section next) {
+    final from = _sectionRank(_section);
+    final to = _sectionRank(next);
+    if (to != from) _sectionDir = to > from ? 1 : -1;
+  }
+
   void _goSection(_Section s) {
     setState(() {
+      _updateSectionDir(s);
       _section = s;
       if (s != _Section.notes) {
         _editing = false;
@@ -845,6 +871,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     await state.refresh();
     if (!mounted) return;
     setState(() {
+      _updateSectionDir(_Section.notes);
       _section = _Section.notes;
       _selectedNoteId = id;
       _editing = true;
@@ -882,28 +909,38 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   /// 分栏页面之间的切换动画。
   ///
   /// 以前是**瞬间替换**：点「统计」整块内容"啪"地换掉，层级关系断了。
-  /// 现在用 [AnimatedSwitcher]：旧页淡出，新页从右侧 2% 处轻微滑入
+  /// 现在用 [AnimatedSwitcher]：旧页淡出，新页从侧面 2% 处轻微滑入
   /// —— 幅度很小（不是整页平移），够表达"换了一页"，又不至于让人等动画。
   /// 按 [_section] 给 key，切换时 Flutter 才认得出"这是另一页"。
+  ///
+  /// 方向跟着 [_sectionDir] 走：往后翻 = 新页从右边进、旧页往左退；往前翻反过来。
+  /// 以前不管往哪翻都从右边冒出来，往回翻时方向是反的。
   Widget _sectionSwitcher(AppState state) {
     final page = KeyedSubtree(
       key: ValueKey<String>('section-${_section.name}'),
       child: _sectionPage(state),
     );
+    final currentKey = 'section-${_section.name}';
     return AnimatedSwitcher(
       duration: AppMotion.normal,
       switchInCurve: AppMotion.enter,
       switchOutCurve: AppMotion.exit,
-      transitionBuilder: (child, anim) => FadeTransition(
-        opacity: anim,
-        child: SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0.02, 0),
-            end: Offset.zero,
-          ).animate(anim),
-          child: child,
-        ),
-      ),
+      transitionBuilder: (child, anim) {
+        // KeyedSubtree 的 key 就是上面那个 ValueKey：认出这是新页还是旧页，
+        // 好让两页朝相反方向走（推进感），而不是一起朝同一边挪。
+        final incoming = (child.key as ValueKey<String>?)?.value == currentKey;
+        final from = 0.02 * _sectionDir * (incoming ? 1 : -1);
+        return FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: Offset(from, 0),
+              end: Offset.zero,
+            ).animate(anim),
+            child: child,
+          ),
+        );
+      },
       child: page,
     );
   }

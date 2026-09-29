@@ -222,4 +222,49 @@ void main() {
       expect(find.text('未分类'), findsOneWidget);
     });
   });
+
+  group('分栏切换的滑入方向', () {
+    /// 某个分区页当前横向偏移（占自身宽度的比例）。正 = 还在右边（从右边进来）。
+    double? sectionOffset(WidgetTester tester, String name) {
+      final page = find.byKey(ValueKey<String>('section-$name'));
+      if (page.evaluate().isEmpty) return null;
+      final slide = find.ancestor(
+        of: page,
+        matching: find.byType(SlideTransition),
+      );
+      if (slide.evaluate().isEmpty) return null;
+      return tester.widget<SlideTransition>(slide.first).position.value.dx;
+    }
+
+    testWidgets('往后翻从右边进、往回翻从左边进', (tester) async {
+      await state.refresh();
+      await pumpWide(tester);
+
+      // 待办 → 统计：往后翻，统计页该从右边滑进来
+      await tester.tap(find.text('待办').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('统计').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(sectionOffset(tester, 'stats'), isNotNull);
+      expect(
+        sectionOffset(tester, 'stats')!,
+        greaterThan(0),
+        reason: '往后翻，新页该从右边进来',
+      );
+      await tester.pumpAndSettle();
+
+      // 统计 → 待办：往回翻，待办页该从左边滑进来
+      await tester.tap(find.text('待办').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(sectionOffset(tester, 'todos'), isNotNull);
+      expect(
+        sectionOffset(tester, 'todos')!,
+        lessThan(0),
+        reason: '往回翻，新页该从左边进来（原来不管往哪翻都从右边冒出来）',
+      );
+      await tester.pumpAndSettle();
+    });
+  });
 }
