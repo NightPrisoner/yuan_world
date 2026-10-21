@@ -136,6 +136,11 @@ extension NoteTrash on NoteRepository {
     if (list.isEmpty) return;
     _d.execute('DELETE FROM notes WHERE id IN (${list.join(',')})');
     _purgeMedia(list);
+    // 历史和草稿也跟着笔记走。它们没有外键，留着就是永远没人读的孤儿行：
+    // 用户"彻底删除"之后，正文副本还躺在库里（也是隐私问题）。
+    for (final id in list) {
+      deleteRevisionsOf(id);
+    }
   }
 
   /// 顺手删掉这些笔记的图片目录。
@@ -183,6 +188,9 @@ extension NoteTrash on NoteRepository {
     );
     _d.execute('DELETE FROM collections WHERE id IN (${ids.join(',')})');
     _purgeMedia(doomed);
+    for (final id in doomed) {
+      deleteRevisionsOf(id);
+    }
   }
 
   /// 清空回收站。返回清掉的笔记数。
@@ -201,6 +209,9 @@ extension NoteTrash on NoteRepository {
     }
     _d.execute('DELETE FROM notes WHERE deleted_at IS NOT NULL');
     _purgeMedia(doomed);
+    for (final id in doomed) {
+      deleteRevisionsOf(id);
+    }
     return n;
   }
 
@@ -236,6 +247,9 @@ extension NoteTrash on NoteRepository {
       <Object?>[cutoff],
     );
     _purgeMedia(doomed);
+    for (final id in doomed) {
+      deleteRevisionsOf(id);
+    }
     return n;
   }
 

@@ -320,6 +320,27 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   String _savedTitle = '';
   String _savedBody = '';
 
+  /// 上一次落库是否成功。**失败时必须让用户看见** ——
+  /// 以前这里只按定时器状态显示"编辑中…/已自动保存"，`updateNote` 抛异常
+  /// 时界面照样说"已自动保存"，用户关掉窗口就以为存上了。
+  bool _saveFailed = false;
+
+  /// 上次失败的原因，显示在提示条里。
+  String _saveError = '';
+
+  /// 后台重试定时器：保存失败后每隔几秒再试一次，直到成功。
+  Timer? _retryTimer;
+
+  /// 草稿落盘定时器。
+  Timer? _draftTimer;
+
+  /// 页面已经开始销毁。
+  ///
+  /// `dispose` 里会再存一次（切换笔记时桌面端可能不经过「完成」），
+  /// 那次要是失败，[ _save ] 会排一个重试定时器 —— 而页面马上就没了，
+  /// 这个定时器永远没人取消。用标志位挡住这种"僵尸重试"。
+  bool _disposed = false;
+
   @override
   void initState() {
     super.initState();
@@ -337,8 +358,19 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       _savedBody = note.content;
       _lastValue = _body.value;
       _rebuildSegments();
+      // 有比库里更新的草稿？先问一句再决定用哪个。
+      //
+      // 正常关闭时保存成功会顺手删草稿，所以这里能命中只有两种情况：
+      // 上次保存失败（用户在对话框里选了"先离开"），或者进程被强杀。
+      _maybeRestoreDraft(note.title, note.content);
     }
     _loaded = true;
+    // 草稿和库里内容一致（上一次其实存上了，只是删草稿那步失败），清掉
+    _appState.repo.deleteDraftIfMatches(
+      widget.noteId,
+      title: _savedTitle,
+      content: _savedBody,
+    );
     _title.addListener(_markDirty);
     _body.addListener(_onBodyChanged);
     // 把焦点要过来，快捷键才生效（见 [_shortcuts]）。不等用户先点一下：
@@ -350,8 +382,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
   @override
   void dispose() {
+    _disposed = true;
     _saveTimer?.cancel();
     _snapshotTimer?.cancel();
+    _retryTimer?.cancel();
+    _draftTimer?.cancel();
     // Desktop selection/layout changes may remove this editor without going
     // through its Done button. Persist the pending draft before disposal;
     // avoid notifying widgets while their tree is being rebuilt.
@@ -395,9 +430,37 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   void _scheduleSave() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 1200), _save);
+    // 草稿比正式保存更早落盘：它是"崩了也能找回来"的保险，
+    // 落库只要 1.2 秒，草稿没理由等更久。
+    _draftTimer?.cancel();
+    _draftTimer = Timer(const Duration(milliseconds: 600), _persistDraft);
+  }
+
+  /// 把"现在屏幕上的内容"记进草稿表。
+  ///
+  /// 和自动保存的区别：草稿**不碰 notes 表**，只在崩溃/断电/强杀之后
+  /// 能找回最近敲的东西。落库成功就删掉。
+  void _persistDraft() {
+    try {
+      final title = _title.text.trim();
+      final text = _body.text;
+      if (title == _savedTitle && text == _savedBody) return;
+      _appState.repo.saveDraft(
+        noteId: widget.noteId,
+        title: title,
+        content: text,
+      );
+    } catch (_) {
+      // 草稿写不进去不该影响输入
+    }
   }
 
   /// 落库。返回**这次是不是真的写了**（没改动就什么都不做，返回 false）。
+  ///
+  /// 写库这一步是**可能失败的**（磁盘满、库被占用、权限）。以前这里
+  /// 不做任何 try/catch：异常顺着定时器抛出去，界面上的"已自动保存"
+  /// 照旧显示，用户以为存上了。现在失败会：记下原因、显示红色提示、
+  /// 每隔几秒自动重试，并且退出前一定会再试一次。
   bool _save({bool notify = true}) {
     final text = _body.text;
     final title = _title.text.trim();
@@ -408,21 +471,56 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 会把修改时间改掉，列表里的排序也跟着乱跳。
     // 用字符串比对而不是靠 dirty 标志：不用在每个改动入口都记得打标记，
     // 漏一个就会退化成旧行为。
-    if (title == _savedTitle && text == _savedBody) return false;
+    if (title == _savedTitle && text == _savedBody) {
+      // 内容没变但上一次是失败状态（比如空笔记第一次保存失败后
+      // 用户又把内容删回原样）—— 清掉错误提示，别一直红着。
+      if (_saveFailed) _clearSaveError(notify: notify);
+      return false;
+    }
 
     final state = _appState;
-    state.repo.updateNote(
-      id: widget.noteId,
-      title: title,
-      content: text,
-      excerpt: makeExcerpt(text),
-      charCount: countChars(text),
-      wordCount: countWords(text),
-      // 图片/视频数也要重算，否则插了图那个数字还是旧的
-      imageCount: mediaCountOf(text),
-    );
-    _savedTitle = title;
-    _savedBody = text;
+    try {
+      // 真的要从旧内容改成新内容了 —— **先把旧内容记一条历史**。
+      //
+      // 放在 updateNote 之前：如果写失败了，历史里多一条旧版本没有坏处；
+      // 放在之后的话，写成功后崩溃就再也拿不到旧内容了。
+      state.repo.addRevision(
+        noteId: widget.noteId,
+        title: _savedTitle,
+        content: _savedBody,
+        reason: 'save',
+      );
+      state.repo.updateNote(
+        id: widget.noteId,
+        title: title,
+        content: text,
+        excerpt: makeExcerpt(text),
+        charCount: countChars(text),
+        wordCount: countWords(text),
+        // 图片/视频数也要重算，否则插了图那个数字还是旧的
+        imageCount: mediaCountOf(text),
+      );
+      // 落库成功：草稿这个"未确认现场"就可以删了
+      try {
+        state.repo.deleteDraft(widget.noteId);
+      } catch (_) {
+        // 删草稿失败不影响"已经存上了"这个事实
+      }
+      _savedTitle = title;
+      _savedBody = text;
+      _clearSaveError(notify: false);
+      _retryTimer?.cancel();
+      _retryTimer = null;
+    } catch (e) {
+      // 失败：留下现场，把原因放到界面上，并排一次后台重试
+      _saveError = _describeSaveError(e);
+      _saveFailed = true;
+      _persistDraft();
+      _scheduleRetry();
+      if (notify && mounted) setState(() {});
+      return false;
+    }
+
     // **顺手让列表页知道内容变了。**
     //
     // 以前保存只写库、不发通知：手机上手势返回（不走 _flushAndLeave）以后
@@ -433,11 +531,268 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     return true;
   }
 
+  /// 把异常翻译成用户能看懂的一句话。
+  String _describeSaveError(Object e) {
+    final raw = e.toString();
+    if (raw.contains('database is locked') ||
+        raw.contains('database is busy')) {
+      return '数据库正被占用';
+    }
+    if (raw.contains('disk') && raw.contains('full')) {
+      return '磁盘空间不足';
+    }
+    if (raw.contains('Permission') || raw.contains('denied')) {
+      return '没有写入权限';
+    }
+    if (raw.contains('readonly') || raw.contains('read-only')) {
+      return '文件是只读的';
+    }
+    // 兜底：保留原始信息的前一段，别把一屏堆栈塞进提示条
+    final oneLine = raw.replaceAll(RegExp(r'\s+'), ' ');
+    return oneLine.length <= 120 ? oneLine : '${oneLine.substring(0, 120)}…';
+  }
+
+  void _clearSaveError({bool notify = true}) {
+    if (!_saveFailed) return;
+    _saveFailed = false;
+    _saveError = '';
+    if (notify && mounted) setState(() {});
+  }
+
+  /// 保存失败后的自动重试：3 秒一次，成功为止。
+  ///
+  /// 不用指数退避：这类失败大多是暂时的（文件被占用），3 秒足够；
+  /// 一直失败的话提示条本身就在提醒用户，不需要靠间隔变长来省资源。
+  void _scheduleRetry() {
+    if (_disposed) return;
+    _retryTimer?.cancel();
+    _retryTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      _save();
+    });
+  }
+
   /// 离开页面前强制落库。
-  Future<void> _flushAndLeave() async {
+  /// 打开编辑器时检查有没有没落库的草稿。
+  ///
+  /// 判定规则：
+  ///   · 草稿跟库里内容一样 → 忽略（清理由 initState 末尾做）
+  ///   · 草稿跟库里不一样   → 弹窗让用户选，默认**不覆盖**库里内容
+  void _maybeRestoreDraft(String dbTitle, String dbBody) {
+    NoteDraft? draft;
+    try {
+      draft = _appState.repo.getDraft(widget.noteId);
+    } catch (_) {
+      return;
+    }
+    if (draft == null) return;
+    if (draft.title == dbTitle && draft.content == dbBody) return;
+    // 草稿比库里还旧（比如之后又在别处保存过）也不该拿它覆盖
+    final note = _appState.repo.getNote(widget.noteId);
+    if (note != null && draft.updatedAt.isBefore(note.updatedAt)) return;
+
+    // 不能在 initState 里直接弹 —— 没有 Overlay 上下文
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('发现未保存的编辑内容'),
+          content: Text(
+            '上次这段内容没有保存成功（${_formatTime(draft!.updatedAt)}）。'
+            '要恢复吗？',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                try {
+                  _appState.repo.deleteDraft(widget.noteId);
+                } catch (_) {}
+              },
+              child: const Text('丢弃草稿'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                setState(() {
+                  _title.text = draft!.title;
+                  _body.text = draft.content;
+                  _lastValue = _body.value;
+                  _rebuildSegments();
+                });
+                _scheduleSave();
+              },
+              child: const Text('恢复'),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
+  /// 历史版本。列出最近的版本，选中一条即可预览/恢复。
+  Future<void> _showHistory() async {
+    final c = context.colors;
+    final state = _appState;
+    final revisions = (() {
+      try {
+        return state.repo.revisionsOf(widget.noteId, limit: 60);
+      } catch (_) {
+        return const <NoteRevision>[];
+      }
+    })();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('历史版本'),
+        content: SizedBox(
+          width: 520,
+          height: 420,
+          child: revisions.isEmpty
+              ? Center(
+                  child: Text(
+                    '还没有历史版本。\n改写并保存后，旧内容会自动留在这里。',
+                    textAlign: TextAlign.center,
+                    style: AppText.callout.copyWith(color: c.secondaryLabel),
+                  ),
+                )
+              : ListView.separated(
+                  itemCount: revisions.length,
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: c.separator),
+                  itemBuilder: (_, i) {
+                    final r = revisions[i];
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        '${_formatTime(r.createdAt)}'
+                        '${r.reason == 'restore' ? '（恢复前留存）' : ''}',
+                        style: AppText.callout.copyWith(color: c.label),
+                      ),
+                      subtitle: Text(
+                        r.preview,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.footnote.copyWith(
+                          color: c.secondaryLabel,
+                        ),
+                      ),
+                      trailing: TextButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _restoreRevision(r);
+                        },
+                        child: const Text('恢复'),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 恢复某个历史版本。
+  ///
+  /// 先把**当前**内容也存一条历史（reason: 'restore'），
+  /// 这样"恢复错了"还能再恢复回来。
+  Future<void> _restoreRevision(NoteRevision r) async {
+    final hasUnsaved =
+        _title.text.trim() != _savedTitle || _body.text != _savedBody;
+    if (hasUnsaved) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('当前有未保存的修改'),
+          content: const Text('恢复历史版本会丢掉这些未保存的修改，继续吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('继续恢复'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    try {
+      _appState.repo.addRevision(
+        noteId: widget.noteId,
+        title: _title.text.trim(),
+        content: _body.text,
+        reason: 'restore',
+      );
+    } catch (_) {
+      // 留不下当前内容也不该挡住恢复，但要让用户知道
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('当前内容未能存为历史版本')));
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _title.text = r.title;
+      _body.text = r.content;
+      _lastValue = _body.value;
+      _rebuildSegments();
+    });
     _saveTimer?.cancel();
     _save();
-    final state = context.read<AppState>();
+  }
+
+  String _formatTime(DateTime t) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} '
+        '${two(t.hour)}:${two(t.minute)}';
+  }
+
+  Future<void> _flushAndLeave() async {
+    _saveTimer?.cancel();
+    _draftTimer?.cancel();
+    final saved = _save();
+    // 存不上就别默默关掉 —— 至少告诉用户内容还在草稿里。
+    if (!saved && _dirty) {
+      final retry = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('这次没有保存成功'),
+          content: Text(
+            '原因：$_saveError\n\n'
+            '你刚才写的内容还在草稿里，不会丢。可以再试一次；'
+            '也可以先离开，下次打开这篇笔记时会提示恢复。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('先离开'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('再试一次'),
+            ),
+          ],
+        ),
+      );
+      if (retry == true && mounted) {
+        _save();
+        if (_saveFailed) return; // 还是不行就留在编辑器里
+      }
+    }
+    if (!mounted) return;
+    final state = _appState;
     await state.refresh();
     if (!mounted) return;
     final external = widget.onClose;
@@ -928,6 +1283,14 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+                      const SizedBox(width: 6),
+                      GlassIconButton(
+                        icon: Icons.history_rounded,
+                        size: 28,
+                        iconSize: 16,
+                        tooltip: '历史版本',
+                        onTap: _showHistory,
+                      ),
                       const Spacer(),
                       _saveHint(c),
                       const SizedBox(width: 8),
@@ -1029,6 +1392,13 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                 style: AppText.headline.copyWith(color: c.label),
               ),
               actions: [
+                GlassIconButton(
+                  icon: Icons.history_rounded,
+                  size: 30,
+                  iconSize: 17,
+                  tooltip: '历史版本',
+                  onTap: _showHistory,
+                ),
                 // 目录：正文里有两个以上标题才给入口（没标题时它是空面板）
                 if (toc.isNotEmpty)
                   GlassIconButton(
@@ -1281,18 +1651,51 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   }
 
   /// 保存状态提示：让"有没有存上"这件事一眼可见。
+  ///
+  /// 三种状态（优先级从高到低）：
+  ///   1. 保存失败 —— 红字 + 原因，点一下立刻重试
+  ///   2. 编辑中（有未落库的改动）
+  ///   3. 已自动保存
   Widget _saveHint(AppColors c) {
-    return AnimatedSwitcher(
+    final (String label, Color color, bool tappable) = _saveFailed
+        ? ('未保存：$_saveError', c.destructive, true)
+        : _hasPendingSave
+        ? ('编辑中…', c.tertiaryLabel, false)
+        : ('已自动保存', c.tertiaryLabel, false);
+    final text = AnimatedSwitcher(
       duration: AppMotion.fast,
       child: Text(
-        _hasPendingSave ? '编辑中…' : '已自动保存',
-        key: ValueKey<bool>(_hasPendingSave),
-        style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+        label,
+        key: ValueKey<String>(label),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: AppText.caption1.copyWith(color: color),
+      ),
+    );
+    if (!tappable) return text;
+    return Tooltip(
+      message: '点一下立刻重试保存',
+      child: Pressable(
+        // 失败时整块可点：不用去猜"重试"按钮在哪
+        onTap: () {
+          _saveTimer?.cancel();
+          _save();
+        },
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 220),
+          child: text,
+        ),
       ),
     );
   }
 
   bool get _hasPendingSave => _saveTimer?.isActive ?? false;
+
+  /// 有未落库的改动（包括"保存失败"这种更严重的）。
+  bool get _dirty =>
+      _saveFailed ||
+      _title.text.trim() != _savedTitle ||
+      _body.text != _savedBody;
 
   // ── 编辑态 ──────────────────────────────────────────────────────────────
 

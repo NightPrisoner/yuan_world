@@ -18,6 +18,7 @@ import '../models.dart';
 part 'note_aggregates.dart';
 part 'note_collections.dart';
 part 'note_mutations.dart';
+part 'note_revisions.dart';
 part 'note_queries.dart';
 part 'note_tags.dart';
 part 'note_trash.dart';

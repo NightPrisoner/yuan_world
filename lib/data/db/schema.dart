@@ -13,7 +13,7 @@
 library;
 
 /// 当前 schema 版本。每次改表结构都要 +1，并在 [kMigrations] 里补一段。
-const int kSchemaVersion = 9;
+const int kSchemaVersion = 10;
 
 /// v8：按文件名规则排序用的键。
 ///
@@ -336,6 +336,34 @@ const List<String> kCreateStatements = <String>[
     INSERT INTO notes_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
   END
   ''',
+
+  // ── 历史版本与编辑草稿（v10） ─────────────────────────────────────────
+  // 新库直接建好；老库由 kMigrations[10] 补上，语句是同一份（IF NOT EXISTS）。
+  ...kRevisionAndDraftStatements,
+];
+
+/// v10：笔记历史版本 + 编辑草稿。
+const List<String> kRevisionAndDraftStatements = <String>[
+  '''
+  CREATE TABLE IF NOT EXISTS note_revisions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_id     INTEGER NOT NULL,
+    title       TEXT    NOT NULL DEFAULT '',
+    content     TEXT    NOT NULL DEFAULT '',
+    reason      TEXT    NOT NULL DEFAULT 'save',
+    created_at  INTEGER NOT NULL DEFAULT 0
+  )
+  ''',
+  'CREATE INDEX IF NOT EXISTS idx_revisions_note '
+      'ON note_revisions(note_id, created_at DESC)',
+  '''
+  CREATE TABLE IF NOT EXISTS note_drafts (
+    note_id     INTEGER PRIMARY KEY,
+    title       TEXT    NOT NULL DEFAULT '',
+    content     TEXT    NOT NULL DEFAULT '',
+    updated_at  INTEGER NOT NULL DEFAULT 0
+  )
+  ''',
 ];
 
 /// 版本迁移脚本。key 是「要升到的版本」，value 是要执行的语句。
@@ -372,4 +400,12 @@ const Map<int, List<String>> kMigrations = <int, List<String>>{
     'DROP TABLE IF EXISTS note_images',
     'DROP INDEX IF EXISTS idx_note_images_note',
   ],
+  // v9 → v10：笔记历史版本 + 编辑草稿
+  //
+  // 背景：自动保存只有"最后一份"，误改覆盖了原文就再也回不去；切走窗口
+  // 时未落库的内容也可能丢。两张表都不大：
+  //   - [note_revisions] 只在保存"真正覆盖了旧内容"时追加一条，按篇轮转；
+  //   - [note_drafts] 每篇最多一行，是"已经敲了但还没保存成功"的现场。
+  // 两张表都**不参与任何查询/统计**，只在恢复入口读。
+  10: kRevisionAndDraftStatements,
 };
