@@ -343,16 +343,32 @@ class _DropZoneState extends State<_DropZone> {
           children: [
             AnimatedContainer(
               duration: AppMotion.instant,
-              margin: const EdgeInsets.symmetric(vertical: 1),
+              // **不要在这里加 margin**。
+              //
+              // _NavRow 自己已经有 vertical: 1 的 margin。这里再来一份的话，
+              // 套了 _DropZone 的行（未分类、文件夹行）就比没套的行高 2px ——
+              // 收起侧栏切到图标轨道时，"未分类"往上跳 1px、"收藏"往前挪 2px。
+              // 拖拽提示线由下面的 Stack 自己定位，不依赖这层外框。
               decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: nest
+                    ? c.tint.withValues(alpha: 0.10)
+                    : Colors.transparent,
+              ),
+              // 边框画在**前景层**，不能放进 decoration。
+              //
+              // Border 是**占布局**的：哪怕颜色是透明的，那 1.5px 也还在，
+              // 于是套了 _DropZone 的行（未分类、文件夹行）比没套的
+              // （图标轨道里的同名入口）往里缩 1.5px、高 3px ——
+              // 收起/展开侧栏一换，未分类的图标就横向跳一下，
+              // 它下面的收藏也跟着纵向挪。
+              // 前景层只负责画，不参与布局，两种状态行高完全一致。
+              foregroundDecoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: nest ? c.tint : Colors.transparent,
                   width: 1.5,
                 ),
-                color: nest
-                    ? c.tint.withValues(alpha: 0.10)
-                    : Colors.transparent,
               ),
               child: widget.child,
             ),

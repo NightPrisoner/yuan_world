@@ -380,6 +380,40 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('未分类和收藏在收放前后不能挪位置', (tester) async {
+      // 用户报的："为什么收起侧栏展开侧栏，未分类和收藏的图标会有轻微偏移"
+      //
+      // 根因是「未分类」那一行外面套着拖拽落区（_DropZone），落区为了画
+      // "放下就归到这里"的描边，给容器加过 border 和 margin —— 这两样都
+      // **占布局**。于是同一行在展开态（套落区）和收起态（图标轨道里不套）
+      // 的图标位置差 1.5px 横向、1px 纵向，收藏还被顶下去 2px。
+      // 现在描边走 foregroundDecoration、margin 只留 _NavRow 自己那一份。
+      await state.refresh();
+      await pumpWide(tester);
+
+      Finder iconInNav(IconData data) => find.descendant(
+        of: find.byKey(const ValueKey('nav-column')),
+        matching: find.byIcon(data),
+      );
+
+      final expanded = <IconData, Offset>{
+        Icons.article_rounded: tester.getCenter(iconInNav(Icons.article_rounded)),
+        Icons.inbox_rounded: tester.getCenter(iconInNav(Icons.inbox_rounded)),
+        Icons.star_rounded: tester.getCenter(iconInNav(Icons.star_rounded)),
+      };
+
+      await tester.tap(find.text('收起侧栏'));
+      await tester.pumpAndSettle();
+
+      for (final entry in expanded.entries) {
+        expect(
+          tester.getCenter(iconInNav(entry.key)),
+          entry.value,
+          reason: '收起侧栏后这个图标不该挪位置（${entry.key.codePoint}）',
+        );
+      }
+    });
+
     testWidgets('收起侧栏有宽度动画，且收起后只留图标', (tester) async {
       await state.refresh();
       await pumpWide(tester);
