@@ -91,6 +91,9 @@ class ImportService {
       }
       done++;
       final name = p.basename(file.path);
+      // 这篇已经写进库的笔记 id。建行之后任何环节失败，都要整篇回滚 ——
+      // 用户看到的应该要么是一篇完整的笔记，要么是"这篇没导进来"。
+      int? createdNoteId;
       try {
         onProgress?.call(ImportStage.reading, done, files.length, name);
         final bytes = await file.readAsBytes();
@@ -109,9 +112,6 @@ class ImportService {
         );
 
         onProgress?.call(ImportStage.saving, done, files.length, name);
-
-        // 表格整块跳过，但要把数量记下来，最后告诉用户
-        summary.tables += parsed.tableCount;
 
         // 1) 先确保文集存在。去重判断也要用到它，所以必须先做。
         //
@@ -185,6 +185,7 @@ class ImportService {
           createdAt: fileCreated ?? parsed.publishedAt,
           updatedAt: fileModified ?? fileCreated ?? parsed.publishedAt,
         );
+        createdNoteId = noteId;
 
         // 3) 图片落盘：images/<noteId>/<序号>.<ext>
         final relDir = '$noteId';
@@ -199,7 +200,6 @@ class ImportService {
           final fileName = '$idx.${_ext(img.placeholder)}';
           final target = File(p.join(dir.path, fileName));
           await target.writeAsBytes(img.bytes, flush: false);
-          summary.images++;
           cover ??= '$relDir/$fileName';
 
           // 把占位 images/N.ext 换成真实相对路径
@@ -220,7 +220,6 @@ class ImportService {
           final fileName = '$idx.$ext';
           final target = File(p.join(dir.path, fileName));
           await target.writeAsBytes(ref.bytes, flush: false);
-          summary.images++;
           cover ??= '$relDir/$fileName';
           content = content.replaceAll(ref.reference, '$relDir/$fileName');
         }
@@ -242,9 +241,24 @@ class ImportService {
           [idx, noteId],
         );
 
+        // 全部成功，才计入汇总：中途失败时不能让"图片 N 张"/"表格 N 个"
+        // 虚高 —— 那篇根本没导进来。
+        summary.images += idx;
+        summary.tables += parsed.tableCount;
         summary.imported++;
         summary.chars += chars;
+        createdNoteId = null;
       } catch (e) {
+        // 回滚：删掉这篇已经落库的行、images/<id>/ 目录和历史草稿。
+        // 不回滚文集 —— 它可能是用户本来就有的，而且同名文集
+        // 下一篇还要接着用。
+        if (createdNoteId != null) {
+          try {
+            repo.purgeNotes(<int>[createdNoteId]);
+          } catch (_) {
+            // 回滚本身失败也不能吞掉原始错误，继续往下报告
+          }
+        }
         summary.failed++;
         summary.errors.add('$name: $e');
       }

@@ -563,6 +563,10 @@ class _ImportPageState extends State<ImportPage> {
   }
 
   Widget _buildSummary(AppColors c, ImportSummary s) {
+    // 一篇都没进来时不能还挂个绿勾写着"导入完成" ——
+    // 用户会以为只是没东西可导，而不是"这次全失败了"。
+    final anySuccess = s.imported > 0 || s.moved > 0 || s.skipped > 0;
+    final allFailed = !anySuccess && s.failed > 0;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -575,9 +579,16 @@ class _ImportPageState extends State<ImportPage> {
         children: [
           Row(
             children: [
-              Icon(Icons.check_circle_rounded, size: 18, color: c.palette[1]),
+              Icon(
+                allFailed ? Icons.error_outline_rounded : Icons.check_circle_rounded,
+                size: 18,
+                color: allFailed ? c.destructive : c.palette[1],
+              ),
               const SizedBox(width: 8),
-              Text('导入完成', style: AppText.headline.copyWith(color: c.label)),
+              Text(
+                allFailed ? '导入失败' : '导入完成',
+                style: AppText.headline.copyWith(color: c.label),
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -592,6 +603,12 @@ class _ImportPageState extends State<ImportPage> {
           if (s.errors.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text('失败详情', style: AppText.footnote.copyWith(color: c.destructive)),
+            const SizedBox(height: 4),
+            // 说清"没有半成品"，用户才不会去列表里找那篇残缺的笔记。
+            Text(
+              '这些文件整篇没有导入，已经回滚，不会留下残缺笔记或图片',
+              style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+            ),
             const SizedBox(height: 6),
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 140),
