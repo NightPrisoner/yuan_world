@@ -720,6 +720,11 @@ class SettingsPage extends StatelessWidget {
                 const _InfoRow(label: '本地数据库', value: 'SQLite · FTS5'),
                 _RowDivider(),
                 const _InfoRow(label: '界面框架', value: 'Flutter 3.47'),
+                _RowDivider(),
+                const _InfoRow(
+                  label: '制作',
+                  value: 'deepseek-v4.1-flash&梦之夜囚',
+                ),
               ],
             ),
             const SizedBox(height: 24),
@@ -925,8 +930,17 @@ class _InfoRow extends StatelessWidget {
       child: Row(
         children: [
           Text(label, style: AppText.body.copyWith(color: c.label)),
-          const Spacer(),
-          Text(value, style: AppText.body.copyWith(color: c.secondaryLabel)),
+          const SizedBox(width: 16),
+          // 值一律贴右。用 Expanded 而不是 Spacer + Flexible：
+          // Spacer 和 Flexible 都是 flex 1，会平分剩余空间，
+          // 值就被推到中间去了（上一版就是这么错的）。
+          Expanded(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: AppText.body.copyWith(color: c.secondaryLabel),
+            ),
+          ),
         ],
       ),
     );
