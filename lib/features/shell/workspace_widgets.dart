@@ -470,151 +470,6 @@ class _NavGroupLabel extends StatelessWidget {
 
 // ── 文件夹树的一条一行 ────────────────────────────────────────────────────
 
-/// 交错出现的节奏：每一行比上一行晚 [_treeRevealStagger]，
-/// 最多错开 [_treeRevealMaxStagger] 行 —— 再深的子树就一起出来，
-/// 免得最底下那行要等半秒才现身。
-const Duration _treeRevealDuration = Duration(milliseconds: 200);
-const Duration _treeRevealStagger = Duration(milliseconds: 28);
-const int _treeRevealMaxStagger = 8;
-
-/// 文件夹树里"一个一个冒出来 / 一个一个缩回去"的包装。
-///
-/// 展开时：从左边一点点滑出来 + 淡入，越深的子项出场越晚；
-/// 收起时反过来（最深的那条先走）。这样一眼就能看出
-/// "这些是刚才那个文件夹底下的"，而不是整片内容在同一帧里闪一下。
-///
-/// [order] 是本批次里的出场序号（0 起）；`null` 表示不动画（首屏、
-/// 直接切文件夹等）—— 那种情况下直接是最终的可见状态。
-class _TreeReveal extends StatefulWidget {
-  const _TreeReveal({
-    super.key,
-    required this.child,
-    this.order,
-    this.exiting = false,
-  });
-
-  final Widget child;
-  final int? order;
-
-  /// 所属的父文件夹正在收起：该轮到这一行滑出去了。
-  final bool exiting;
-
-  @override
-  State<_TreeReveal> createState() => _TreeRevealState();
-}
-
-class _TreeRevealState extends State<_TreeReveal>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: _treeRevealDuration,
-    // 不需要动画的（首屏就有的行）直接停在"已出现"
-    value: widget.order == null ? 1 : 0,
-  );
-
-  /// 本行的延迟：等前面几行先出来。
-  Timer? _delay;
-
-  /// 前面还有几行（更深的子树一起出来，所以封顶）
-  int get _rank => math.min(widget.order ?? 0, _treeRevealMaxStagger);
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.order != null) {
-      _delay = Timer(_treeRevealStagger * _rank, () {
-        if (mounted) _c.forward();
-      });
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _TreeReveal oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // 只在"开始收起"那一刻排一次反向动画，之后 rebuild 不再重复排队
-    if (widget.exiting && !oldWidget.exiting) {
-      _delay?.cancel();
-      _delay = Timer(_treeRevealStagger * _rank, () {
-        if (mounted) _c.reverse();
-      });
-      return;
-    }
-    // 收起被取消（又展开回来、或者这一行换了归属）：回到可见。
-    // 有出场序号的从当前位置接着往前播（连续），没序号（常驻行）
-    // 的必须立刻回到 1 —— 否则这一行就"消失"了。
-    if (!widget.exiting && oldWidget.exiting) {
-      _delay?.cancel();
-      if (widget.order != null) {
-        _delay = Timer(_treeRevealStagger * _rank, () {
-          if (mounted) _c.forward();
-        });
-      } else {
-        _c.value = 1;
-      }
-      return;
-    }
-    // 新一批展开：从头播一遍
-    if (oldWidget.order == null && widget.order != null) {
-      _delay?.cancel();
-      _c.value = 0;
-      _delay = Timer(_treeRevealStagger * _rank, () {
-        if (mounted) _c.forward();
-      });
-      return;
-    }
-    // 兜底：本该常驻可见的行（order == null 且不在退出中）绝不停在
-    // 半透明/位移状态 —— 列表在动画期间增删行时 element 会被复用，
-    // 复用到的状态可能是别人播到 0 的那个。
-    if (widget.order == null && !widget.exiting && _c.value < 1) {
-      _delay?.cancel();
-      _c.value = 1;
-    }
-  }
-
-  @override
-  void dispose() {
-    _delay?.cancel();
-    _c.dispose();
-    super.dispose();
-  }
-
-  /// 这一行的动画停在 0，但它**不该**是看不见的。
-  ///
-  /// 判据：不在离场中、动画已停（dismissed）、也没有"等着出场"的定时器。
-  /// 出现这种情况只有两种可能：状态被 element 顺位复用（列表在动画期间增删行），
-  /// 或者收起被打断而 `didUpdateWidget` 的通知晚了一拍。宁可当成"可见"，
-  /// 也绝不留下一个"文件夹莫名其妙不见了、但位置还占着"的行。
-  bool get _stranded =>
-      !widget.exiting &&
-      _c.value < 1 &&
-      _c.status == AnimationStatus.dismissed &&
-      !(_delay?.isActive ?? false);
-
-  @override
-  Widget build(BuildContext context) {
-    if (AppMotion.reduceMotion(context)) return widget.child;
-    return AnimatedBuilder(
-      animation: _c,
-      builder: (context, child) {
-        // **收起就是展开的倒放**：同一个曲线、同一个位移。
-        // 控制器回放时值是 1→0，用同一条 enter 曲线取变换，得到的正是
-        // 展开过程的时间反演（展开第 τ 帧的样子 = 收起第 D-τ 帧的样子）。
-        // 以前收起用 exit 曲线、而且不平移，看着就和展开不是一回事。
-        final t = _stranded ? 1.0 : AppMotion.enter.transform(_c.value);
-        return Opacity(
-          opacity: t.clamp(0.0, 1.0),
-          child: Transform.translate(
-            // 出场从左边一点点滑进来，收起就原路滑回去
-            offset: Offset(-10 * (1 - t), 0),
-            child: child,
-          ),
-        );
-      },
-      child: widget.child,
-    );
-  }
-}
-
 /// 文件夹前面的收起/展开小三角。
 ///
 /// 命中区域给到 15px 见方，比图标本身大 —— 这个小东西点起来本来就费劲，
@@ -669,6 +524,9 @@ class _NavRow extends StatefulWidget {
     this.collapsed = false,
     this.onToggleCollapse,
     this.onMenu,
+    this.compact = false,
+    this.iconTurns,
+    this.hoverFeedback = true,
   });
 
   final IconData icon;
@@ -697,6 +555,9 @@ class _NavRow extends StatefulWidget {
 
   /// 传了就在悬停时露出 ⋯ 按钮（目前只有文件夹用）。
   final void Function(AppMenuAnchor anchor)? onMenu;
+  final bool compact;
+  final Animation<double>? iconTurns;
+  final bool hoverFeedback;
 
   @override
   State<_NavRow> createState() => _NavRowState();
@@ -733,7 +594,9 @@ class _NavRowState extends State<_NavRow> {
           decoration: BoxDecoration(
             color: widget.selected
                 ? accent.withValues(alpha: c.isDark ? 0.22 : 0.13)
-                : (_hover ? c.fill : Colors.transparent),
+                : (_hover && widget.hoverFeedback
+                      ? c.fill
+                      : Colors.transparent),
             borderRadius: BorderRadius.circular(8),
           ),
           // 内容层：图标与文字的颜色**插值**过渡，而不是"啪"地换色。
@@ -761,26 +624,38 @@ class _NavRowState extends State<_NavRow> {
                   scale: widget.selected ? 1 : 0.9,
                   duration: AppMotion.fast,
                   curve: AppMotion.pop,
-                  child: Icon(
-                    widget.icon,
-                    size: 17,
-                    color: Color.lerp(c.secondaryLabel, accent, t)!,
-                  ),
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: Text(
-                    widget.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppText.footnote.copyWith(
-                      color: Color.lerp(c.label, accent, t)!,
-                      fontWeight: widget.selected
-                          ? FontWeight.w600
-                          : FontWeight.w400,
+                  child: RotationTransition(
+                    turns: widget.iconTurns ?? const AlwaysStoppedAnimation(0),
+                    child: Icon(
+                      widget.icon,
+                      size: 17,
+                      color: Color.lerp(c.secondaryLabel, accent, t)!,
                     ),
                   ),
                 ),
+                if (!widget.compact) ...[
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      widget.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppText.footnote.copyWith(
+                        color: Color.lerp(c.label, accent, t)!,
+                        fontWeight: widget.selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+                ] else ...[
+                  // Keep the exact text line height (including system text
+                  // scaling) so compact icons don't shift vertically.
+                  const SizedBox(
+                    width: 0,
+                    child: Text(' ', maxLines: 1, style: AppText.footnote),
+                  ),
+                ],
                 if (widget.pinned)
                   Padding(
                     padding: const EdgeInsets.only(left: 5),
@@ -1149,11 +1024,7 @@ class _FadePopInState extends State<_FadePopIn>
   @override
   Widget build(BuildContext context) {
     if (AppMotion.reduceMotion(context)) return widget.child;
-    final curved = CurvedAnimation(
-      parent: _c,
-      curve: AppMotion.pop,
-      reverseCurve: AppMotion.exit,
-    );
+    final curved = _c.drive(CurveTween(curve: AppMotion.pop));
     return FadeTransition(
       opacity: _c,
       child: ScaleTransition(

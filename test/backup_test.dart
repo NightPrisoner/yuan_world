@@ -131,6 +131,25 @@ void main() {
   });
 
   group('恢复', () {
+    test('拒绝写出临时目录的 ZIP 条目', () {
+      final escaped = File(
+        p.join(
+          Directory.systemTemp.path,
+          'yw_zip_slip_${DateTime.now().microsecondsSinceEpoch}.txt',
+        ),
+      );
+      addTearDown(() {
+        if (escaped.existsSync()) escaped.deleteSync();
+      });
+      final archive = Archive()
+        ..addFile(ArchiveFile('../${p.basename(escaped.path)}', 1, <int>[1]));
+      final zip = File(p.join(root.path, 'malicious.zip'))
+        ..writeAsBytesSync(ZipEncoder().encodeBytes(archive));
+
+      expect(() => backup.restore(zip), throwsA(isA<StateError>()));
+      expect(escaped.existsSync(), isFalse);
+    });
+
     test('从全量 zip 恢复到备份时的状态', () {
       addNote('旧笔记一');
       addNote('旧笔记二');

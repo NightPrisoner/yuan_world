@@ -119,9 +119,7 @@ class _TodosPageState extends State<TodosPage> {
             else
               SliverToBoxAdapter(child: _allDoneHint(c)),
             if (done.isNotEmpty) ...[
-              SliverToBoxAdapter(
-                child: _doneHeader(c, state, done.length),
-              ),
+              SliverToBoxAdapter(child: _doneHeader(c, state, done.length)),
               if (_showDone) _doneList(state, done),
             ],
           ],
@@ -189,7 +187,10 @@ class _TodosPageState extends State<TodosPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('待办', style: AppText.largeTitle.copyWith(color: c.label)),
+                  Text(
+                    '待办',
+                    style: AppText.largeTitle.copyWith(color: c.label),
+                  ),
                   Text(
                     subtitle,
                     style: AppText.footnote.copyWith(color: c.tertiaryLabel),
@@ -213,7 +214,9 @@ class _TodosPageState extends State<TodosPage> {
           color: c.secondaryBackground,
           borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
           border: Border.all(
-            color: c.isDark ? c.separator.withValues(alpha: 0.5) : const Color(0x14000000),
+            color: c.isDark
+                ? c.separator.withValues(alpha: 0.5)
+                : const Color(0x14000000),
             width: 0.5,
           ),
         ),
@@ -265,7 +268,11 @@ class _TodosPageState extends State<TodosPage> {
 
   // ── 未完成（可拖拽排序） ────────────────────────────────────────────────
 
-  Widget _reorderableOpen(BuildContext context, AppState state, List<Todo> open) {
+  Widget _reorderableOpen(
+    BuildContext context,
+    AppState state,
+    List<Todo> open,
+  ) {
     final c = context.colors;
     return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -292,8 +299,11 @@ class _TodosPageState extends State<TodosPage> {
                 color: c.destructive,
                 borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
               ),
-              child: const Icon(Icons.delete_outline_rounded,
-                  color: Colors.white, size: 20),
+              child: const Icon(
+                Icons.delete_outline_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
             ),
             onDismissed: (_) => state.deleteTodo(t.id),
             child: ReorderableDelayedDragStartListener(
@@ -348,7 +358,7 @@ class _TodosPageState extends State<TodosPage> {
               children: [
                 AnimatedRotation(
                   turns: _showDone ? 0.25 : 0,
-                  duration: AppMotion.fast,
+                  duration: AppMotion.respecting(context, AppMotion.fast),
                   curve: AppMotion.enter,
                   child: Icon(
                     Icons.chevron_right_rounded,
@@ -422,7 +432,10 @@ class _TodosPageState extends State<TodosPage> {
           onSubmitted: (v) => Navigator.pop(ctx, v),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
             child: const Text('保存'),
@@ -463,8 +476,8 @@ class _TodosPageState extends State<TodosPage> {
             icon: options[i].$2 == null
                 ? Icons.event_busy_rounded
                 : (t.dueAt != null && _sameDay(t.dueAt!, options[i].$2!)
-                    ? Icons.check_circle_rounded
-                    : Icons.event_rounded),
+                      ? Icons.check_circle_rounded
+                      : Icons.event_rounded),
             color: options[i].$2 == null ? context.colors.destructive : null,
           ),
       ],
@@ -485,7 +498,10 @@ class _TodosPageState extends State<TodosPage> {
           style: AppText.callout.copyWith(color: c.secondaryLabel),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: c.destructive),
@@ -522,13 +538,15 @@ class _TodoTile extends StatelessWidget {
     final done = todo.isDone;
 
     return AnimatedContainer(
-      duration: AppMotion.fast,
+      duration: AppMotion.respecting(context, AppMotion.fast),
       curve: AppMotion.enter,
       decoration: BoxDecoration(
         color: c.secondaryBackground,
         borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
         border: Border.all(
-          color: c.isDark ? c.separator.withValues(alpha: 0.4) : const Color(0x0F000000),
+          color: c.isDark
+              ? c.separator.withValues(alpha: 0.4)
+              : const Color(0x0F000000),
           width: 0.5,
         ),
       ),
@@ -550,7 +568,7 @@ class _TodoTile extends StatelessWidget {
                     AnimatedStrikethrough(
                       done: done,
                       child: AnimatedDefaultTextStyle(
-                        duration: AppMotion.fast,
+                        duration: AppMotion.respecting(context, AppMotion.fast),
                         curve: AppMotion.enter,
                         style: AppText.callout.copyWith(
                           color: done ? c.tertiaryLabel : c.label,
@@ -612,7 +630,10 @@ class _TodoTile extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: AppText.caption2.copyWith(color: color, fontWeight: FontWeight.w600),
+        style: AppText.caption2.copyWith(
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

@@ -89,12 +89,18 @@ class _SearchPageState extends State<SearchPage> {
                       height: 38,
                       decoration: BoxDecoration(
                         color: c.fill,
-                        borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+                        borderRadius: BorderRadius.circular(
+                          AppMetrics.radiusMd,
+                        ),
                       ),
                       child: Row(
                         children: [
                           const SizedBox(width: 10),
-                          Icon(Icons.search_rounded, size: 17, color: c.tertiaryLabel),
+                          Icon(
+                            Icons.search_rounded,
+                            size: 17,
+                            color: c.tertiaryLabel,
+                          ),
                           const SizedBox(width: 7),
                           Expanded(
                             child: TextField(
@@ -124,8 +130,11 @@ class _SearchPageState extends State<SearchPage> {
                                 minWidth: 30,
                                 minHeight: 30,
                               ),
-                              icon: Icon(Icons.cancel_rounded,
-                                  size: 16, color: c.tertiaryLabel),
+                              icon: Icon(
+                                Icons.cancel_rounded,
+                                size: 16,
+                                color: c.tertiaryLabel,
+                              ),
                               onPressed: () {
                                 _controller.clear();
                                 _run('');
@@ -201,10 +210,13 @@ class _SearchPageState extends State<SearchPage> {
                 transitionDuration: AppMotion.fast,
                 reverseTransitionDuration: AppMotion.fast,
                 pageBuilder: (_, _, _) => NoteDetailPage(noteId: note.id),
-                transitionsBuilder: (_, a, _, child) => FadeTransition(
-                  opacity: CurvedAnimation(parent: a, curve: AppMotion.enter),
-                  child: child,
-                ),
+                transitionsBuilder: (ctx, a, _, child) =>
+                    AppMotion.reduceMotion(ctx)
+                    ? child
+                    : FadeTransition(
+                        opacity: a.drive(CurveTween(curve: AppMotion.enter)),
+                        child: child,
+                      ),
               ),
             ),
           ),
@@ -227,7 +239,10 @@ class _SearchPageState extends State<SearchPage> {
           children: [
             Icon(icon, size: 40, color: c.quaternaryLabel),
             const SizedBox(height: 14),
-            Text(title, style: AppText.title3.copyWith(color: c.secondaryLabel)),
+            Text(
+              title,
+              style: AppText.title3.copyWith(color: c.secondaryLabel),
+            ),
             const SizedBox(height: 8),
             Text(
               subtitle,
@@ -273,7 +288,10 @@ class _SearchResultTile extends StatelessWidget {
             _highlight(
               note.title.isEmpty ? '无标题笔记' : note.title,
               query,
-              AppText.callout.copyWith(color: c.label, fontWeight: FontWeight.w600),
+              AppText.callout.copyWith(
+                color: c.label,
+                fontWeight: FontWeight.w600,
+              ),
               c,
             ),
             if (note.excerpt.isNotEmpty) ...[
@@ -310,7 +328,12 @@ class _SearchResultTile extends StatelessWidget {
     int maxLines = 1,
   }) {
     if (query.isEmpty) {
-      return Text(text, maxLines: maxLines, overflow: TextOverflow.ellipsis, style: style);
+      return Text(
+        text,
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
     }
     final lower = text.toLowerCase();
     final q = query.toLowerCase();
@@ -323,14 +346,16 @@ class _SearchResultTile extends StatelessWidget {
         break;
       }
       if (idx > start) spans.add(TextSpan(text: text.substring(start, idx)));
-      spans.add(TextSpan(
-        text: text.substring(idx, idx + q.length),
-        style: style.copyWith(
-          color: c.tint,
-          fontWeight: FontWeight.w700,
-          backgroundColor: c.tint.withValues(alpha: 0.12),
+      spans.add(
+        TextSpan(
+          text: text.substring(idx, idx + q.length),
+          style: style.copyWith(
+            color: c.tint,
+            fontWeight: FontWeight.w700,
+            backgroundColor: c.tint.withValues(alpha: 0.12),
+          ),
         ),
-      ));
+      );
       start = idx + q.length;
     }
     return Text.rich(

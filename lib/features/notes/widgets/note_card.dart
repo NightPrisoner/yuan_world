@@ -85,28 +85,30 @@ class _NoteCardState extends State<NoteCard> {
         child: Stack(
           children: [
             Container(
-        decoration: BoxDecoration(
-          color: c.secondaryBackground,
-          borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
-          border: Border.all(
-            color: c.isDark ? c.separator.withValues(alpha: 0.5) : const Color(0x14000000),
-            width: 0.5,
-          ),
-          boxShadow: c.isDark
-              ? null
-              : const <BoxShadow>[
-                  BoxShadow(
-                    color: Color(0x0A000000),
-                    blurRadius: 12,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-        ),
-            clipBehavior: Clip.antiAlias,
-            child: widget.compact
-                ? _buildGrid(context, hasCover, c)
-                : _buildRow(context, hasCover, c),
-          ),
+              decoration: BoxDecoration(
+                color: c.secondaryBackground,
+                borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
+                border: Border.all(
+                  color: c.isDark
+                      ? c.separator.withValues(alpha: 0.5)
+                      : const Color(0x14000000),
+                  width: 0.5,
+                ),
+                boxShadow: c.isDark
+                    ? null
+                    : const <BoxShadow>[
+                        BoxShadow(
+                          color: Color(0x0A000000),
+                          blurRadius: 12,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: widget.compact
+                  ? _buildGrid(context, hasCover, c)
+                  : _buildRow(context, hasCover, c),
+            ),
             // 悬停时右上角浮出 ⋯ 按钮：
             // 长按/右键都有"要猜"的成本，这个按钮是唯一一眼能看到的入口。
             if (widget.onMore != null && _hover)
@@ -161,6 +163,7 @@ class _NoteCardState extends State<NoteCard> {
               _Thumb(
                 path: p.join(imageRoot, effectiveCover(note.coverImage)!),
                 size: 66,
+                fadeIn: !widget.enableHero,
               ),
             ),
           ],
@@ -181,6 +184,7 @@ class _NoteCardState extends State<NoteCard> {
             _Cover(
               path: p.join(imageRoot, effectiveCover(note.coverImage)!),
               color: c.fill,
+              fadeIn: !widget.enableHero,
             ),
           ),
         Padding(
@@ -320,7 +324,11 @@ class _MoreButton extends StatelessWidget {
             width: 0.5,
           ),
         ),
-        child: Icon(Icons.more_horiz_rounded, size: 16, color: c.secondaryLabel),
+        child: Icon(
+          Icons.more_horiz_rounded,
+          size: 16,
+          color: c.secondaryLabel,
+        ),
       ),
     );
   }
@@ -328,9 +336,10 @@ class _MoreButton extends StatelessWidget {
 
 /// 圆角缩略图，带从模糊到清晰的渐显。
 class _Thumb extends StatelessWidget {
-  const _Thumb({required this.path, required this.size});
+  const _Thumb({required this.path, required this.size, this.fadeIn = true});
   final String path;
   final double size;
+  final bool fadeIn;
 
   @override
   Widget build(BuildContext context) {
@@ -340,7 +349,7 @@ class _Thumb extends StatelessWidget {
       child: SizedBox(
         width: size,
         height: size,
-        child: _LocalImage(path: path, color: c.fill),
+        child: _LocalImage(path: path, color: c.fill, fadeIn: fadeIn),
       ),
     );
   }
@@ -348,15 +357,16 @@ class _Thumb extends StatelessWidget {
 
 /// 卡片顶部封面图。
 class _Cover extends StatelessWidget {
-  const _Cover({required this.path, required this.color});
+  const _Cover({required this.path, required this.color, this.fadeIn = true});
   final String path;
   final Color color;
+  final bool fadeIn;
 
   @override
   Widget build(BuildContext context) {
     return AspectRatio(
       aspectRatio: 16 / 10,
-      child: _LocalImage(path: path, color: color),
+      child: _LocalImage(path: path, color: color, fadeIn: fadeIn),
     );
   }
 }
@@ -367,9 +377,14 @@ class _Cover extends StatelessWidget {
 /// 缩略图、在卡片里当 300px 的封面，解码尺寸得跟着显示尺寸走 ——
 /// 不然一张 9MB 的图会被整张解码进内存（见 local_image.dart 的说明）。
 class _LocalImage extends StatelessWidget {
-  const _LocalImage({required this.path, required this.color});
+  const _LocalImage({
+    required this.path,
+    required this.color,
+    this.fadeIn = true,
+  });
   final String path;
   final Color color;
+  final bool fadeIn;
 
   @override
   Widget build(BuildContext context) {
@@ -377,11 +392,10 @@ class _LocalImage extends StatelessWidget {
       path: path,
       fit: BoxFit.cover,
       fallbackColor: color,
+      fadeIn: fadeIn,
       errorBuilder: (context) => ColoredBox(
         color: color,
-        child: const Center(
-          child: Icon(Icons.broken_image_outlined, size: 18),
-        ),
+        child: const Center(child: Icon(Icons.broken_image_outlined, size: 18)),
       ),
     );
   }

@@ -238,6 +238,148 @@ void main() {
   });
 
   group('最左边那栏（导航）', () {
+    testWidgets('点击侧栏开关第一帧正文排版不跳，宽度连续且阅读状态保留', (tester) async {
+      await state.refresh();
+      await pumpWide(tester);
+      await tester.tap(find.text('笔记 0').first);
+      await tester.pumpAndSettle();
+      double layoutWidth() => tester
+          .widget<Positioned>(
+            find
+                .descendant(
+                  of: find.byKey(detailPaneKey),
+                  matching: find.byType(Positioned),
+                )
+                .first,
+          )
+          .width!;
+      final original = layoutWidth();
+      await tester.tap(find.text('收起侧栏'));
+      await tester.pump();
+      expect(
+        layoutWidth(),
+        closeTo(original, 0.001),
+        reason: '点击时不能提前跳到收起后的排版宽度',
+      );
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(layoutWidth(), greaterThan(original));
+      await tester.pumpAndSettle();
+      final collapsed = layoutWidth();
+      await tester.tap(find.byTooltip('展开侧栏'));
+      await tester.pump();
+      expect(layoutWidth(), closeTo(collapsed, 0.001));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(layoutWidth(), lessThan(collapsed));
+      await tester.pumpAndSettle();
+      expect(layoutWidth(), closeTo(original, 0.001));
+      expect(find.text('正文 0'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    });
+    testWidgets('收起与展开在相同时间点完成相同比例的位移', (tester) async {
+      await state.refresh();
+      await pumpWide(tester);
+      final nav = find.byKey(const ValueKey('nav-column'));
+      final full = tester.getSize(nav).width;
+      await tester.tap(find.text('收起侧栏'));
+      await tester.pump();
+      final closed = <double>[];
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        closed.add((full - tester.getSize(nav).width) / (full - 58));
+      }
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('展开侧栏'));
+      await tester.pump();
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        final opened = (tester.getSize(nav).width - 58) / (full - 58);
+        expect(opened, closeTo(closed[i], 0.0001));
+      }
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('收放侧栏图标对齐且始终可见，可中途反向', (tester) async {
+      await state.refresh();
+      await pumpWide(tester);
+      final nav = find.byKey(const ValueKey('nav-column'));
+      Finder icon(IconData data) =>
+          find.descendant(of: nav, matching: find.byIcon(data));
+      final arrowBefore = tester.getCenter(icon(Icons.chevron_left_rounded));
+      final allBefore = tester.getCenter(icon(Icons.article_rounded));
+      final settingsBefore = tester.getCenter(icon(Icons.tune_rounded));
+      final beforeState = tester.state(
+        find.ancestor(
+          of: find.text('收起侧栏'),
+          matching: find.byWidgetPredicate(
+            (w) => w.runtimeType.toString() == '_NavRow',
+          ),
+        ),
+      );
+      await tester.tap(find.text('收起侧栏'));
+      await tester.pump();
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 40));
+        final rail = tester
+            .widget<Opacity>(
+              find.byKey(
+                const ValueKey('nav-rail-opacity'),
+                skipOffstage: false,
+              ),
+            )
+            .opacity;
+        final pane = tester
+            .widget<Opacity>(
+              find.byKey(
+                const ValueKey('nav-pane-opacity'),
+                skipOffstage: false,
+              ),
+            )
+            .opacity;
+        expect(rail + (1 - rail) * pane, 1, reason: '上层带底色覆盖下层，图标不能在交接处闪空');
+        final allIcons = icon(Icons.article_rounded);
+        if (allIcons.evaluate().length == 2) {
+          expect(
+            tester.getCenter(allIcons.first),
+            tester.getCenter(allIcons.last),
+            reason: '叠层图标必须精确对齐，不能产生双影',
+          );
+        }
+      }
+      await tester.pumpAndSettle();
+      expect(
+        (tester.getCenter(icon(Icons.chevron_left_rounded)) - arrowBefore)
+            .distance,
+        lessThan(0.001),
+      );
+      expect(tester.getCenter(icon(Icons.article_rounded)), allBefore);
+      expect(tester.getCenter(icon(Icons.tune_rounded)), settingsBefore);
+      await tester.tap(find.byTooltip('展开侧栏'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 70));
+      final width = tester.getSize(nav).width;
+      final collapse = find.text('收起侧栏');
+      await tester.tap(collapse);
+      await tester.pump();
+      expect(tester.getSize(nav).width, closeTo(width, 0.01));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('展开侧栏'));
+      await tester.pumpAndSettle();
+      final afterState = tester.state(
+        find.ancestor(
+          of: find.text('收起侧栏'),
+          matching: find.byWidgetPredicate(
+            (w) => w.runtimeType.toString() == '_NavRow',
+          ),
+        ),
+      );
+      expect(
+        identical(beforeState, afterState),
+        isTrue,
+        reason: '导航树应保留，避免展开时重建闪动',
+      );
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('收起侧栏有宽度动画，且收起后只留图标', (tester) async {
       await state.refresh();
       await pumpWide(tester);
@@ -249,7 +391,11 @@ void main() {
       await tester.tap(find.text('收起侧栏'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 90));
-      expect(find.text('收起侧栏'), findsWidgets, reason: '动画途中面板还没消失，标签应该还在');
+      expect(
+        tester.getSize(find.byKey(const ValueKey('nav-column'))).width,
+        greaterThan(58),
+        reason: '收起宽度应连续变化',
+      );
 
       await tester.pumpAndSettle();
       expect(find.byTooltip('展开侧栏'), findsOneWidget);

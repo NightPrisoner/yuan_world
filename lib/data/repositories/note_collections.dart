@@ -19,7 +19,8 @@ extension NoteCollections on NoteRepository {
     final rows = _d.select(
       'SELECT c.*, '
       '(SELECT COUNT(*) FROM notes n WHERE n.collection_id = c.id '
-      ' AND ${liveNote("n")}) AS note_count '
+      ' AND n.is_archived = 0 AND n.is_hidden = c.is_hidden '
+      ' AND n.deleted_at IS NULL) AS note_count '
       'FROM collections c '
       'WHERE ${includeHidden ? 'c.deleted_at IS NULL' : 'c.is_hidden = 0 AND c.deleted_at IS NULL'} '
       // 置顶排在最前：置顶是一票否决，不该被任何排序规则挤下去
@@ -49,13 +50,14 @@ extension NoteCollections on NoteRepository {
       return sum;
     }
 
-    return <Collection>[
-      for (final c in list) c.withNoteCount(total(c.id)),
-    ];
+    return <Collection>[for (final c in list) c.withNoteCount(total(c.id))];
   }
 
   /// 某个文集的直接子文件夹。
-  List<Collection> childCollections(int? parentId, {bool includeHidden = false}) =>
+  List<Collection> childCollections(
+    int? parentId, {
+    bool includeHidden = false,
+  }) =>
       allCollections(includeHidden: includeHidden)
           .where((c) => c.parentId == parentId)
           .toList();
@@ -104,10 +106,10 @@ extension NoteCollections on NoteRepository {
       if (parentId == id) return false;
       if (descendantCollectionIds(id).contains(parentId)) return false;
     }
-    _d.execute(
-      'UPDATE collections SET parent_id = ? WHERE id = ?',
-      <Object?>[parentId, id],
-    );
+    _d.execute('UPDATE collections SET parent_id = ? WHERE id = ?', <Object?>[
+      parentId,
+      id,
+    ]);
     return true;
   }
 
@@ -144,12 +146,29 @@ extension NoteCollections on NoteRepository {
     );
   }
 
-  int ensureCollection(String name, {int color = 0xFF3B82F6, String icon = 'folder'}) {
-    final hit = _d.select('SELECT id FROM collections WHERE name = ?', [name]);
-    if (hit.isNotEmpty) return hit.first['id'] as int;
+  int ensureCollection(
+    String name, {
+    int color = 0xFF3B82F6,
+    String icon = 'folder',
+  }) {
+    final hit = _d.select(
+      'SELECT id, deleted_at FROM collections WHERE name = ?',
+      [name],
+    );
+    if (hit.isNotEmpty) {
+      final id = hit.first['id'] as int;
+      if (hit.first['deleted_at'] != null) _restoreCollectionChain(id);
+      return id;
+    }
     _d.execute(
       'INSERT INTO collections (name, color, icon, sort_order, created_at) VALUES (?,?,?,?,?)',
-      [name, color, icon, _topSortOrder(), DateTime.now().millisecondsSinceEpoch],
+      [
+        name,
+        color,
+        icon,
+        _topSortOrder(),
+        DateTime.now().millisecondsSinceEpoch,
+      ],
     );
     return _d.lastInsertRowId;
   }
@@ -163,9 +182,13 @@ extension NoteCollections on NoteRepository {
   /// 因为排序是 `is_pinned DESC, sort_order ASC`，
   /// 置顶的永远在前面，所以这个值只会影响非置顶之间的顺序。
   int _topSortOrder() {
-    final m = _d
-        .select('SELECT IFNULL(MIN(sort_order), 0) AS m FROM collections')
-        .first['m'] as int;
+    final m =
+        _d
+                .select(
+                  'SELECT IFNULL(MIN(sort_order), 0) AS m FROM collections',
+                )
+                .first['m']
+            as int;
     return m - 1;
   }
 
@@ -176,10 +199,7 @@ extension NoteCollections on NoteRepository {
   ///
   /// 注意 `collections.name` 有 **UNIQUE 约束**（全局唯一），所以同名一律
   /// 复用已有那条，只是把它挂到需要的父级下 —— 硬插会直接违反约束。
-  int? ensureCollectionPath(
-    List<String> names, {
-    int color = 0xFF3B82F6,
-  }) {
+  int? ensureCollectionPath(List<String> names, {int color = 0xFF3B82F6}) {
     final now = DateTime.now().millisecondsSinceEpoch;
     int? parentId;
     int? leafId;
@@ -205,7 +225,10 @@ extension NoteCollections on NoteRepository {
         leafId = hit.first['id'] as int;
         if (hit.first['deleted_at'] != null) {
           // 连同它的子孙一起还原，否则子树还是残缺的
-          final sub = <int>[leafId, ...descendantCollectionIdsIncludingTrashed(leafId)];
+          final sub = <int>[
+            leafId,
+            ...descendantCollectionIdsIncludingTrashed(leafId),
+          ];
           _d.execute(
             'UPDATE collections SET deleted_at = NULL WHERE id IN (${sub.join(',')})',
           );
@@ -310,18 +333,19 @@ extension NoteCollections on NoteRepository {
   /// 这样它必然排在所有已置顶的前面。
   void setCollectionPinned(int id, bool pinned) {
     if (!pinned) {
-      _d.execute(
-        'UPDATE collections SET is_pinned = 0 WHERE id = ?',
-        <Object?>[id],
-      );
+      _d.execute('UPDATE collections SET is_pinned = 0 WHERE id = ?', <Object?>[
+        id,
+      ]);
       return;
     }
 
-    final m = _d.select(
-      'SELECT IFNULL(MIN(sort_order), 0) AS m FROM collections '
-      'WHERE is_pinned = 1 AND id != ?',
-      <Object?>[id],
-    ).first['m'] as int;
+    final m =
+        _d.select(
+              'SELECT IFNULL(MIN(sort_order), 0) AS m FROM collections '
+              'WHERE is_pinned = 1 AND id != ?',
+              <Object?>[id],
+            ).first['m']
+            as int;
 
     _d.execute(
       'UPDATE collections SET is_pinned = 1, sort_order = ? WHERE id = ?',
@@ -334,9 +358,11 @@ extension NoteCollections on NoteRepository {
   /// 里面的笔记**不会跟着删**：外键是 ON DELETE SET NULL，
   /// 它们会变成「未分类」，可在那里找回。这一点在确认框里要讲清楚。
   int deleteCollection(int id) {
-    final count = _d
-        .select('SELECT COUNT(*) AS c FROM notes WHERE collection_id = ?', [id])
-        .first['c'] as int;
+    final count =
+        _d.select('SELECT COUNT(*) AS c FROM notes WHERE collection_id = ?', [
+              id,
+            ]).first['c']
+            as int;
     _d.execute('DELETE FROM collections WHERE id = ?', [id]);
     return count;
   }
@@ -387,15 +413,16 @@ extension NoteCollections on NoteRepository {
   /// 把一个文件夹直接挪到顶层末尾。
   void moveCollectionToTopLevel(int id) {
     setCollectionParent(id, null);
-    final tops = _d
-        .select(
-          'SELECT id FROM collections WHERE parent_id IS NULL AND id <> ? '
-          'ORDER BY sort_order ASC, name ASC',
-          <Object?>[id],
-        )
-        .map((r) => r['id'] as int)
-        .toList()
-      ..add(id);
+    final tops =
+        _d
+            .select(
+              'SELECT id FROM collections WHERE parent_id IS NULL AND id <> ? '
+              'ORDER BY sort_order ASC, name ASC',
+              <Object?>[id],
+            )
+            .map((r) => r['id'] as int)
+            .toList()
+          ..add(id);
     reorderCollections(tops);
   }
 
@@ -403,7 +430,9 @@ extension NoteCollections on NoteRepository {
     if (orderedIds.isEmpty) return;
     _d.execute('BEGIN');
     try {
-      final stmt = _d.prepare('UPDATE collections SET sort_order = ? WHERE id = ?');
+      final stmt = _d.prepare(
+        'UPDATE collections SET sort_order = ? WHERE id = ?',
+      );
       for (var i = 0; i < orderedIds.length; i++) {
         stmt.execute(<Object?>[i, orderedIds[i]]);
       }

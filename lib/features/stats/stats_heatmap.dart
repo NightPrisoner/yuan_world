@@ -3,6 +3,7 @@
 /// 这里是 `stats_charts.dart` 的一部分（`part of`），理由见
 /// stats_trend_chart.dart 的说明。
 part of 'stats_charts.dart';
+
 String heatDayKey(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-'
     '${d.month.toString().padLeft(2, '0')}-'
@@ -53,19 +54,23 @@ class _DensityHeatmapState extends State<DensityHeatmap> {
   /// 每一列（周）的七天。从第一个格子所在那周的周日开始，
   /// 保证每一列都是完整的一周。
   List<List<DateTime>> get _weeks {
-    var cursor = _firstDay.subtract(Duration(days: _firstDay.weekday % 7));
+    var cursor = DateTime(
+      _firstDay.year,
+      _firstDay.month,
+      _firstDay.day - _firstDay.weekday % 7,
+    );
     final out = <List<DateTime>>[];
     while (!cursor.isAfter(_lastDay)) {
       out.add(<DateTime>[
-        for (var d = 0; d < 7; d++) cursor.add(Duration(days: d)),
+        for (var d = 0; d < 7; d++)
+          DateTime(cursor.year, cursor.month, cursor.day + d),
       ]);
-      cursor = cursor.add(const Duration(days: 7));
+      cursor = DateTime(cursor.year, cursor.month, cursor.day + 7);
     }
     return out;
   }
 
-  bool _inWindow(DateTime d) =>
-      !d.isBefore(_firstDay) && !d.isAfter(_lastDay);
+  bool _inWindow(DateTime d) => !d.isBefore(_firstDay) && !d.isAfter(_lastDay);
 
   @override
   Widget build(BuildContext context) {
@@ -171,7 +176,10 @@ class _DensityHeatmapState extends State<DensityHeatmap> {
         const SizedBox(height: 8),
         Row(
           children: [
-            Text('少', style: AppText.caption2.copyWith(color: c.quaternaryLabel)),
+            Text(
+              '少',
+              style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+            ),
             const SizedBox(width: 5),
             for (var i = 0; i <= 4; i++)
               Container(
@@ -186,7 +194,10 @@ class _DensityHeatmapState extends State<DensityHeatmap> {
                 ),
               ),
             const SizedBox(width: 2),
-            Text('多', style: AppText.caption2.copyWith(color: c.quaternaryLabel)),
+            Text(
+              '多',
+              style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+            ),
             const Spacer(),
             // 指着哪一格就在这儿报出来。以前是每格一个 Tooltip，
             // 七百多个 Tooltip 的代价比这个提示本身大得多。
@@ -323,7 +334,10 @@ class _HeatLabelPainter extends CustomPainter {
         maxLines: 1,
       )..layout();
       // 不裁剪：格子只有十几像素宽，标签本来就该溢出到右边
-      tp.paint(canvas, Offset(entry.key * pitch, (size.height - tp.height) / 2));
+      tp.paint(
+        canvas,
+        Offset(entry.key * pitch, (size.height - tp.height) / 2),
+      );
     }
   }
 
@@ -335,6 +349,5 @@ class _HeatLabelPainter extends CustomPainter {
       // 标签内容变了、长度没变，只比长度就会一直画着旧的「2024年」。
       !mapEquals(old.labels, labels);
 }
-
 
 // ── 一天 24 小时的分布 ────────────────────────────────────────────────────

@@ -74,8 +74,10 @@ extension _StatsCards on _StatsPageState {
       var total = 0;
       // WAL 模式的库有三个文件：.db / -wal / -shm，加起来才是真实占用
       for (final suffix in <String>['', '-wal', '-shm']) {
-        final f = File('${db.rootDir.path}${Platform.pathSeparator}'
-            'yuanworld.db$suffix');
+        final f = File(
+          '${db.rootDir.path}${Platform.pathSeparator}'
+          'yuanworld.db$suffix',
+        );
         if (f.existsSync()) total += f.lengthSync().round();
       }
       return total;
@@ -110,9 +112,7 @@ extension _StatsCards on _StatsPageState {
     if (_comparisons.length < 2) {
       // 只勾了一个文件夹时，问题不是"库里没有两个文件夹"，
       // 而是"你还差一个没勾" —— 同一句话会把人指错方向
-      final msg = _collectionIds.length == 1
-          ? '再选一个文件夹就能对比'
-          : '至少要有两个文件夹才能对比';
+      final msg = _collectionIds.length == 1 ? '再选一个文件夹就能对比' : '至少要有两个文件夹才能对比';
       return _Card(title: '文件夹对比', child: _empty(c, msg));
     }
 
@@ -134,26 +134,34 @@ extension _StatsCards on _StatsPageState {
               children: [
                 const SizedBox(width: 104),
                 Expanded(
-                  child: Text('篇数',
-                      style: AppText.caption2.copyWith(color: c.quaternaryLabel)),
+                  child: Text(
+                    '篇数',
+                    style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+                  ),
                 ),
                 SizedBox(
                   width: 58,
-                  child: Text('总字数',
-                      textAlign: TextAlign.right,
-                      style: AppText.caption2.copyWith(color: c.quaternaryLabel)),
+                  child: Text(
+                    '总字数',
+                    textAlign: TextAlign.right,
+                    style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+                  ),
                 ),
                 SizedBox(
                   width: 62,
-                  child: Text('篇均',
-                      textAlign: TextAlign.right,
-                      style: AppText.caption2.copyWith(color: c.quaternaryLabel)),
+                  child: Text(
+                    '篇均',
+                    textAlign: TextAlign.right,
+                    style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+                  ),
                 ),
                 SizedBox(
                   width: 52,
-                  child: Text('最近',
-                      textAlign: TextAlign.right,
-                      style: AppText.caption2.copyWith(color: c.quaternaryLabel)),
+                  child: Text(
+                    '最近',
+                    textAlign: TextAlign.right,
+                    style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+                  ),
                 ),
               ],
             ),
@@ -188,7 +196,9 @@ extension _StatsCards on _StatsPageState {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: AppText.footnote.copyWith(
-                                color: _collectionId == it.id ? c.tint : c.label,
+                                color: _collectionId == it.id
+                                    ? c.tint
+                                    : c.label,
                                 fontWeight: _collectionId == it.id
                                     ? FontWeight.w600
                                     : FontWeight.w400,
@@ -212,8 +222,9 @@ extension _StatsCards on _StatsPageState {
                             value: v,
                             minHeight: 7,
                             backgroundColor: c.fill,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Color(it.color)),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Color(it.color),
+                            ),
                           ),
                         ),
                       ),
@@ -234,7 +245,9 @@ extension _StatsCards on _StatsPageState {
                       child: Text(
                         fmtNum(it.chars),
                         textAlign: TextAlign.right,
-                        style: AppText.caption1.copyWith(color: c.secondaryLabel),
+                        style: AppText.caption1.copyWith(
+                          color: c.secondaryLabel,
+                        ),
                       ),
                     ),
                     SizedBox(
@@ -242,7 +255,9 @@ extension _StatsCards on _StatsPageState {
                       child: Text(
                         fmtNum(it.avgChars),
                         textAlign: TextAlign.right,
-                        style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                        style: AppText.caption1.copyWith(
+                          color: c.tertiaryLabel,
+                        ),
                       ),
                     ),
                     SizedBox(
@@ -250,7 +265,9 @@ extension _StatsCards on _StatsPageState {
                       child: Text(
                         it.lastAt == null ? '—' : _fmtDay(it.lastAt),
                         textAlign: TextAlign.right,
-                        style: AppText.caption1.copyWith(color: c.quaternaryLabel),
+                        style: AppText.caption1.copyWith(
+                          color: c.quaternaryLabel,
+                        ),
                       ),
                     ),
                   ],
@@ -342,6 +359,17 @@ extension _StatsCards on _StatsPageState {
           Row(
             children: [
               _Stat(
+                label: '视频',
+                value: fmtNum(o.videoCount),
+                color: c.palette[5],
+                icon: Icons.videocam_rounded,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _Stat(
                 label: '收藏',
                 value: '${o.favoriteCount}',
                 unit: '篇',
@@ -369,7 +397,7 @@ extension _StatsCards on _StatsPageState {
         ? (axis: _trend, series: const <TrendSeries>[])
         : _windowTrend(_trend, _trendSeries);
     return _Card(
-      title: '写作趋势',
+      title: '发布趋势',
       controls: <Widget>[
         _MiniSelect<StatsGranularity>(
           value: _granularity,
@@ -407,6 +435,16 @@ extension _StatsCards on _StatsPageState {
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  '按发布时间统计，未设置时使用创建时间；字数取笔记当前内容。',
+                  style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                ),
+                if (_collectionIds.length > 1)
+                  Text(
+                    '各系列含子文件夹，父子同时选择时范围可能重叠；合计按笔记去重。',
+                    style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                  ),
+                const SizedBox(height: 10),
                 _Summary(
                   items: <(String, String)>[
                     ('合计', fmtNum(_trend.fold<int>(0, (s, p) => s + p.notes))),
@@ -446,10 +484,7 @@ extension _StatsCards on _StatsPageState {
 
   Widget _cumulativeCard(AppColors c) {
     if (_cumulative.length < 2) {
-      return _Card(
-        title: '累计增长',
-        child: _empty(c, '数据太少，画不出增长曲线'),
-      );
+      return _Card(title: '累计增长', child: _empty(c, '数据太少，画不出增长曲线'));
     }
     final last = _cumulative.last;
     // 累计是单调递增的，放大看某一段同样有意义（看那段时间涨了多少）
@@ -460,14 +495,13 @@ extension _StatsCards on _StatsPageState {
           label: p.label,
           notes: p.notes,
           chars: p.chars,
-          words: 0,
-          images: 0,
+          words: p.words,
+          images: p.images,
+          videos: p.videos,
         ),
     ];
-    final ({List<TrendPoint> axis, List<TrendSeries> series}) win = _windowTrend(
-      cumPoints,
-      _cumulativeSeries,
-    );
+    final ({List<TrendPoint> axis, List<TrendSeries> series}) win =
+        _windowTrend(cumPoints, _cumulativeSeries, cumulative: true);
     return _Card(
       title: '累计增长',
       controls: <Widget>[
@@ -486,6 +520,7 @@ extension _StatsCards on _StatsPageState {
             TrendMetric.notes,
             TrendMetric.words,
             TrendMetric.images,
+            TrendMetric.videos,
           ],
           labelOf: (v) => v.label,
           onChanged: (v) {
@@ -508,7 +543,7 @@ extension _StatsCards on _StatsPageState {
         _displayOptions(c),
       ],
       trailing: Text(
-        '截至 ${last.label}',
+        '区间内累计 · 截至 ${last.label}',
         style: AppText.caption1.copyWith(color: c.tertiaryLabel),
       ),
       child: Column(
@@ -587,7 +622,7 @@ extension _StatsCards on _StatsPageState {
   Widget _hourlyCard(AppColors c) {
     final peak = _peakHour();
     return _Card(
-      title: '写作时段',
+      title: '发布时段',
       trailing: Text(
         peak < 0 ? '' : '最常在 $peak 点',
         style: AppText.caption1.copyWith(color: c.tertiaryLabel),
@@ -671,7 +706,7 @@ extension _StatsCards on _StatsPageState {
     final s = _streak;
     if (s == null) return const SizedBox.shrink();
     return _Card(
-      title: '连续写作',
+      title: '连续发布',
       child: Column(
         children: [
           Row(
@@ -826,14 +861,11 @@ extension _StatsCards on _StatsPageState {
       '数值型可求和求均值',
       style: AppText.caption1.copyWith(color: c.tertiaryLabel),
     ),
-    child: const FieldStatsCard(),
+    child: FieldStatsCard(query: _query, revision: _lastRevision),
   );
 
   Widget _empty(AppColors c, String text) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 18),
-    child: Text(
-      text,
-      style: AppText.footnote.copyWith(color: c.tertiaryLabel),
-    ),
+    child: Text(text, style: AppText.footnote.copyWith(color: c.tertiaryLabel)),
   );
 }

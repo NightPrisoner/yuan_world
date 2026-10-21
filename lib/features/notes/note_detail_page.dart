@@ -40,6 +40,7 @@ class NoteDetailPage extends StatefulWidget {
     this.onToggleFullscreen,
     this.windowFullscreen = false,
     this.onToggleWindowFullscreen,
+    this.coverKey,
   });
 
   final int noteId;
@@ -66,6 +67,7 @@ class NoteDetailPage extends StatefulWidget {
 
   /// 切换窗口全屏（⛶）。和 [onToggleFullscreen] 是两件独立的事。
   final VoidCallback? onToggleWindowFullscreen;
+  final GlobalKey? coverKey;
 
   @override
   State<NoteDetailPage> createState() => _NoteDetailPageState();
@@ -211,14 +213,14 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
       external();
       return;
     }
-    await Navigator.of(context).push(
-      ApplePageRoute<void>(
-        pageBuilder: (_) => NoteEditorPage(noteId: widget.noteId),
-        // 编辑是「下钻」而不是「模态」，所以从右侧推入，
-        // 与详情页的转场保持一致；桌面端从底部升起会很怪。
-        fullscreenDialog: false,
-      ),
-    );
+    final route = MediaQuery.sizeOf(context).width < 1000
+        ? EditorPageRoute<void>(
+            pageBuilder: (_) => NoteEditorPage(noteId: widget.noteId),
+          )
+        : ApplePageRoute<void>(
+            pageBuilder: (_) => NoteEditorPage(noteId: widget.noteId),
+          );
+    await Navigator.of(context).push(route);
     // 编辑器里会自动保存，回来后重新读一遍
     if (mounted) setState(_load);
   }
@@ -273,21 +275,24 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           parent: AlwaysScrollableScrollPhysics(),
         ),
         slivers: <Widget>[
-        SliverAppBar(
-          pinned: true,
-          expandedHeight: _expanded,
-          backgroundColor: c.background.withValues(alpha: 0.92),
-          surfaceTintColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          // 嵌进三栏布局时不显示返回按钮（面板里没有"返回"的概念）
-          leading: widget.embedded
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19),
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
+          SliverAppBar(
+            pinned: true,
+            expandedHeight: _expanded,
+            backgroundColor: c.background.withValues(alpha: 0.92),
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            automaticallyImplyLeading: false,
+            // 嵌进三栏布局时不显示返回按钮（面板里没有"返回"的概念）
+            leading: widget.embedded
+                ? null
+                : IconButton(
+                    icon: const Icon(
+                      Icons.arrow_back_ios_new_rounded,
+                      size: 19,
+                    ),
+                    onPressed: () => Navigator.of(context).maybePop(),
+                  ),
             title: ValueListenableBuilder<double>(
               valueListenable: _collapse,
               builder: (context, t, _) => Opacity(
@@ -304,9 +309,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               // 标签：以前界面上完全没有入口，标签功能等于不存在
               GlassIconButton(
                 icon: Icons.label_outline_rounded,
-                tooltip: note.tags.isEmpty
-                    ? '标签'
-                    : '标签（${note.tags.length}）',
+                tooltip: note.tags.isEmpty ? '标签' : '标签（${note.tags.length}）',
                 onTap: () async {
                   final changed = await showNoteTagEditor(context, note.id);
                   if (changed && mounted) setState(_load);
@@ -323,12 +326,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   await context.read<AppState>().toggleFavorite(note);
                   if (mounted) setState(_load);
                 },
-              ),
-              const SizedBox(width: 6),
-              GlassIconButton(
-                icon: Icons.edit_rounded,
-                tooltip: '编辑',
-                onTap: _openEditor,
               ),
               const SizedBox(width: 6),
               Builder(
@@ -349,14 +346,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   },
                 ),
               ),
-              if (widget.onClose != null) ...[
-                const SizedBox(width: 6),
-                GlassIconButton(
-                  icon: Icons.close_rounded,
-                  tooltip: '收起正文栏',
-                  onTap: widget.onClose!,
-                ),
-              ],
               if (_toc.isNotEmpty && state.tocEnabled) ...[
                 const SizedBox(width: 6),
                 GlassIconButton(
@@ -390,6 +379,18 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                   onTap: widget.onToggleWindowFullscreen!,
                 ),
               ],
+              if (widget.onClose != null) ...[
+                const SizedBox(width: 10),
+                GlassIconButton(
+                  icon: Icons.close_rounded,
+                  size: 36,
+                  iconSize: 20,
+                  color: Colors.white,
+                  background: c.tint,
+                  tooltip: '收起正文栏',
+                  onTap: widget.onClose!,
+                ),
+              ],
               const SizedBox(width: 16),
             ],
           ),
@@ -413,6 +414,54 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     note.title.isEmpty ? '无标题笔记' : note.title,
                     style: AppText.title1.copyWith(color: c.label, height: 1.3),
                   ),
+                  const SizedBox(height: 12),
+                  // 编辑是正文页的主操作，单独放在标题下方，避免和标签、
+                  // 收藏、更多等次要动作挤在窄屏顶栏里。
+                  if (widget.onRequestEdit != null || !widget.embedded)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Tooltip(
+                        message: '编辑',
+                        child: Pressable(
+                          onTap: _openEditor,
+                          scale: 0.98,
+                          child: Container(
+                            height: 38,
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            decoration: BoxDecoration(
+                              color: c.tint,
+                              borderRadius: BorderRadius.circular(11),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: c.tint.withValues(alpha: 0.24),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.edit_rounded,
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                                SizedBox(width: 7),
+                                Text(
+                                  '编辑笔记',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 10),
                   Text(
                     metaLine,
@@ -429,8 +478,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                           TagPill(
                             name: t,
                             onTap: () async {
-                              final changed =
-                                  await showNoteTagEditor(context, note.id);
+                              final changed = await showNoteTagEditor(
+                                context,
+                                note.id,
+                              );
                               if (changed && mounted) setState(_load);
                             },
                           ),
@@ -504,13 +555,25 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     // 遮罩（点空白关掉）。这也是手机上放侧栏的常规做法。
     final narrow = MediaQuery.sizeOf(context).width < 700;
 
-    final body = !showToc
-        ? scrollView
-        : narrow
-            ? Stack(
-                children: [
-                  scrollView,
-                  Positioned.fill(
+    final duration = AppMotion.respecting(context, AppMotion.normal);
+    final animatedPanel = TocMotion(
+      open: showToc,
+      side: _tocSide,
+      width: _tocWidth,
+      duration: duration,
+      child: tocPanel,
+    );
+    final body = narrow
+        ? Stack(
+            children: [
+              scrollView,
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: !showToc,
+                  child: AnimatedOpacity(
+                    opacity: showToc ? 1 : 0,
+                    duration: duration,
+                    curve: AppMotion.enter,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => setState(() => _tocOpen = false),
@@ -519,31 +582,31 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                       ),
                     ),
                   ),
-                  Positioned(
-                    // 躲开状态栏：阅读页的正文自己画顶栏、不吃系统 inset，
-                    // 浮层从 0 开始的话会顶到时间/电量那一行去（真机截图里
-                    // 「目录」两个字和状态栏图标叠在一起）。
-                    top: MediaQuery.paddingOf(context).top,
-                    bottom: 0,
-                    left: _tocSide == 'left' ? 0 : null,
-                    right: _tocSide == 'right' ? 0 : null,
-                    child: tocPanel,
-                  ),
-                ],
-              )
-            : Row(
-                children: [
-                  if (_tocSide == 'left') ...[
-                    tocPanel,
-                    TocResizer(onDrag: _resizeToc, onEnd: () {}),
-                  ],
-                  Expanded(child: scrollView),
-                  if (_tocSide == 'right') ...[
-                    TocResizer(onDrag: (d) => _resizeToc(-d), onEnd: () {}),
-                    tocPanel,
-                  ],
-                ],
-              );
+                ),
+              ),
+              Positioned(
+                top: MediaQuery.paddingOf(context).top,
+                bottom: 0,
+                left: _tocSide == 'left' ? 0 : null,
+                right: _tocSide == 'right' ? 0 : null,
+                child: animatedPanel,
+              ),
+            ],
+          )
+        : Row(
+            children: [
+              if (_tocSide == 'left') ...[
+                animatedPanel,
+                if (showToc) TocResizer(onDrag: _resizeToc, onEnd: () {}),
+              ],
+              Expanded(child: scrollView),
+              if (_tocSide == 'right') ...[
+                if (showToc)
+                  TocResizer(onDrag: (d) => _resizeToc(-d), onEnd: () {}),
+                animatedPanel,
+              ],
+            ],
+          );
 
     // 嵌入模式（三栏布局右侧面板）直接返回内容，
     // 不套 Scaffold，也不显示返回按钮——面板里没有"返回"这个概念。
@@ -580,12 +643,19 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           path: p.join(imageRoot, cover),
           fit: BoxFit.cover,
           fallbackColor: c.fill,
+          fadeIn: false,
         ),
       ),
     );
-    if (widget.embedded) return image;
-    return Hero(tag: 'note-cover-$noteId', child: image);
+    // 嵌入桌面栏不走 Hero（列表和正文同处一个路由）；独立详情页保留
+    // 原来的 Hero，让移动端卡片展开和桌面独立页的封面过渡保持连续。
+    if (!widget.embedded) {
+      return Hero(
+        key: widget.coverKey,
+        tag: 'note-cover-$noteId',
+        child: image,
+      );
+    }
+    return image;
   }
-
-
 }

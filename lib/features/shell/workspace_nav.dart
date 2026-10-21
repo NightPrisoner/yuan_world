@@ -130,9 +130,11 @@ extension _WsNav on _DesktopWorkspaceState {
                         // 高度，很难受。放到固定区第一个，两边 y 就一致了。
                         _NavRow(
                           icon: Icons.chevron_left_rounded,
+                          iconTurns: _navIconTurns,
                           label: '收起侧栏',
+                          hoverFeedback: false,
                           selected: false,
-                          onTap: () => _setNavCollapsed(true),
+                          onTap: () => _setNavCollapsed(!_navCollapsed),
                         ),
                         _NavRow(
                           icon: Icons.article_rounded,
@@ -435,36 +437,30 @@ extension _WsNav on _DesktopWorkspaceState {
     final c = context.colors;
     final f = state.filter;
 
-    Widget item(IconData icon, String tip, bool active, VoidCallback onTap) =>
-        Tooltip(
-          message: tip,
-          child: Pressable(
-            onTap: onTap,
-            scale: 0.92,
-            child: Container(
-              width: 38,
-              height: 38,
-              margin: const EdgeInsets.symmetric(vertical: 2),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: active
-                    ? c.tint.withValues(alpha: c.isDark ? 0.24 : 0.14)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(9),
-              ),
-              child: Icon(
-                icon,
-                size: 18,
-                color: active ? c.tint : c.secondaryLabel,
-              ),
-            ),
-          ),
-        );
+    Widget item(
+      IconData icon,
+      String tip,
+      bool active,
+      VoidCallback onTap, {
+      Color? color,
+    }) => Tooltip(
+      message: tip,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: _NavRow(
+          compact: true,
+          icon: icon,
+          label: tip,
+          selected: active,
+          color: color,
+          onTap: onTap,
+        ),
+      ),
+    );
 
     return Container(
       decoration: BoxDecoration(
         color: c.isDark ? const Color(0xFF141416) : const Color(0xFFF7F7FA),
-        border: Border(right: BorderSide(color: c.separator, width: 0.5)),
       ),
       child: SafeArea(
         child: Column(
@@ -483,38 +479,30 @@ extension _WsNav on _DesktopWorkspaceState {
               ),
               child: SizedBox(
                 height: _kBrandMarkSize,
-                child: Center(child: _brandMark(c)),
-              ),
-            ),
-            Tooltip(
-              message: '展开侧栏',
-              child: Pressable(
-                onTap: () => _setNavCollapsed(false),
-                scale: 0.9,
-                child: Container(
-                  // **和展开态那个 _NavRow 用同一套 margin + padding**。
-                  //
-                  // 只对齐外框是不够的：展开态的箭头是包在
-                  // `margin 1 + padding 7` 里的行内图标，收起态原来是个
-                  // 光秃秃的 38px 方块 —— 外框差了 8px，图标中心也跟着差。
-                  // 补齐这两层之后，两边的箭头中心才落在同一条水平线上。
-                  margin: const EdgeInsets.symmetric(vertical: 1),
-                  padding: const EdgeInsets.symmetric(vertical: 7),
-                  child: SizedBox(
-                    width: 38,
-                    child: Center(
-                      child: Icon(
-                        Icons.chevron_right_rounded,
-                        size: 16,
-                        color: c.secondaryLabel,
-                      ),
-                    ),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 18),
+                    child: _brandMark(c),
                   ),
                 ),
               ),
             ),
-            // 展开态里开关下面紧跟着第一项，这里也留同样的间距
-            const SizedBox(height: 6),
+            Tooltip(
+              message: '展开侧栏',
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: _NavRow(
+                  compact: true,
+                  icon: Icons.chevron_left_rounded,
+                  iconTurns: _navIconTurns,
+                  label: '展开侧栏',
+                  hoverFeedback: false,
+                  selected: false,
+                  onTap: () => _setNavCollapsed(!_navCollapsed),
+                ),
+              ),
+            ),
             item(
               Icons.article_rounded,
               '全部笔记',
@@ -527,43 +515,70 @@ extension _WsNav on _DesktopWorkspaceState {
                 _goSection(_Section.notes);
               },
             ),
+            item(
+              Icons.inbox_rounded,
+              '未分类',
+              _section == _Section.notes && f.uncategorizedOnly,
+              () {
+                state.selectUncategorized();
+                _goSection(_Section.notes);
+              },
+              color: c.palette[2],
+            ),
             item(Icons.star_rounded, '收藏', f.favoritesOnly, () {
               state.selectAll();
               state.toggleFavorites();
               _goSection(_Section.notes);
-            }),
+            }, color: c.palette[7]),
             const Spacer(),
             item(
               Icons.check_circle_rounded,
               '待办',
               _section == _Section.todos,
               () => _goSection(_Section.todos),
+              color: c.palette[1],
             ),
             item(
               Icons.archive_outlined,
               '归档',
               _section == _Section.archived,
               () => _goSection(_Section.archived),
+              color: c.palette[4],
             ),
             item(
               Icons.delete_outline_rounded,
               '回收站',
               _section == _Section.trash,
               () => _goSection(_Section.trash),
+              color: c.palette[3],
             ),
             item(
               Icons.insights_rounded,
               '统计',
               _section == _Section.stats,
               () => _goSection(_Section.stats),
+              color: c.palette[5],
             ),
+            const SizedBox(height: 2),
+            item(
+              Icons.download_rounded,
+              '导入文集',
+              false,
+              () => Navigator.of(context).push(
+                ApplePageRoute<void>(
+                  pageBuilder: (_) => const ImportPage(),
+                  fullscreenDialog: true,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
             item(
               Icons.tune_rounded,
               '设置',
               _section == _Section.settings,
               () => _goSection(_Section.settings),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
           ],
         ),
       ),

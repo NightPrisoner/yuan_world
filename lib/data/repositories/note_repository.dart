@@ -165,6 +165,7 @@ class Overview {
     required this.totalChars,
     required this.totalWords,
     required this.imageCount,
+    this.videoCount = 0,
     required this.collectionCount,
     required this.tagCount,
     required this.favoriteCount,
@@ -176,6 +177,7 @@ class Overview {
   final int totalChars;
   final int totalWords;
   final int imageCount;
+  final int videoCount;
   final int collectionCount;
   final int tagCount;
   final int favoriteCount;
@@ -185,7 +187,11 @@ class Overview {
 
 /// 一个时间点的写作量。
 class TrendPoint {
-  const TrendPoint({required this.bucket, required this.count, required this.chars});
+  const TrendPoint({
+    required this.bucket,
+    required this.count,
+    required this.chars,
+  });
   final String bucket; // yyyy-MM
   final int count;
   final int chars;
@@ -225,13 +231,20 @@ class NoteRepository {
 
   /// 隐私空间里的内容量，用于在设置页显示。
   ({int notes, int collections}) hiddenCounts() {
-    final n = _d.select(
-      'SELECT COUNT(*) AS c FROM notes WHERE is_hidden = 1 AND deleted_at IS NULL',
-    ).first['c'] as int;
-    final c = _d.select(
-      'SELECT COUNT(*) AS c FROM collections WHERE is_hidden = 1 AND deleted_at IS NULL',
-    ).first['c'] as int;
+    final n =
+        _d
+                .select(
+                  'SELECT COUNT(*) AS c FROM notes WHERE is_hidden = 1 AND deleted_at IS NULL',
+                )
+                .first['c']
+            as int;
+    final c =
+        _d
+                .select(
+                  'SELECT COUNT(*) AS c FROM collections WHERE is_hidden = 1 AND deleted_at IS NULL',
+                )
+                .first['c']
+            as int;
     return (notes: n, collections: c);
   }
-
 }

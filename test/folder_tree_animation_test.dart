@@ -259,9 +259,12 @@ void main() {
     // 量**位置**而不是透明度：侧栏展开时那一栏自己也在交叉淡入，
     // 找 Opacity 会连"整栏的淡入"一起量进去，不是我们要钉的东西。
     // 重演入场动画的行会从左边 -10 的位置开始滑，位置对不上。
-    expect(find.text('子一'), findsOneWidget, reason: '侧栏展开后子文件夹应该就在树里');
+    // The sidebar fades its two layouts in separate phases; measure its
+    // preserved folder subtree even before the expanded surface is painted.
+    final child = find.text('子一', skipOffstage: false);
+    expect(child, findsOneWidget, reason: '侧栏展开后子文件夹应该就在树里');
     expect(
-      tester.getTopLeft(find.text('子一')).dx,
+      tester.getTopLeft(child).dx,
       closeTo(settledDx, 0.5),
       reason: '侧栏重建不该让子文件夹把入场动画再演一遍（用户说的"抽搐"）',
     );

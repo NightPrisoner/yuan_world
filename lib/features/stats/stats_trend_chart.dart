@@ -4,6 +4,7 @@
 /// 文件别太长（原来 1400 行，四类图表挤在一起）。同一个 library，私有
 /// 类型照样可见，**调用方的 import 一行都不用改**。
 part of 'stats_charts.dart';
+
 /// 大数字缩写：12345 → 1.2万
 String fmtNum(num n) {
   final v = n.round();
@@ -50,6 +51,51 @@ List<T> sliceRange<T>(List<T> src, int start, int end) {
   final s = math.min(math.max(start, 0), src.length);
   final e = math.min(math.max(end, s), src.length);
   return s >= e ? <T>[] : src.sublist(s, e);
+}
+
+/// 大跨度只压缩绘图点，不丢数据；趋势求和，累计取区间末值。
+/// 每条系列采用同一分组大小，保证多选图的横轴仍然对齐。
+List<TrendPoint> compactTrendPoints(
+  List<TrendPoint> points,
+  int groupSize, {
+  bool cumulative = false,
+}) {
+  if (groupSize <= 1) return points;
+  final result = <TrendPoint>[];
+  for (var start = 0; start < points.length; start += groupSize) {
+    final end = math.min(start + groupSize, points.length);
+    final first = points[start];
+    final last = points[end - 1];
+    var notes = 0, chars = 0, words = 0, images = 0, videos = 0;
+    if (cumulative) {
+      notes = last.notes;
+      chars = last.chars;
+      words = last.words;
+      images = last.images;
+      videos = last.videos;
+    } else {
+      for (var i = start; i < end; i++) {
+        final p = points[i];
+        notes += p.notes;
+        chars += p.chars;
+        words += p.words;
+        images += p.images;
+        videos += p.videos;
+      }
+    }
+    result.add(
+      TrendPoint(
+        bucket: '${first.bucket} – ${last.bucket}',
+        label: '${first.label}–${last.label}',
+        notes: notes,
+        chars: chars,
+        words: words,
+        images: images,
+        videos: videos,
+      ),
+    );
+  }
+  return result;
 }
 
 /// 算出 Y 轴的显示范围。**全自动，没有旋钮**。
@@ -131,7 +177,9 @@ class TrendChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final values = points.map<double>((p) => p.valueOf(metric).toDouble()).toList();
+    final values = points
+        .map<double>((p) => p.valueOf(metric).toDouble())
+        .toList();
 
     // 多线模式下 Y 轴要按**所有线**定范围，否则某条会被截断。
     // 到底从 0 起还是贴着数据，由 trendYRange 自己判断
@@ -202,9 +250,9 @@ class TrendChart extends StatelessWidget {
     TextStyle tipTitleStyle() =>
         AppText.caption2.copyWith(color: Colors.white70);
     TextStyle tipValueStyle() => AppText.footnote.copyWith(
-          color: Colors.white,
-          fontWeight: FontWeight.w600,
-        );
+      color: Colors.white,
+      fontWeight: FontWeight.w600,
+    );
 
     if (style == TrendStyle.bar) {
       // 多文件夹时**一个 x 位置上并排几根柱子**（分组柱）。
@@ -223,9 +271,8 @@ class TrendChart extends StatelessWidget {
               // 两端的柱子一悬停，气泡也会顶出图表被裁掉
               fitInsideHorizontally: true,
               fitInsideVertically: true,
-              getTooltipColor: (_) => c.isDark
-                  ? const Color(0xFF2C2C2E)
-                  : const Color(0xFF1C1C1E),
+              getTooltipColor: (_) =>
+                  c.isDark ? const Color(0xFF2C2C2E) : const Color(0xFF1C1C1E),
               getTooltipItem: (group, gi, rod, ri) {
                 // 多序列时标题要带上是哪个文件夹，否则分不清
                 final title = _multi
@@ -245,8 +292,12 @@ class TrendChart extends StatelessWidget {
             ),
           ),
           titlesData: FlTitlesData(
-            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
             leftTitles: leftTitles(),
             bottomTitles: bottomTitles(),
           ),
@@ -335,8 +386,9 @@ class TrendChart extends StatelessWidget {
                     getTooltipItems: (touched) {
                       if (touched.isEmpty) return <LineTooltipItem>[];
                       final xi = touched.first.x.toInt();
-                      final bucket =
-                          xi >= 0 && xi < points.length ? points[xi].bucket : '';
+                      final bucket = xi >= 0 && xi < points.length
+                          ? points[xi].bucket
+                          : '';
                       return <LineTooltipItem>[
                         for (var i = 0; i < touched.length; i++)
                           LineTooltipItem(
@@ -353,10 +405,12 @@ class TrendChart extends StatelessWidget {
                   ),
                 ),
                 titlesData: FlTitlesData(
-                  topTitles:
-                      const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles:
-                      const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
                   leftTitles: leftTitles(),
                   bottomTitles: bottomTitles(),
                 ),
@@ -422,28 +476,33 @@ class TrendChart extends StatelessWidget {
             // 靠右边的点一悬停，气泡会顶出图表被裁掉 —— 收在图内
             fitInsideHorizontally: true,
             fitInsideVertically: true,
-            getTooltipColor: (_) => c.isDark
-                ? const Color(0xFF2C2C2E)
-                : const Color(0xFF1C1C1E),
+            getTooltipColor: (_) =>
+                c.isDark ? const Color(0xFF2C2C2E) : const Color(0xFF1C1C1E),
             getTooltipItems: (touched) => touched
-                .map((t) => LineTooltipItem(
-                      // 第一行给时间，第二行才是数值 ——
-                      // 只有"多少字"而没有"哪一期"，信息是不完整的
-                      '${t.x.toInt() >= 0 && t.x.toInt() < points.length ? points[t.x.toInt()].bucket : ''}\n',
-                      tipTitleStyle(),
-                      children: <TextSpan>[
-                        TextSpan(
-                          text: '${fmtNum(t.y)} ${metric.label}',
-                          style: tipValueStyle(),
-                        ),
-                      ],
-                    ))
+                .map(
+                  (t) => LineTooltipItem(
+                    // 第一行给时间，第二行才是数值 ——
+                    // 只有"多少字"而没有"哪一期"，信息是不完整的
+                    '${t.x.toInt() >= 0 && t.x.toInt() < points.length ? points[t.x.toInt()].bucket : ''}\n',
+                    tipTitleStyle(),
+                    children: <TextSpan>[
+                      TextSpan(
+                        text: '${fmtNum(t.y)} ${metric.label}',
+                        style: tipValueStyle(),
+                      ),
+                    ],
+                  ),
+                )
                 .toList(),
           ),
         ),
         titlesData: FlTitlesData(
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
           leftTitles: leftTitles(),
           bottomTitles: bottomTitles(),
         ),

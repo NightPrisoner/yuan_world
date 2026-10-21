@@ -120,14 +120,14 @@ class LocalImage extends StatelessWidget {
   }
 
   Widget _image(File file, int? cacheWidth, BuildContext context) => Image.file(
-        file,
-        fit: fit,
-        cacheWidth: cacheWidth,
-        gaplessPlayback: gaplessPlayback,
-        filterQuality: filterQuality,
-        frameBuilder: _frame,
-        errorBuilder: (c, _, _) => _fallback(context),
-      );
+    file,
+    fit: fit,
+    cacheWidth: cacheWidth,
+    gaplessPlayback: gaplessPlayback,
+    filterQuality: filterQuality,
+    frameBuilder: _frame,
+    errorBuilder: (c, _, _) => _fallback(context),
+  );
 
   /// 淡入。同步命中缓存（`wasSyncLoaded`）时不淡 —— 那会闪一下。
   Widget _frame(
@@ -136,11 +136,12 @@ class LocalImage extends StatelessWidget {
     int? frame,
     bool wasSyncLoaded,
   ) {
-    if (!fadeIn || wasSyncLoaded) return child;
-    return AnimatedOpacity(
-      opacity: frame == null ? 0 : 1,
-      duration: AppMotion.normal,
-      curve: AppMotion.enter,
+    if (!fadeIn) return child;
+    return _LocalImageFade(
+      key: ValueKey(path),
+      ready: frame != null || wasSyncLoaded,
+      synchronous: wasSyncLoaded,
+      keepPrevious: gaplessPlayback,
       child: child,
     );
   }
@@ -150,4 +151,44 @@ class LocalImage extends StatelessWidget {
     if (custom != null) return custom(context);
     return ColoredBox(color: fallbackColor ?? Colors.transparent);
   }
+}
+
+/// Image keeps its last decoded frame during a resize. Keep the fade wrapper
+/// visible too, otherwise a new cacheWidth hides that retained image.
+class _LocalImageFade extends StatefulWidget {
+  const _LocalImageFade({
+    super.key,
+    required this.ready,
+    required this.synchronous,
+    required this.keepPrevious,
+    required this.child,
+  });
+
+  final bool ready;
+  final bool synchronous;
+  final bool keepPrevious;
+  final Widget child;
+
+  @override
+  State<_LocalImageFade> createState() => _LocalImageFadeState();
+}
+
+class _LocalImageFadeState extends State<_LocalImageFade> {
+  late bool _hasFrame = widget.ready;
+
+  @override
+  void didUpdateWidget(covariant _LocalImageFade oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _hasFrame = widget.ready || (widget.keepPrevious && _hasFrame);
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedOpacity(
+    opacity: _hasFrame ? 1 : 0,
+    duration: widget.synchronous
+        ? Duration.zero
+        : AppMotion.respecting(context, AppMotion.normal),
+    curve: AppMotion.enter,
+    child: widget.child,
+  );
 }

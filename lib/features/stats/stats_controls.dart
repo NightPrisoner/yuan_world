@@ -29,7 +29,9 @@ extension _StatsControls on _StatsPageState {
                         const SizedBox(height: 3),
                         Text(
                           _rangeSubtitle(),
-                          style: AppText.footnote.copyWith(color: c.tertiaryLabel),
+                          style: AppText.footnote.copyWith(
+                            color: c.tertiaryLabel,
+                          ),
                         ),
                       ],
                     ),
@@ -59,9 +61,7 @@ extension _StatsControls on _StatsPageState {
                     builder: (btnCtx) => _FilterButton(
                       icon: Icons.schedule_rounded,
                       label: _rangeLabel,
-                      accent: _range == StatsRange.all
-                          ? c.tint
-                          : c.palette[4],
+                      accent: _range == StatsRange.all ? c.tint : c.palette[4],
                       onTap: () => _pickRangeMenu(btnCtx),
                     ),
                   ),
@@ -120,10 +120,8 @@ extension _StatsControls on _StatsPageState {
     final collections = context.read<AppState>().collections;
     final picked = await showDialog<List<int>>(
       context: context,
-      builder: (ctx) => _CollectionPicker(
-        collections: collections,
-        selected: _collectionIds,
-      ),
+      builder: (ctx) =>
+          _CollectionPicker(collections: collections, selected: _collectionIds),
     );
     if (picked == null || !mounted) return;
     _setCollections(picked);
@@ -228,7 +226,9 @@ extension _StatsControls on _StatsPageState {
                     const SizedBox(height: 4),
                     Text(
                       '左右拖动 ≡ 可以调顺序，开关控制显示',
-                      style: AppText.caption1.copyWith(color: inner.tertiaryLabel),
+                      style: AppText.caption1.copyWith(
+                        color: inner.tertiaryLabel,
+                      ),
                     ),
                     const SizedBox(height: 10),
                     Flexible(

@@ -41,19 +41,55 @@ void main() {
       c.dispose();
     });
 
-    test('没选中内容时插入一对标记并把光标放中间', () {
-      final c = _c('前缀', 2);
+    test('选中文字加粗后再次点击加粗会取消，且支持反复切换', () {
+      final c = _c('你好世界', 0, 4);
       MarkdownEditing.wrap(c, '**');
-      expect(c.text, '前缀****');
-      expect(c.selection.baseOffset, 4); // 两个星号之后
+      expect(c.text, '**你好世界**');
+      expect(c.selection.textInside(c.text), '你好世界');
+
+      MarkdownEditing.wrap(c, '**');
+      expect(c.text, '你好世界');
+      expect(c.selection.textInside(c.text), '你好世界');
+
+      MarkdownEditing.wrap(c, '**');
+      expect(c.text, '**你好世界**');
       c.dispose();
     });
 
-    test('选区无效时追加到末尾', () {
+    test('加粗与斜体连续切换为规范的三颗星并可分别取消', () {
+      final c = _c('连续操作', 0, 4);
+      MarkdownEditing.wrap(c, '**');
+      MarkdownEditing.wrap(c, '*');
+      expect(c.text, '***连续操作***');
+      expect(c.selection.textInside(c.text), '连续操作');
+
+      MarkdownEditing.wrap(c, '*');
+      expect(c.text, '**连续操作**');
+      MarkdownEditing.wrap(c, '**');
+      expect(c.text, '连续操作');
+      c.dispose();
+    });
+
+    test('选区包含已有标记时也能正确取消加粗', () {
+      final c = _c('**你好**世界', 0, 6);
+      MarkdownEditing.wrap(c, '**');
+      expect(c.text, '你好世界');
+      c.dispose();
+    });
+
+    test('没选中内容时不插入空标记', () {
+      final c = _c('前缀', 2);
+      MarkdownEditing.wrap(c, '**');
+      expect(c.text, '前缀');
+      expect(c.selection.baseOffset, 2);
+      c.dispose();
+    });
+
+    test('选区无效时不追加空标记', () {
       final c = TextEditingController(text: '内容');
       // 不设置 selection，模拟刚创建还没聚焦
       MarkdownEditing.wrap(c, '`');
-      expect(c.text, '内容``');
+      expect(c.text, '内容');
       c.dispose();
     });
 
@@ -115,6 +151,17 @@ void main() {
       expect(c.text, '第一行\n- 第二行');
       c.dispose();
     });
+
+    test('加列表后仍只选中文字，下一次加粗不会包住列表符号', () {
+      final c = _c('买牛奶', 0, 3);
+      MarkdownEditing.toggleLinePrefix(c, '- ');
+      expect(c.text, '- 买牛奶');
+      expect(c.selection.textInside(c.text), '买牛奶');
+
+      MarkdownEditing.wrap(c, '**');
+      expect(c.text, '- **买牛奶**');
+      c.dispose();
+    });
   });
 
   group('标题级别 setHeading', () {
@@ -136,6 +183,14 @@ void main() {
       final c = _c('### 标题文字', 5);
       MarkdownEditing.setHeading(c, 0);
       expect(c.text, '标题文字');
+      c.dispose();
+    });
+
+    test('设为标题后选区不包含井号和空格', () {
+      final c = _c('标题文字', 0, 4);
+      MarkdownEditing.setHeading(c, 2);
+      expect(c.text, '## 标题文字');
+      expect(c.selection.textInside(c.text), '标题文字');
       c.dispose();
     });
   });
@@ -160,7 +215,15 @@ void main() {
     test('没有选中文字时插入链接模板', () {
       final c = _c('前缀', 2);
       MarkdownEditing.insertLink(c);
-      expect(c.text, '前缀[](url)');
+      expect(c.text, '前缀[链接文字](url)');
+      c.dispose();
+    });
+
+    test('前面已有相同链接占位符时仍选中新链接的 url', () {
+      final c = _c('旧](url) 新文字', 8, 11);
+      MarkdownEditing.insertLink(c);
+      expect(c.selection.textInside(c.text), 'url');
+      expect(c.selection.start, c.text.lastIndexOf('url'));
       c.dispose();
     });
   });
@@ -217,10 +280,10 @@ void main() {
     });
 
     test('标题按级别给出不同语义', () {
-      expect(
-        MarkdownStyler.parse('# 一').map((s) => s.kind).toList(),
-        <MdKind>[MdKind.marker, MdKind.h1],
-      );
+      expect(MarkdownStyler.parse('# 一').map((s) => s.kind).toList(), <MdKind>[
+        MdKind.marker,
+        MdKind.h1,
+      ]);
       expect(
         MarkdownStyler.parse('### 三').map((s) => s.kind).toList(),
         <MdKind>[MdKind.marker, MdKind.h3],
@@ -234,19 +297,24 @@ void main() {
 
     test('已完成的待办会被标成 done（渲染时划掉）', () {
       final done = MarkdownStyler.parse('- [x] 做完了');
-      expect(done.map((s) => s.kind).toList(),
-          <MdKind>[MdKind.marker, MdKind.done]);
+      expect(done.map((s) => s.kind).toList(), <MdKind>[
+        MdKind.marker,
+        MdKind.done,
+      ]);
 
       final todo = MarkdownStyler.parse('- [ ] 还没做');
-      expect(todo.map((s) => s.kind).toList(),
-          <MdKind>[MdKind.marker, MdKind.plain]);
+      expect(todo.map((s) => s.kind).toList(), <MdKind>[
+        MdKind.marker,
+        MdKind.plain,
+      ]);
     });
 
     test('行内代码与删除线', () {
-      expect(
-        MarkdownStyler.parse('`x`').map((s) => s.kind).toList(),
-        <MdKind>[MdKind.marker, MdKind.code, MdKind.marker],
-      );
+      expect(MarkdownStyler.parse('`x`').map((s) => s.kind).toList(), <MdKind>[
+        MdKind.marker,
+        MdKind.code,
+        MdKind.marker,
+      ]);
       expect(
         MarkdownStyler.parse('~~y~~').map((s) => s.kind).toList(),
         <MdKind>[MdKind.marker, MdKind.strike, MdKind.marker],
@@ -261,10 +329,9 @@ void main() {
     });
 
     test('分隔线整行都算分隔线语义', () {
-      expect(
-        MarkdownStyler.parse('---').map((s) => s.kind).toList(),
-        <MdKind>[MdKind.divider],
-      );
+      expect(MarkdownStyler.parse('---').map((s) => s.kind).toList(), <MdKind>[
+        MdKind.divider,
+      ]);
       // 图片行单独一种语义，渲染时弱化
       expect(
         MarkdownStyler.parse('![](45/1.png)').map((s) => s.kind).toList(),
@@ -311,17 +378,21 @@ void main() {
       bool composing = false,
     }) async {
       late TextSpan span;
-      await tester.pumpWidget(MaterialApp(
-        theme: AppTheme.light(),
-        home: Builder(builder: (context) {
-          span = c.buildTextSpan(
-            context: context,
-            style: base,
-            withComposing: composing,
-          );
-          return const SizedBox();
-        }),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: Builder(
+            builder: (context) {
+              span = c.buildTextSpan(
+                context: context,
+                style: base,
+                withComposing: composing,
+              );
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
       return span;
     }
 
@@ -361,8 +432,11 @@ void main() {
       final bold = all.firstWhere((s) => s.text == '粗');
       expect(bold.style!.fontWeight, FontWeight.w700);
       expect(bold.style!.fontSize, 17, reason: '不能掉回默认 14');
-      expect(bold.style!.fontFamilyFallback, isNotNull,
-          reason: '中文回退链必须还在，否则会叠字');
+      expect(
+        bold.style!.fontFamilyFallback,
+        isNotNull,
+        reason: '中文回退链必须还在，否则会叠字',
+      );
 
       final italic = all.firstWhere((s) => s.text == '斜');
       expect(italic.style!.fontStyle, FontStyle.italic);

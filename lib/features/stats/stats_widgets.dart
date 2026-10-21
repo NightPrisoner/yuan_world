@@ -12,9 +12,8 @@ class _DragHandleScope extends InheritedWidget {
 
   final int index;
 
-  static int? maybeOf(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<_DragHandleScope>()
-      ?.index;
+  static int? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_DragHandleScope>()?.index;
 
   @override
   bool updateShouldNotify(_DragHandleScope oldWidget) =>
@@ -65,7 +64,11 @@ class _Card extends StatelessWidget {
                     child: MouseRegion(
                       cursor: SystemMouseCursors.grab,
                       child: Padding(
-                        padding: const EdgeInsets.only(right: 7, top: 2, bottom: 2),
+                        padding: const EdgeInsets.only(
+                          right: 7,
+                          top: 2,
+                          bottom: 2,
+                        ),
                         child: Icon(
                           Icons.drag_indicator_rounded,
                           size: 17,
@@ -310,13 +313,13 @@ class _CollectionPickerState extends State<_CollectionPicker> {
   /// 不一致，用户要来回找。这里按父子关系重新走一遍。
   ///
   /// 收起来的节点**不往下走**，所以返回的就是当前该显示的那几行。
-  List<({Collection col, int depth, bool hasKids, int pickedBelow})>
-  get _tree {
+  List<({Collection col, int depth, bool hasKids, int pickedBelow})> get _tree {
     final byParent = <int?, List<Collection>>{};
     for (final c in widget.collections) {
       (byParent[c.parentId] ??= <Collection>[]).add(c);
     }
-    final out = <({Collection col, int depth, bool hasKids, int pickedBelow})>[];
+    final out =
+        <({Collection col, int depth, bool hasKids, int pickedBelow})>[];
     void walk(int? parentId, int depth) {
       // 深度兜底：数据万一成环也不能把列表渲染卡死
       if (depth > 8) return;
@@ -328,7 +331,9 @@ class _CollectionPickerState extends State<_CollectionPicker> {
           hasKids: kids.isNotEmpty,
           pickedBelow: _countPickedBelow(c.id, byParent),
         ));
-        if (kids.isNotEmpty && !_collapsed.contains(c.id)) walk(c.id, depth + 1);
+        if (kids.isNotEmpty && !_collapsed.contains(c.id)) {
+          walk(c.id, depth + 1);
+        }
       }
     }
 
@@ -372,10 +377,7 @@ class _CollectionPickerState extends State<_CollectionPicker> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                '选择文件夹',
-                style: AppText.headline.copyWith(color: c.label),
-              ),
+              Text('选择文件夹', style: AppText.headline.copyWith(color: c.label)),
               const SizedBox(height: 3),
               Text(
                 '选两个以上就能在趋势、累计里互相对比',
@@ -400,8 +402,10 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                     c,
                     '反选',
                     () => setState(() {
-                      final next =
-                          all.map((x) => x.id).toSet().difference(_picked);
+                      final next = all
+                          .map((x) => x.id)
+                          .toSet()
+                          .difference(_picked);
                       _picked
                         ..clear()
                         ..addAll(next);
@@ -417,8 +421,9 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                         child: Text(
                           '还没有文件夹',
                           textAlign: TextAlign.center,
-                          style:
-                              AppText.caption1.copyWith(color: c.tertiaryLabel),
+                          style: AppText.caption1.copyWith(
+                            color: c.tertiaryLabel,
+                          ),
                         ),
                       )
                     : ListView.builder(
@@ -460,8 +465,7 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                                             haptic: false,
                                             child: Icon(
                                               collapsed
-                                                  ? Icons
-                                                        .chevron_right_rounded
+                                                  ? Icons.chevron_right_rounded
                                                   : Icons.expand_more_rounded,
                                               size: 18,
                                               color: c.tertiaryLabel,
@@ -490,8 +494,9 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                                       col.name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: AppText.callout
-                                          .copyWith(color: c.label),
+                                      style: AppText.callout.copyWith(
+                                        color: c.label,
+                                      ),
                                     ),
                                   ),
                                   // 收起来时底下还勾着什么，得说出来
@@ -526,8 +531,7 @@ class _CollectionPickerState extends State<_CollectionPicker> {
                     child: const Text('取消'),
                   ),
                   TextButton(
-                    onPressed: () =>
-                        Navigator.pop(context, _picked.toList()),
+                    onPressed: () => Navigator.pop(context, _picked.toList()),
                     child: const Text('确定'),
                   ),
                 ],
@@ -623,7 +627,6 @@ class _FilterButtonState extends State<_FilterButton> {
     );
   }
 }
-
 
 /// 卡片里的小分段选择（两三个选项）。
 ///
@@ -912,8 +915,9 @@ class _ModuleToggle extends StatelessWidget {
                           spec.subtitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style:
-                              AppText.caption2.copyWith(color: c.quaternaryLabel),
+                          style: AppText.caption2.copyWith(
+                            color: c.quaternaryLabel,
+                          ),
                         ),
                       ],
                     ),

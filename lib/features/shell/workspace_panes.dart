@@ -310,8 +310,7 @@ extension _WsPanes on _DesktopWorkspaceState {
           // ⛶ 无边框窗口全屏：只放大窗口，**不动版式**
           windowFullscreen: _windowFullscreen,
           onToggleWindowFullscreen: () {
-            _setState(() => _windowFullscreen = !_windowFullscreen);
-            setAppFullscreen(_windowFullscreen);
+            _toggleWindowFullscreen();
           },
           onClose: () {
             _exitAllFullscreen();
@@ -332,8 +331,7 @@ extension _WsPanes on _DesktopWorkspaceState {
         fullscreen: fullscreen,
         onToggleFullscreen: () => _setEditorFullscreen(!_editorFullscreen),
         onToggleWindowFullscreen: () {
-          _setState(() => _windowFullscreen = !_windowFullscreen);
-          setAppFullscreen(_windowFullscreen);
+          _toggleWindowFullscreen();
         },
         windowFullscreen: _windowFullscreen,
         onRequestEdit: () => _setState(() => _editing = true),

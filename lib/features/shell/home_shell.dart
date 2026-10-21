@@ -74,7 +74,7 @@ class _HomeShellState extends State<HomeShell> {
     if (wide) return const DesktopWorkspace();
 
     // 窄屏：底部标签栏
-    final body = IndexedStack(
+    final body = _MobileTabSwitcher(
       index: _index,
       children: const [NotesPage(), TodosPage(), StatsPage(), SettingsPage()],
     );
@@ -110,6 +110,161 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 移动端主标签页切换。
+///
+/// `IndexedStack` 会瞬间把当前页换掉，内容高度变化较大时尤其像闪烁。
+/// 每次只让「上一页 → 当前页」做一次短距离过渡；从第一项直接点第四项
+/// 不会把中间两个页面扫过去，同时保留四个页面的状态。
+class _MobileTabSwitcher extends StatefulWidget {
+  const _MobileTabSwitcher({required this.index, required this.children});
+
+  final int index;
+  final List<Widget> children;
+
+  @override
+  State<_MobileTabSwitcher> createState() => _MobileTabSwitcherState();
+}
+
+class _MobileTabSwitcherState extends State<_MobileTabSwitcher>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: AppMotion.normal,
+    value: 1,
+  );
+  late int _activeIndex = widget.index;
+  late final Set<int> _visibleIndices = {_activeIndex};
+  late List<double> _fromOpacity = [
+    for (var i = 0; i < widget.children.length; i++) i == _activeIndex ? 1 : 0,
+  ];
+  late List<double> _fromOffset = List.filled(widget.children.length, 0);
+  late List<double> _toOffset = List.filled(widget.children.length, 0);
+
+  double get _progress => AppMotion.enter.transform(_controller.value);
+
+  double _opacity(int i) =>
+      _fromOpacity[i] +
+      ((i == _activeIndex ? 1 : 0) - _fromOpacity[i]) * _progress;
+
+  double _offset(int i) =>
+      _fromOffset[i] + (_toOffset[i] - _fromOffset[i]) * _progress;
+
+  void _finish(AnimationStatus status) {
+    if (status != AnimationStatus.completed || !mounted) return;
+    if (_visibleIndices.length == 1) return;
+    setState(() {
+      _visibleIndices
+        ..clear()
+        ..add(_activeIndex);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addStatusListener(_finish);
+  }
+
+  @override
+  void didUpdateWidget(covariant _MobileTabSwitcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.index == _activeIndex) return;
+    final direction = widget.index > _activeIndex ? 1 : -1;
+    // Snapshot all currently painted pages before changing targets. Quick taps
+    // must not turn a half-visible page opaque or reset its position.
+    final opacity = [
+      for (var i = 0; i < widget.children.length; i++) _opacity(i),
+    ];
+    final offset = [
+      for (var i = 0; i < widget.children.length; i++) _offset(i),
+    ];
+    _visibleIndices.removeWhere((i) => opacity[i] < 0.001);
+    if (!_visibleIndices.contains(widget.index)) {
+      offset[widget.index] = direction * 0.035;
+    }
+    _visibleIndices.add(widget.index);
+    _fromOpacity = opacity;
+    _fromOffset = offset;
+    _activeIndex = widget.index;
+    _toOffset = [
+      for (var i = 0; i < widget.children.length; i++)
+        i == _activeIndex ? 0 : -direction * 0.035,
+    ];
+    if (AppMotion.reduceMotion(context)) {
+      _controller.value = 1;
+      _visibleIndices
+        ..clear()
+        ..add(_activeIndex);
+    } else {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (AppMotion.reduceMotion(context)) {
+      _controller.value = 1;
+      _visibleIndices
+        ..clear()
+        ..add(_activeIndex);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeStatusListener(_finish);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            for (var i = 0; i < widget.children.length; i++)
+              // Keep every page at a stable keyed position. Moving it between
+              // Offstage and the animated branch recreates its State.
+              Offstage(
+                key: ValueKey<int>(i),
+                offstage: !_visibleIndices.contains(i),
+                child: TickerMode(
+                  enabled: _visibleIndices.contains(i),
+                  child: ExcludeFocus(
+                    excluding: i != _activeIndex,
+                    child: ExcludeSemantics(
+                      excluding: i != _activeIndex,
+                      child: IgnorePointer(
+                        ignoring: i != _activeIndex,
+                        child: AnimatedBuilder(
+                          animation: _controller,
+                          child: widget.children[i],
+                          builder: (context, child) {
+                            return Opacity(
+                              opacity: _opacity(i).clamp(0.0, 1.0),
+                              child: Transform.translate(
+                                offset: Offset(width * _offset(i), 0),
+                                child: child,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -159,7 +314,10 @@ class _MobileTabBar extends StatelessWidget {
                       children: [
                         AnimatedScale(
                           scale: index == i ? 1.0 : 0.94,
-                          duration: AppMotion.fast,
+                          duration: AppMotion.respecting(
+                            context,
+                            AppMotion.fast,
+                          ),
                           curve: AppMotion.enter,
                           child: Icon(
                             index == i ? tabs[i].activeIcon : tabs[i].icon,

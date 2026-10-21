@@ -13,12 +13,13 @@ library;
 import 'package:sqlite3/sqlite3.dart';
 
 import '../db/app_database.dart';
+import '../media/media_counts.dart';
 import 'note_repository.dart' show Overview;
 
 /// 聚合粒度。
 enum StatsGranularity {
   day('按天', '%Y-%m-%d'),
-  week('按周', '%Y-W%W'),
+  week('按周', '%Y-%m-%d'),
   month('按月', '%Y-%m'),
   year('按年', '%Y');
 
@@ -100,7 +101,8 @@ class StatsQuery {
     from: clearFrom ? null : (from ?? this.from),
     to: clearTo ? null : (to ?? this.to),
     collectionId: clearCollection ? null : (collectionId ?? this.collectionId),
-    collectionIds: collectionIds ?? this.collectionIds,
+    collectionIds:
+        collectionIds ?? (clearCollection ? const <int>[] : this.collectionIds),
     includeDescendants: includeDescendants ?? this.includeDescendants,
     hiddenOnly: hiddenOnly ?? this.hiddenOnly,
   );
@@ -116,6 +118,7 @@ class TrendPoint {
     required this.chars,
     required this.words,
     required this.images,
+    this.videos = 0,
   });
 
   final String bucket;
@@ -124,12 +127,14 @@ class TrendPoint {
   final int chars;
   final int words;
   final int images;
+  final int videos;
 
   int valueOf(TrendMetric m) => switch (m) {
     TrendMetric.notes => notes,
     TrendMetric.chars => chars,
     TrendMetric.words => words,
     TrendMetric.images => images,
+    TrendMetric.videos => videos,
   };
 }
 
@@ -137,7 +142,8 @@ enum TrendMetric {
   chars('字数'),
   notes('篇数'),
   words('词数'),
-  images('图片');
+  images('图片'),
+  videos('视频');
 
   const TrendMetric(this.label);
   final String label;
@@ -153,10 +159,20 @@ enum TrendStyle {
 }
 
 class CumulativePoint {
-  const CumulativePoint(this.label, this.notes, this.chars);
+  const CumulativePoint(
+    this.label,
+    this.notes,
+    this.chars, {
+    this.words = 0,
+    this.images = 0,
+    this.videos = 0,
+  });
   final String label;
   final int notes;
   final int chars;
+  final int words;
+  final int images;
+  final int videos;
 }
 
 class ShareItem {
@@ -282,6 +298,10 @@ class StatsRepository {
 
   final AppDatabase db;
 
+  /// 参数统计与图表共用同一套笔记筛选条件。
+  String notePredicate(StatsQuery query, {String alias = 'notes'}) =>
+      _where(query, alias: alias);
+
   Database get _d => db.db;
 
   /// 笔记的「活动时间」：优先原文发布时间，否则本地创建时间。
@@ -351,12 +371,10 @@ class StatsRepository {
     StatsGranularity granularity = StatsGranularity.month,
   }) {
     final rows = _d.select('''
-      SELECT strftime('${granularity.sqlFormat}', ${_ts('n')} / 1000,
-                      'unixepoch', 'localtime') AS bucket,
+      SELECT ${granularity == StatsGranularity.week ? "date(${_ts('n')} / 1000, 'unixepoch', 'localtime', '-6 days', 'weekday 1')" : "strftime('${granularity.sqlFormat}', ${_ts('n')} / 1000, 'unixepoch', 'localtime')"} AS bucket,
              COUNT(*) AS cnt,
              IFNULL(SUM(n.char_count), 0) AS chars,
-             IFNULL(SUM(n.word_count), 0) AS words,
-             IFNULL(SUM(n.image_count), 0) AS images
+             IFNULL(SUM(n.word_count), 0) AS words
       FROM notes n
       WHERE ${_where(query, alias: 'n')}
       GROUP BY bucket
@@ -364,6 +382,19 @@ class StatsRepository {
     ''');
 
     final raw = <String, TrendPoint>{};
+    final media = <String, ({int images, int videos})>{};
+    for (final r in _d.select(
+      'SELECT n.content, ${_ts('n')} AS ts FROM notes n WHERE ${_where(query, alias: 'n')}',
+    )) {
+      final date = DateTime.fromMillisecondsSinceEpoch(r['ts'] as int);
+      final key = _keyOf(_truncate(date, granularity), granularity);
+      final count = countNoteMedia(r['content'] as String);
+      final previous = media[key] ?? (images: 0, videos: 0);
+      media[key] = (
+        images: previous.images + count.images,
+        videos: previous.videos + count.videos,
+      );
+    }
     for (final r in rows) {
       final b = r['bucket'] as String?;
       if (b == null) continue;
@@ -373,7 +404,8 @@ class StatsRepository {
         notes: r['cnt'] as int,
         chars: r['chars'] as int,
         words: r['words'] as int,
-        images: r['images'] as int,
+        images: media[b]?.images ?? 0,
+        videos: media[b]?.videos ?? 0,
       );
     }
 
@@ -399,7 +431,10 @@ class StatsRepository {
       since ?? _parseBucketKey(raw.keys.first, granularity),
       // 终点跟着**数据**走，而不是 DateTime.now()。
       // 一律补到今天的话，2014 年就停更的文集会拖出十几年空线。
-      until ?? _parseBucketKey(raw.keys.last, granularity),
+      until ??
+          (raw.isEmpty
+              ? DateTime.now()
+              : _parseBucketKey(raw.keys.last, granularity)),
       granularity,
     );
 
@@ -417,22 +452,28 @@ class StatsRepository {
     ];
   }
 
-  List<String> _bucketKeysBetween(DateTime from, DateTime to, StatsGranularity g) {
-    final maxPoints = switch (g) {
-      StatsGranularity.day => 400,
-      StatsGranularity.week => 260,
-      _ => 400,
-    };
-
+  List<String> _bucketKeysBetween(
+    DateTime from,
+    DateTime to,
+    StatsGranularity g,
+  ) {
     final out = <String>[];
     var cursor = _truncate(from, g);
     final end = _truncate(to, g);
 
-    while (!cursor.isAfter(end) && out.length < maxPoints) {
+    while (!cursor.isAfter(end)) {
       out.add(_keyOf(cursor, g));
       cursor = switch (g) {
-        StatsGranularity.day => cursor.add(const Duration(days: 1)),
-        StatsGranularity.week => cursor.add(const Duration(days: 7)),
+        StatsGranularity.day => DateTime(
+          cursor.year,
+          cursor.month,
+          cursor.day + 1,
+        ),
+        StatsGranularity.week => DateTime(
+          cursor.year,
+          cursor.month,
+          cursor.day + 7,
+        ),
         StatsGranularity.month => DateTime(cursor.year, cursor.month + 1, 1),
         StatsGranularity.year => DateTime(cursor.year + 1, 1, 1),
       };
@@ -442,8 +483,7 @@ class StatsRepository {
 
   DateTime _truncate(DateTime d, StatsGranularity g) => switch (g) {
     StatsGranularity.day => DateTime(d.year, d.month, d.day),
-    StatsGranularity.week =>
-      DateTime(d.year, d.month, d.day).subtract(Duration(days: d.weekday - 1)),
+    StatsGranularity.week => DateTime(d.year, d.month, d.day - d.weekday + 1),
     StatsGranularity.month => DateTime(d.year, d.month, 1),
     StatsGranularity.year => DateTime(d.year, 1, 1),
   };
@@ -452,7 +492,7 @@ class StatsRepository {
     String two(int v) => v.toString().padLeft(2, '0');
     return switch (g) {
       StatsGranularity.day => '${d.year}-${two(d.month)}-${two(d.day)}',
-      StatsGranularity.week => '${d.year}-W${two(_isoWeek(d))}',
+      StatsGranularity.week => '${d.year}-${two(d.month)}-${two(d.day)}',
       StatsGranularity.month => '${d.year}-${two(d.month)}',
       StatsGranularity.year => '${d.year}',
     };
@@ -470,17 +510,12 @@ class StatsRepository {
         case StatsGranularity.year:
           return DateTime(int.parse(key), 1, 1);
         case StatsGranularity.week:
-          final p = key.split('-W');
-          return DateTime(int.parse(p[0]), 1, 1);
+          final p = key.split('-');
+          return DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
       }
     } catch (_) {
       return DateTime.now();
     }
-  }
-
-  static int _isoWeek(DateTime d) {
-    final dayOfYear = d.difference(DateTime(d.year, 1, 1)).inDays + 1;
-    return ((dayOfYear - d.weekday + 10) / 7).floor();
   }
 
   String _labelFor(String bucket, StatsGranularity g) {
@@ -496,8 +531,16 @@ class StatsRepository {
         final p = bucket.split('-');
         return p.length >= 3 ? '${int.parse(p[1])}/${int.parse(p[2])}' : bucket;
       case StatsGranularity.week:
-        final p = bucket.split('-W');
-        return p.length >= 2 ? '${int.parse(p[1])}周' : bucket;
+        final monday = _parseBucketKey(bucket, g);
+        final thursday = DateTime.utc(
+          monday.year,
+          monday.month,
+          monday.day + 3,
+        );
+        final jan4 = DateTime.utc(thursday.year, 1, 4);
+        final firstMonday = DateTime.utc(jan4.year, 1, 5 - jan4.weekday);
+        final week = thursday.difference(firstMonday).inDays ~/ 7 + 1;
+        return '${thursday.year}年$week周';
       case StatsGranularity.year:
         return '$bucket年';
     }
@@ -510,11 +553,26 @@ class StatsRepository {
     final points = trend(query: query, granularity: granularity);
     var notes = 0;
     var chars = 0;
+    var words = 0;
+    var images = 0;
+    var videos = 0;
     final out = <CumulativePoint>[];
     for (final p in points) {
       notes += p.notes;
       chars += p.chars;
-      out.add(CumulativePoint(p.label, notes, chars));
+      words += p.words;
+      images += p.images;
+      videos += p.videos;
+      out.add(
+        CumulativePoint(
+          p.label,
+          notes,
+          chars,
+          words: words,
+          images: images,
+          videos: videos,
+        ),
+      );
     }
     return out;
   }
@@ -533,12 +591,14 @@ class StatsRepository {
       ORDER BY cnt DESC
     ''');
     return rows
-        .map((r) => ShareItem(
-              name: r['name'] as String,
-              color: r['color'] as int,
-              value: r['cnt'] as int,
-              extra: r['chars'] as int,
-            ))
+        .map(
+          (r) => ShareItem(
+            name: r['name'] as String,
+            color: r['color'] as int,
+            value: r['cnt'] as int,
+            extra: r['chars'] as int,
+          ),
+        )
         .toList();
   }
 
@@ -547,7 +607,9 @@ class StatsRepository {
     LengthScale scale = LengthScale.normal,
   }) {
     final rows = _d
-        .select('SELECT n.char_count FROM notes n WHERE ${_where(query, alias: 'n')}')
+        .select(
+          'SELECT n.char_count FROM notes n WHERE ${_where(query, alias: 'n')}',
+        )
         .map((r) => (r['char_count'] as int?) ?? 0)
         .toList();
 
@@ -607,6 +669,13 @@ class StatsRepository {
   }
 
   StreakInfo streak({StatsQuery query = StatsQuery.empty}) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    int dayGap(DateTime a, DateTime b) => DateTime.utc(
+      a.year,
+      a.month,
+      a.day,
+    ).difference(DateTime.utc(b.year, b.month, b.day)).inDays;
     final rows = _d.select('''
       SELECT DISTINCT strftime('%Y-%m-%d', ${_ts('n')} / 1000, 'unixepoch', 'localtime') AS day
       FROM notes n WHERE ${_where(query, alias: 'n')}
@@ -619,7 +688,8 @@ class StatsRepository {
       if (s == null) continue;
       final p = s.split('-');
       if (p.length < 3) continue;
-      days.add(DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2])));
+      final day = DateTime(int.parse(p[0]), int.parse(p[1]), int.parse(p[2]));
+      if (!day.isAfter(today)) days.add(day);
     }
     if (days.isEmpty) {
       return const StreakInfo(
@@ -634,18 +704,16 @@ class StatsRepository {
     var longest = 1;
     var run = 1;
     for (var i = 1; i < days.length; i++) {
-      run = days[i].difference(days[i - 1]).inDays == 1 ? run + 1 : 1;
+      run = dayGap(days[i], days[i - 1]) == 1 ? run + 1 : 1;
       if (run > longest) longest = run;
     }
 
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
     final last = days.last;
     var current = 0;
-    if (today.difference(last).inDays <= 1) {
+    if (dayGap(today, last) <= 1) {
       current = 1;
       for (var i = days.length - 1; i > 0; i--) {
-        if (days[i].difference(days[i - 1]).inDays == 1) {
+        if (dayGap(days[i], days[i - 1]) == 1) {
           current++;
         } else {
           break;
@@ -653,7 +721,7 @@ class StatsRepository {
       }
     }
 
-    final span = last.difference(days.first).inDays + 1;
+    final span = dayGap(last, days.first) + 1;
     return StreakInfo(
       current: current,
       longest: longest,
@@ -669,20 +737,25 @@ class StatsRepository {
     StatsQuery query = StatsQuery.empty,
     int limit = 10,
   }) {
-    final rows = _d.select('''
+    final rows = _d.select(
+      '''
       SELECT n.id, n.title, n.char_count, c.color AS color
       FROM notes n LEFT JOIN collections c ON c.id = n.collection_id
       WHERE ${_where(query, alias: 'n')}
       ORDER BY n.char_count DESC
       LIMIT ?
-    ''', <Object?>[limit]);
+    ''',
+      <Object?>[limit],
+    );
     return rows
-        .map((r) => (
-              id: r['id'] as int,
-              title: (r['title'] as String?) ?? '',
-              chars: (r['char_count'] as int?) ?? 0,
-              color: r['color'] as int?,
-            ))
+        .map(
+          (r) => (
+            id: r['id'] as int,
+            title: (r['title'] as String?) ?? '',
+            chars: (r['char_count'] as int?) ?? 0,
+            color: r['color'] as int?,
+          ),
+        )
         .toList();
   }
 
@@ -703,7 +776,6 @@ class StatsRepository {
       SELECT COUNT(*) AS note_count,
              IFNULL(SUM(n.char_count), 0) AS total_chars,
              IFNULL(SUM(n.word_count), 0) AS total_words,
-             IFNULL(SUM(n.image_count), 0) AS image_count,
              IFNULL(SUM(CASE WHEN n.is_favorite = 1 THEN 1 ELSE 0 END), 0) AS favorite_count,
              MIN(${_ts('n')}) AS first_at,
              MAX(${_ts('n')}) AS last_at
@@ -714,25 +786,32 @@ class StatsRepository {
 
     // 文集数：选了文件夹就数这几个（含后代），否则数库里所有可见文集
     var collectionCount = 0;
-    if (query.collectionIds.isNotEmpty) {
+    if (query.collectionIds.isNotEmpty || query.collectionId != null) {
       final all = <int>{};
-      for (final id in query.collectionIds) {
+      for (final id
+          in query.collectionIds.isNotEmpty
+              ? query.collectionIds
+              : [query.collectionId!]) {
         all.add(id);
         if (query.includeDescendants) all.addAll(_descendants(id));
       }
       collectionCount =
-          _d.select(
-                'SELECT COUNT(*) AS c FROM collections '
-                'WHERE id IN (${all.join(',')}) AND is_hidden = $hideFlag '
-                'AND deleted_at IS NULL',
-              ).first['c']
+          _d
+                  .select(
+                    'SELECT COUNT(*) AS c FROM collections '
+                    'WHERE id IN (${all.join(',')}) AND is_hidden = $hideFlag '
+                    'AND deleted_at IS NULL',
+                  )
+                  .first['c']
               as int;
     } else {
       collectionCount =
-          _d.select(
-                'SELECT COUNT(*) AS c FROM collections '
-                'WHERE is_hidden = $hideFlag AND deleted_at IS NULL',
-              ).first['c']
+          _d
+                  .select(
+                    'SELECT COUNT(*) AS c FROM collections '
+                    'WHERE is_hidden = $hideFlag AND deleted_at IS NULL',
+                  )
+                  .first['c']
               as int;
     }
 
@@ -747,11 +826,21 @@ class StatsRepository {
     DateTime? dt(Object? v) =>
         v == null ? null : DateTime.fromMillisecondsSinceEpoch(v as int);
 
+    var images = 0;
+    var videos = 0;
+    for (final row in _d.select(
+      'SELECT n.content FROM notes n WHERE ${_where(query, alias: 'n')}',
+    )) {
+      final media = countNoteMedia(row['content'] as String);
+      images += media.images;
+      videos += media.videos;
+    }
     return Overview(
       noteCount: r['note_count'] as int,
       totalChars: r['total_chars'] as int,
       totalWords: r['total_words'] as int,
-      imageCount: r['image_count'] as int,
+      imageCount: images,
+      videoCount: videos,
       collectionCount: collectionCount,
       tagCount: tagCount,
       favoriteCount: r['favorite_count'] as int,
@@ -760,7 +849,9 @@ class StatsRepository {
     );
   }
 
-  List<CollectionComparison> compareCollections({StatsQuery query = StatsQuery.empty}) {
+  List<CollectionComparison> compareCollections({
+    StatsQuery query = StatsQuery.empty,
+  }) {
     final hideFlag = query.hiddenOnly ? 1 : 0;
 
     // **时间范围也得跟着走**。以前这块只认隐私空间，旁边所有卡片都变成
@@ -779,8 +870,12 @@ class StatsRepository {
     // 不这么切的话，用户在别处筛选了半天，只有这块还在列全库，
     // 一眼看上去就是"筛选没生效"。
     final targets = <({int id, String name, int color})>[];
-    if (query.collectionIds.isNotEmpty) {
-      for (final id in query.collectionIds) {
+    if (query.collectionIds.isNotEmpty || query.collectionId != null) {
+      for (final id
+          in (query.collectionIds.isNotEmpty
+                  ? query.collectionIds
+                  : [query.collectionId!])
+              .toSet()) {
         final r = _d.select(
           'SELECT id, name, color FROM collections '
           'WHERE id = ? AND is_hidden = $hideFlag AND deleted_at IS NULL',
@@ -810,7 +905,10 @@ class StatsRepository {
 
     final out = <CollectionComparison>[];
     for (final t in targets) {
-      final ids = <int>[t.id, ..._descendants(t.id)];
+      final ids = <int>[
+        t.id,
+        if (query.includeDescendants) ..._descendants(t.id),
+      ];
       final r = _d.select('''
         SELECT COUNT(*) AS cnt,
                IFNULL(SUM(n.char_count), 0) AS chars,
@@ -821,22 +919,28 @@ class StatsRepository {
           AND n.collection_id IN (${ids.join(',')})$rangeSql
       ''').first;
 
-      out.add(CollectionComparison(
-        id: t.id,
-        name: t.name,
-        color: t.color,
-        notes: r['cnt'] as int,
-        chars: r['chars'] as int,
-        images: r['images'] as int,
-        lastAt: r['last_at'] == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(r['last_at'] as int),
-      ));
+      final scopedOverview = overview(
+        query: query.copyWith(collectionIds: [t.id], clearCollection: true),
+      );
+
+      out.add(
+        CollectionComparison(
+          id: t.id,
+          name: t.name,
+          color: t.color,
+          notes: r['cnt'] as int,
+          chars: r['chars'] as int,
+          images: scopedOverview.imageCount,
+          lastAt: r['last_at'] == null
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(r['last_at'] as int),
+        ),
+      );
     }
 
     // 未分类也算一个可比对象，否则总数对不上会让人困惑。
     // 但用户明确勾了文件夹时就不掺进来了 —— 那不在他要看的范围里。
-    if (query.collectionIds.isEmpty) {
+    if (query.collectionIds.isEmpty && query.collectionId == null) {
       final orphan = _d.select('''
         SELECT COUNT(*) AS cnt,
                IFNULL(SUM(char_count), 0) AS chars,
@@ -847,17 +951,25 @@ class StatsRepository {
           AND n.collection_id IS NULL$rangeSql
       ''').first;
       if ((orphan['cnt'] as int) > 0) {
-        out.add(CollectionComparison(
-          id: -1,
-          name: '未分类',
-          color: 0xFF94A3B8,
-          notes: orphan['cnt'] as int,
-          chars: orphan['chars'] as int,
-          images: orphan['images'] as int,
-          lastAt: orphan['last_at'] == null
-              ? null
-              : DateTime.fromMillisecondsSinceEpoch(orphan['last_at'] as int),
-        ));
+        var images = 0;
+        for (final row in _d.select(
+          'SELECT n.content FROM notes n WHERE ${_where(query, alias: 'n')} AND n.collection_id IS NULL',
+        )) {
+          images += countNoteMedia(row['content'] as String).images;
+        }
+        out.add(
+          CollectionComparison(
+            id: -1,
+            name: '未分类',
+            color: 0xFF94A3B8,
+            notes: orphan['cnt'] as int,
+            chars: orphan['chars'] as int,
+            images: images,
+            lastAt: orphan['last_at'] == null
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(orphan['last_at'] as int),
+          ),
+        );
       }
     }
 
@@ -869,7 +981,8 @@ class StatsRepository {
     StatsQuery query = StatsQuery.empty,
     int limit = 40,
   }) {
-    final rows = _d.select('''
+    final rows = _d.select(
+      '''
       SELECT t.name, t.color, COUNT(nt.note_id) AS cnt
       FROM tags t
       JOIN note_tags nt ON nt.tag_id = t.id
@@ -878,13 +991,17 @@ class StatsRepository {
       GROUP BY t.id HAVING cnt > 0
       ORDER BY cnt DESC, t.name ASC
       LIMIT ?
-    ''', <Object?>[limit]);
+    ''',
+      <Object?>[limit],
+    );
     return rows
-        .map((r) => (
-              name: r['name'] as String,
-              count: r['cnt'] as int,
-              color: r['color'] as int,
-            ))
+        .map(
+          (r) => (
+            name: r['name'] as String,
+            count: r['cnt'] as int,
+            color: r['color'] as int,
+          ),
+        )
         .toList();
   }
 
@@ -934,14 +1051,86 @@ class StatsRepository {
   }
 
   static const Set<String> _stopwords = <String>{
-    '的时', '时候', '一个', '什么', '这个', '那个', '可以', '就是', '没有',
-    '自己', '因为', '所以', '但是', '如果', '还是', '这样', '那样', '已经',
-    '他们', '我们', '你们', '这些', '那些', '不是', '只是', '而且', '然后',
-    '一次', '一样', '一直', '真的', '可能', '应该', '觉得', '知道', '看到',
-    '起来', '出来', '过来', '下来', '一些', '有点', '很多', '非常', '比较',
-    '以及', '或者', '虽然', '不过', '于是', '其实', '感觉', '东西', '事情',
-    '问题', '方式', '方面', '情况', '之后', '之前', '当时', '现在', '以后',
-    '一种', '这里', '那里', '为了', '对于', '关于', '通过', '进行', '成为',
-    '一定', '不断', '越来越', '在于', '让我', '我的', '你的', '他的', '她的',
+    '的时',
+    '时候',
+    '一个',
+    '什么',
+    '这个',
+    '那个',
+    '可以',
+    '就是',
+    '没有',
+    '自己',
+    '因为',
+    '所以',
+    '但是',
+    '如果',
+    '还是',
+    '这样',
+    '那样',
+    '已经',
+    '他们',
+    '我们',
+    '你们',
+    '这些',
+    '那些',
+    '不是',
+    '只是',
+    '而且',
+    '然后',
+    '一次',
+    '一样',
+    '一直',
+    '真的',
+    '可能',
+    '应该',
+    '觉得',
+    '知道',
+    '看到',
+    '起来',
+    '出来',
+    '过来',
+    '下来',
+    '一些',
+    '有点',
+    '很多',
+    '非常',
+    '比较',
+    '以及',
+    '或者',
+    '虽然',
+    '不过',
+    '于是',
+    '其实',
+    '感觉',
+    '东西',
+    '事情',
+    '问题',
+    '方式',
+    '方面',
+    '情况',
+    '之后',
+    '之前',
+    '当时',
+    '现在',
+    '以后',
+    '一种',
+    '这里',
+    '那里',
+    '为了',
+    '对于',
+    '关于',
+    '通过',
+    '进行',
+    '成为',
+    '一定',
+    '不断',
+    '越来越',
+    '在于',
+    '让我',
+    '我的',
+    '你的',
+    '他的',
+    '她的',
   };
 }

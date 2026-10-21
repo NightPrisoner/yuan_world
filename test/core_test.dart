@@ -101,6 +101,24 @@ void main() {
       final img = blocks.firstWhere((b) => b.type == ContentBlockType.image);
       expect(img.text, 'images/1.png');
     });
+
+    test('任务列表去掉 Markdown 复选框并保留完成状态', () {
+      final blocks = parseContent('- [ ] 未完成\n- [x] 已完成');
+      expect(blocks, hasLength(2));
+      expect(blocks[0].type, ContentBlockType.bullet);
+      expect(blocks[0].isTodo, isTrue);
+      expect(blocks[0].checked, isFalse);
+      expect(blocks[0].text, '未完成');
+      expect(blocks[1].isTodo, isTrue);
+      expect(blocks[1].checked, isTrue);
+      expect(blocks[1].text, '已完成');
+    });
+
+    test('有序列表保留原始序号，阅读态和编辑态不乱号', () {
+      final blocks = parseContent('3. 第三步\n4. 第四步');
+      expect(blocks.map((b) => b.listNumber), <int?>[3, 4]);
+      expect(blocks.map((b) => b.text), <String>['第三步', '第四步']);
+    });
   });
 
   // ── DOCX 解析 ───────────────────────────────────────────────────────────

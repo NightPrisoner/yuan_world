@@ -73,6 +73,20 @@ void main() {
   }
 
   group('txt 导入端到端', () {
+    test('用户取消时在当前文件完成后停止，不再导入后续文件', () async {
+      writeTxt('a.txt', utf8.encode('甲\n\n正文'));
+      writeTxt('b.txt', utf8.encode('乙\n\n正文'));
+      var calls = 0;
+      final summary = await importer.importDocx(
+        ImportService.collectDocx(work.path),
+        isCancellationRequested: () => ++calls > 2,
+      );
+
+      expect(summary.cancelled, isTrue);
+      expect(summary.imported, 1);
+      expect(repo.listNotes(const NoteFilter()).map((n) => n.title), <String>['甲']);
+    });
+
     test('UTF-8 的 txt 能落成一篇笔记', () async {
       final f = writeTxt(
         '我的文章.txt',

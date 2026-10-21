@@ -83,10 +83,14 @@ String _cleanTarget(String raw) {
 
 String _percentDecode(String s) {
   final bytes = <int>[];
-  for (var i = 0; i < s.length; i++) {
-    final c = s.codeUnitAt(i);
-    if (c == 0x25 && i + 2 < s.length) {
-      final b = int.tryParse(s.substring(i + 1, i + 3), radix: 16);
+  final runes = s.runes.toList();
+  for (var i = 0; i < runes.length; i++) {
+    final c = runes[i];
+    if (c == 0x25 && i + 2 < runes.length) {
+      final b = int.tryParse(
+        String.fromCharCodes(runes.sublist(i + 1, i + 3)),
+        radix: 16,
+      );
       if (b != null) {
         bytes.add(b);
         i += 2;

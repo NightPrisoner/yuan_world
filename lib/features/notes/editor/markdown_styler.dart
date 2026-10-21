@@ -31,8 +31,10 @@ enum MdKind {
   h4,
   bold,
   italic,
+  boldItalic,
   code,
   strike,
+  link,
 
   /// 引用内容
   quote,
@@ -43,10 +45,11 @@ enum MdKind {
 
 /// 一个带语义的文本片段。
 class MdSegment {
-  const MdSegment(this.text, this.kind);
+  const MdSegment(this.text, this.kind, [this.formats = const <MdKind>{}]);
 
   final String text;
   final MdKind kind;
+  final Set<MdKind> formats;
 
   @override
   String toString() => '$kind("$text")';
@@ -58,14 +61,16 @@ class MarkdownStyler {
   static final _divider = RegExp(r'^\s*(-{3,}|\*{3,}|_{3,})\s*$');
   static final _imageLine = RegExp(r'^\s*!\[[^\]]*\]\([^)]*\)\s*$');
   static final _todo = RegExp(r'^(\s*[-*+]\s+\[[ xX]\]\s*)(.*)$');
-  static final _heading = RegExp(r'^(\s*#{1,6}\s*)(.*)$');
+  static final _heading = RegExp(r'^(\s*#{1,6}\s+)(.*)$');
   static final _quote = RegExp(r'^(\s*>\s?)(.*)$');
   static final _bullet = RegExp(r'^(\s*[-*+]\s+)(.*)$');
   static final _ordered = RegExp(r'^(\s*\d+\.\s+)(.*)$');
 
   /// 行内标记：加粗、删除线、行内代码、斜体。
   /// 顺序很重要——`**` 必须排在 `*` 前面，否则加粗会被拆成两段斜体。
-  static final _inline = RegExp(r'(\*\*[^*\n]+\*\*|~~[^~\n]+~~|`[^`\n]+`|\*[^*\n]+\*)');
+  static final _inline = RegExp(
+    r'(\[\[[^\[\]\n]+\]\]|\[[^\]\n]+\]\([^)\n]+\)|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|~~[^~\n]+~~|`[^`\n]+`|\*[^*\n]+\*)',
+  );
 
   /// 把整篇文本切成片段列表。
   static List<MdSegment> parse(String text) {
@@ -96,9 +101,8 @@ class MarkdownStyler {
     // 待办：`- [ ] 事项` / `- [x] 已完成`
     final todo = _todo.firstMatch(line);
     if (todo != null) {
+      final checked = todo.group(1)!.toLowerCase().contains('[x]');
       out.add(MdSegment(todo.group(1)!, MdKind.marker));
-      final checked =
-          todo.group(1)!.toLowerCase().contains('[x]');
       _parseInline(todo.group(2)!, checked ? MdKind.done : MdKind.plain, out);
       return;
     }
@@ -165,34 +169,81 @@ class MarkdownStyler {
       }
       final token = m.group(0)!;
       switch (token.substring(0, 1)) {
+        case '[':
+          if (token.startsWith('[[')) {
+            out
+              ..add(const MdSegment('[[', MdKind.marker))
+              ..add(
+                MdSegment(
+                  token.substring(2, token.length - 2),
+                  inline ? MdKind.link : fallback,
+                ),
+              )
+              ..add(const MdSegment(']]', MdKind.marker));
+          } else {
+            final close = token.indexOf('](');
+            out
+              ..add(const MdSegment('[', MdKind.marker))
+              ..add(
+                MdSegment(
+                  token.substring(1, close),
+                  inline ? MdKind.link : fallback,
+                ),
+              )
+              ..add(
+                MdSegment(token.substring(close, token.length), MdKind.marker),
+              );
+          }
         case '`':
           out
             ..add(const MdSegment('`', MdKind.marker))
-            ..add(MdSegment(
-              token.substring(1, token.length - 1),
-              inline ? MdKind.code : fallback,
-            ))
+            ..add(
+              MdSegment(
+                token.substring(1, token.length - 1),
+                inline ? MdKind.code : fallback,
+                const {MdKind.code},
+              ),
+            )
             ..add(const MdSegment('`', MdKind.marker));
         case '~':
-          out
-            ..add(const MdSegment('~~', MdKind.marker))
-            ..add(MdSegment(
-              token.substring(2, token.length - 2),
-              inline ? MdKind.strike : fallback,
-            ))
-            ..add(const MdSegment('~~', MdKind.marker));
+          out.add(const MdSegment('~~', MdKind.marker));
+          final inner = <MdSegment>[];
+          _parseInline(token.substring(2, token.length - 2), fallback, inner);
+          for (final part in inner) {
+            out.add(
+              MdSegment(
+                part.text,
+                part.kind == MdKind.plain ? MdKind.strike : part.kind,
+                {...part.formats, MdKind.strike},
+              ),
+            );
+          }
+          out.add(const MdSegment('~~', MdKind.marker));
         case '*':
-          final doubled = token.startsWith('**');
-          final mark = doubled ? '**' : '*';
-          out
-            ..add(MdSegment(mark, MdKind.marker))
-            ..add(MdSegment(
-              token.substring(mark.length, token.length - mark.length),
-              inline
-                  ? (doubled ? MdKind.bold : MdKind.italic)
-                  : fallback,
-            ))
-            ..add(MdSegment(mark, MdKind.marker));
+          // Triple-star Markdown is bold italic; match it before ** and *.
+          final triple = token.startsWith('***');
+          final doubled = !triple && token.startsWith('**');
+          final mark = triple ? '***' : (doubled ? '**' : '*');
+          final format = triple
+              ? MdKind.boldItalic
+              : (doubled ? MdKind.bold : MdKind.italic);
+          final nested = <MdSegment>[];
+          _parseInline(
+            token.substring(mark.length, token.length - mark.length),
+            fallback,
+            nested,
+          );
+          out.add(MdSegment(mark, MdKind.marker));
+          for (final part in nested) {
+            out.add(
+              MdSegment(
+                part.text,
+                inline && part.kind == MdKind.plain ? format : part.kind,
+                {...part.formats, format},
+              ),
+            );
+          }
+          out.add(MdSegment(mark, MdKind.marker));
         default:
           out.add(MdSegment(token, fallback));
       }

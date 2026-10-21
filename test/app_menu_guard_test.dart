@@ -107,4 +107,55 @@ void main() {
       expect(await f, label);
     }
   });
+
+  testWidgets('嵌套窗口菜单使用局部坐标并跟随窗口尺寸变化', (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final buttonKey = GlobalKey();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: Padding(
+            padding: const EdgeInsets.only(left: 150, top: 100),
+            child: Navigator(
+              onGenerateRoute: (_) => MaterialPageRoute<void>(
+                builder: (context) => Scaffold(
+                  body: Align(
+                    alignment: Alignment.topCenter,
+                    child: TextButton(
+                      key: buttonKey,
+                      onPressed: () => showAppMenu<String>(
+                        context,
+                        anchor: AppMenuAnchor(
+                          context: buttonKey.currentContext,
+                        ),
+                        items: items(['定位测试']),
+                      ),
+                      child: const Text('打开定位菜单'),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('打开定位菜单'));
+    await tester.pumpAndSettle();
+    void expectNearButton() {
+      final button = tester.getRect(find.byKey(buttonKey));
+      final menu = tester.getRect(find.byType(PopupMenuItem<String>).first);
+      expect((menu.left - button.left).abs(), lessThan(25));
+      expect((menu.top - button.bottom).abs(), lessThan(25));
+    }
+
+    expectNearButton();
+    tester.view.physicalSize = const Size(1200, 800);
+    await tester.pumpAndSettle();
+    expectNearButton();
+  });
 }

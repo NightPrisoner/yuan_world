@@ -60,14 +60,19 @@ class MediaStats {
 
 const List<_ModuleSpec> _kModules = <_ModuleSpec>[
   _ModuleSpec('overview', '概览', '笔记数、字数、图片等总览', Icons.dashboard_rounded),
-  _ModuleSpec('trend', '写作趋势', '按天/周/月看写作量变化', Icons.bar_chart_rounded),
-  _ModuleSpec('cumulative', '累计增长', '总量随时间的累积曲线', Icons.show_chart_rounded),
+  _ModuleSpec('trend', '发布趋势', '按发布日期统计笔记当前内容', Icons.bar_chart_rounded),
+  _ModuleSpec('cumulative', '累计增长', '所选区间内的累计量', Icons.show_chart_rounded),
   _ModuleSpec('share', '文集分布', '各文集占比与字数', Icons.donut_large_rounded),
   _ModuleSpec('compare', '文件夹对比', '横向比较各文件夹的产出', Icons.compare_arrows_rounded),
   _ModuleSpec('heatmap', '发布热力图', '近一年每天的发布密度', Icons.calendar_month_rounded),
-  _ModuleSpec('hourly', '写作时段', '一天里的发布时段分布', Icons.schedule_rounded),
+  _ModuleSpec('hourly', '发布时段', '一天里的发布时段分布', Icons.schedule_rounded),
   _ModuleSpec('length', '篇幅分布', '笔记长度落在哪些区间', Icons.straighten_rounded),
-  _ModuleSpec('streak', '连续写作', '坚持天数与活跃密度', Icons.local_fire_department_rounded),
+  _ModuleSpec(
+    'streak',
+    '连续发布',
+    '发布天数与活跃密度',
+    Icons.local_fire_department_rounded,
+  ),
   _ModuleSpec('top', '长文排行', '字数最多的笔记', Icons.format_list_numbered_rounded),
   _ModuleSpec('tags', '标签分布', '标签使用频次', Icons.sell_rounded),
   _ModuleSpec('keywords', '高频词', '内容里反复出现的词', Icons.tag_rounded),
@@ -161,6 +166,9 @@ class _StatsPageState extends State<StatsPage> {
 
   /// 上一次见到的隐私空间状态，用于判断要不要重算。
   bool _lastPrivacy = false;
+  int _lastRevision = -1;
+  bool _refreshScheduled = false;
+  int _mediaGeneration = 0;
 
   /// 给两个 `part` 文件里的扩展方法用。
   ///
@@ -173,6 +181,7 @@ class _StatsPageState extends State<StatsPage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       _restoreConfig();
       _load();
     });
@@ -186,14 +195,21 @@ class _StatsPageState extends State<StatsPage> {
         values.firstWhere((v) => v.name == name, orElse: () => fallback);
 
     setState(() {
-      _range = byName(StatsRange.values, repo.getSetting('stats.range'), _range);
+      _range = byName(
+        StatsRange.values,
+        repo.getSetting('stats.range'),
+        _range,
+      );
       _granularity = byName(
         StatsGranularity.values,
         repo.getSetting('stats.granularity'),
         _granularity,
       );
-      _metric =
-          byName(TrendMetric.values, repo.getSetting('stats.metric'), _metric);
+      _metric = byName(
+        TrendMetric.values,
+        repo.getSetting('stats.metric'),
+        _metric,
+      );
       _trendStyle = byName(
         TrendStyle.values,
         repo.getSetting('stats.trendStyle'),
@@ -240,14 +256,14 @@ class _StatsPageState extends State<StatsPage> {
       }
 
       _collectionIds = (repo.getSetting('stats.collectionIds') ?? '')
-        .split(',')
-        .map(int.tryParse)
-        .whereType<int>()
-        .toList();
-    if (_collectionIds.isEmpty) {
-      final one = int.tryParse(repo.getSetting('stats.collectionId') ?? '');
-      if (one != null) _collectionIds = <int>[one];
-    }
+          .split(',')
+          .map(int.tryParse)
+          .whereType<int>()
+          .toList();
+      if (_collectionIds.isEmpty) {
+        final one = int.tryParse(repo.getSetting('stats.collectionId') ?? '');
+        if (one != null) _collectionIds = <int>[one];
+      }
       _from = DateTime.tryParse(repo.getSetting('stats.from') ?? '');
       _to = DateTime.tryParse(repo.getSetting('stats.to') ?? '');
 
@@ -305,8 +321,7 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   /// 当前实际显示的模块 id，按用户顺序。
-  List<String> get _visibleModules =>
-      _orderedIds().where(_show).toList();
+  List<String> get _visibleModules => _orderedIds().where(_show).toList();
 
   /// 拖拽排序。真正的排序逻辑在 [applyModuleReorder] 里，这里只负责落地。
   ///
@@ -327,7 +342,9 @@ class _StatsPageState extends State<StatsPage> {
 
   void _load() {
     final state = context.read<AppState>();
-    final stats = _stats ??= StatsRepository(state.db);
+    _lastRevision = state.dataRevision;
+    _lastPrivacy = state.privacyMode;
+    final stats = _stats = StatsRepository(state.db);
     final q = _query;
 
     // 口径变了，缓存必须作废
@@ -339,7 +356,6 @@ class _StatsPageState extends State<StatsPage> {
       // 概览也走 _query：勾了文件夹就只算这几个
       _overview = stats.overview(query: q);
       // 磁盘扫描比较慢（要遍历整个图片目录），只在加载时做一次
-      _mediaStats = _scanMedia();
       _dbBytes = _dbBytesOf(state.db);
       _trend = stats.trend(query: q, granularity: _granularity);
       _cumulative = stats.cumulative(query: q, granularity: _granularity);
@@ -357,6 +373,7 @@ class _StatsPageState extends State<StatsPage> {
       _comparisons = stats.compareCollections(query: q);
       _loading = false;
     });
+    _refreshMedia();
   }
 
   /// 热力图在"全部"时要靠数据的实际跨度才知道画到哪儿。
@@ -367,11 +384,9 @@ class _StatsPageState extends State<StatsPage> {
       _densityTo = null;
       return;
     }
-    final span = stats.dataSpan(
-      query: q.copyWith(clearFrom: true, clearTo: true),
-    );
+    final span = stats.dataSpan(query: q);
     _densityFrom = q.from ?? span.first;
-    _densityTo = q.to ?? span.last;
+    _densityTo = q.to ?? span.last ?? (q.from != null ? DateTime.now() : null);
   }
 
   /// 换筛选条件只需要重算与筛选相关的部分，
@@ -422,9 +437,7 @@ class _StatsPageState extends State<StatsPage> {
   /// `hiddenOnly` 跟着隐私空间走：**统计也要数据隔离**，
   /// 否则进了隐私空间看到的还是外面的数字。
   StatsQuery get _query => StatsQuery(
-    from: _range == StatsRange.custom
-        ? _from
-        : _range.since(DateTime.now()),
+    from: _range == StatsRange.custom ? _from : _range.since(DateTime.now()),
     to: _range == StatsRange.custom ? _to : null,
     collectionIds: _collectionIds,
     collectionId: _collectionId,
@@ -470,11 +483,10 @@ class _StatsPageState extends State<StatsPage> {
   List<TrendSeries>? _trendSeriesCache;
   List<TrendSeries>? _cumulativeSeriesCache;
 
-  List<TrendSeries> get _trendSeries =>
-      _trendSeriesCache ??= _seriesFor(
-        (q) => _stats!.trend(query: q, granularity: _granularity),
-        (p) => p.notes,
-      );
+  List<TrendSeries> get _trendSeries => _trendSeriesCache ??= _seriesFor(
+    (q) => _stats!.trend(query: q, granularity: _granularity),
+    (p) => p.notes,
+  );
 
   /// 每个选区一条序列。选了 N 个文件夹就返回 N 条。
   ///
@@ -570,16 +582,15 @@ class _StatsPageState extends State<StatsPage> {
                 label: p.label,
                 notes: p.notes,
                 chars: p.chars,
-                words: 0,
-                images: 0,
+                words: p.words,
+                images: p.images,
+                videos: p.videos,
               ),
           ],
         );
 
     if (_collectionIds.isEmpty) {
-      return <TrendSeries>[
-        wrap('全部', context.colors.tint, _cumulative),
-      ];
+      return <TrendSeries>[wrap('全部', context.colors.tint, _cumulative)];
     }
 
     final all = context.read<AppState>().collections;
@@ -621,8 +632,14 @@ class _StatsPageState extends State<StatsPage> {
 
   /// 文件夹没设颜色时的兜底配色。
   static const List<int> _seriesPalette = <int>[
-    0xFF3B82F6, 0xFFEF4444, 0xFF10B981, 0xFFF59E0B,
-    0xFF8B5CF6, 0xFFEC4899, 0xFF06B6D4, 0xFF84CC16,
+    0xFF3B82F6,
+    0xFFEF4444,
+    0xFF10B981,
+    0xFFF59E0B,
+    0xFF8B5CF6,
+    0xFFEC4899,
+    0xFF06B6D4,
+    0xFF84CC16,
   ];
 
   Future<void> _pickCustomRange() async {
@@ -661,9 +678,13 @@ class _StatsPageState extends State<StatsPage> {
 
     // 进出隐私空间等于换了数据源，必须重算一遍 ——
     // 只靠 watch 触发重建的话，界面会拿着旧数字给人看
-    if (state.privacyMode != _lastPrivacy) {
-      _lastPrivacy = state.privacyMode;
+    if (!_loading &&
+        !_refreshScheduled &&
+        (state.privacyMode != _lastPrivacy ||
+            state.dataRevision != _lastRevision)) {
+      _refreshScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        _refreshScheduled = false;
         if (mounted) _load();
       });
     }
@@ -709,9 +730,7 @@ class _StatsPageState extends State<StatsPage> {
       return <Widget>[
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 110),
-          sliver: SliverToBoxAdapter(
-            child: centered(_allHiddenCard(c)),
-          ),
+          sliver: SliverToBoxAdapter(child: centered(_allHiddenCard(c))),
         ),
       ];
     }
@@ -725,10 +744,7 @@ class _StatsPageState extends State<StatsPage> {
           itemBuilder: (context, i) => KeyedSubtree(
             key: ValueKey<String>(visible[i]),
             child: centered(
-              _DragHandleScope(
-                index: i,
-                child: _moduleWidget(visible[i], c),
-              ),
+              _DragHandleScope(index: i, child: _moduleWidget(visible[i], c)),
             ),
           ),
         ),
@@ -739,45 +755,39 @@ class _StatsPageState extends State<StatsPage> {
   /// 按 id 造出单个模块卡片。
   Widget _moduleWidget(String id, AppColors c) => switch (id) {
     'overview' => _cached('overview', (c, _overview), () => _overviewCard(c)),
-    'trend' => _cached(
-      'trend',
-      (
-        c,
-        _trend,
-        _metric,
-        _trendStyle,
-        _showDots,
-        _smooth,
-        _showGrid,
-        _zoom,
-        _viewStart,
-        _granularity,
-      ),
-      () => _trendCard(c),
-    ),
-    'cumulative' => _cached(
-      'cumulative',
-      (
-        c,
-        _cumulative,
-        _cumMetric,
-        _cumStyle,
-        _showDots,
-        _smooth,
-        _showGrid,
-        _zoom,
-        _viewStart,
-        _granularity,
-      ),
-      () => _cumulativeCard(c),
-    ),
+    'trend' => _cached('trend', (
+      c,
+      _trend,
+      _metric,
+      _trendStyle,
+      _showDots,
+      _smooth,
+      _showGrid,
+      _zoom,
+      _viewStart,
+      _granularity,
+    ), () => _trendCard(c)),
+    'cumulative' => _cached('cumulative', (
+      c,
+      _cumulative,
+      _cumMetric,
+      _cumStyle,
+      _showDots,
+      _smooth,
+      _showGrid,
+      _zoom,
+      _viewStart,
+      _granularity,
+    ), () => _cumulativeCard(c)),
     'share' => _cached('share', (c, _share, _shareStyle), () => _shareCard(c)),
     'compare' => _cached('compare', (c, _comparisons), () => _compareCard(c)),
-    'heatmap' => _cached(
-      'heatmap',
-      (c, _density, _range, _from, _to),
-      () => _heatmapCard(c),
-    ),
+    'heatmap' => _cached('heatmap', (
+      c,
+      _density,
+      _range,
+      _from,
+      _to,
+    ), () => _heatmapCard(c)),
     'hourly' => _cached('hourly', (c, _hourly, _weekday), () => _hourlyCard(c)),
     'length' => _cached(
       'length',
@@ -791,16 +801,20 @@ class _StatsPageState extends State<StatsPage> {
     'tags' => _cached('tags', (c, _tags), () => _tagsCard(c)),
     'keywords' => _cached('keywords', (c, _keywords), () => _keywordsCard(c)),
     // 参数统计自己会去查库，隐私空间一换必须重来
-    'fields' => _cached(
-      'fields',
-      (c, context.read<AppState>().privacyMode),
-      () => _fieldsCard(c),
-    ),
-    'storage' => _cached(
-      'storage',
-      (c, _mediaStats, _dbBytes),
-      () => _storageCard(c),
-    ),
+    'fields' => _cached('fields', (
+      c,
+      _range,
+      _from,
+      _to,
+      _collectionIds,
+      _lastPrivacy,
+      _lastRevision,
+    ), () => _fieldsCard(c)),
+    'storage' => _cached('storage', (
+      c,
+      _mediaStats,
+      _dbBytes,
+    ), () => _storageCard(c)),
     _ => const SizedBox.shrink(),
   };
 
@@ -839,16 +853,23 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   /// 数一遍图片目录：图片、视频各多少，一共占多少字节。
-  MediaStats _scanMedia() {
+  Future<void> _refreshMedia() async {
+    final generation = ++_mediaGeneration;
+    final root = context.read<AppState>().db.imageRoot;
+    final media = await _scanMedia(root);
+    if (!mounted || generation != _mediaGeneration) return;
+    setState(() => _mediaStats = media);
+  }
+
+  Future<MediaStats> _scanMedia(Directory root) async {
     var images = 0;
     var videos = 0;
     var bytes = 0;
     try {
-      final root = context.read<AppState>().db.imageRoot;
-      if (!root.existsSync()) {
+      if (!await root.exists()) {
         return const MediaStats(images: 0, videos: 0, bytes: 0);
       }
-      for (final e in root.listSync(recursive: true, followLinks: false)) {
+      await for (final e in root.list(recursive: true, followLinks: false)) {
         if (e is! File) continue;
         final ext = e.path.split('.').last.toLowerCase();
         if (MediaImporter.videoExts.contains(ext)) {
@@ -859,7 +880,7 @@ class _StatsPageState extends State<StatsPage> {
           continue;
         }
         try {
-          bytes += e.lengthSync().round();
+          bytes += await e.length();
         } catch (_) {
           // 单个文件读不到长度就跳过，不能让整个统计挂掉
         }
@@ -885,7 +906,9 @@ class _StatsPageState extends State<StatsPage> {
   /// 按钮却说全部，这个谎话比不显示还糟。
   String get _folderLabel {
     if (_collectionIds.isEmpty) return '全部文件夹';
-    if (_collectionIds.length == 1) return _collectionName(_collectionIds.first);
+    if (_collectionIds.length == 1) {
+      return _collectionName(_collectionIds.first);
+    }
     return '已选 ${_collectionIds.length} 个文件夹';
   }
 
@@ -947,23 +970,28 @@ class _StatsPageState extends State<StatsPage> {
   /// 放大到某几个月时，那几个月之间的高低差才撑得开。
   ({List<TrendPoint> axis, List<TrendSeries> series}) _windowTrend(
     List<TrendPoint> axisAll,
-    List<TrendSeries> seriesAll,
-  ) {
-    if (_zoom <= 1) return (axis: axisAll, series: seriesAll);
+    List<TrendSeries> seriesAll, {
+    bool cumulative = false,
+  }) {
     final w = trendWindow(axisAll.length, _zoom, _viewStart);
+    final axis = sliceRange(axisAll, w.start, w.end);
+    final groupSize = math.max(1, (axis.length / 600).ceil());
     return (
-      axis: sliceRange(axisAll, w.start, w.end),
+      axis: compactTrendPoints(axis, groupSize, cumulative: cumulative),
       series: <TrendSeries>[
         for (final s in seriesAll)
           TrendSeries(
             label: s.label,
             color: s.color,
-            points: sliceRange(s.points, w.start, w.end),
+            points: compactTrendPoints(
+              sliceRange(s.points, w.start, w.end),
+              groupSize,
+              cumulative: cumulative,
+            ),
           ),
       ],
     );
   }
-
 }
 
 // ── 通用小部件 ────────────────────────────────────────────────────────────

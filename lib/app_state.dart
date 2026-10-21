@@ -19,12 +19,16 @@ import 'data/repositories/note_repository.dart';
 import 'data/repositories/todo_repository.dart';
 
 class AppState extends ChangeNotifier {
-  AppState(this.db, this.repo, this.importer)
-      : todos = TodoRepository(db);
+  AppState(this.db, this.repo, this.importer) : todos = TodoRepository(db);
 
   final AppDatabase db;
   final NoteRepository repo;
   final ImportService importer;
+
+  int _dataRevision = 0;
+
+  /// 数据刷新版本。布局、主题等偏好通知不触发统计重算。
+  int get dataRevision => _dataRevision;
 
   /// 备份/恢复。数据层的纯 Dart 服务，UI 只是它的一个入口。
   late final BackupService backup = BackupService(db);
@@ -54,6 +58,7 @@ class AppState extends ChangeNotifier {
       // 备份失败（磁盘满、没权限）不该挡住启动；下次启动再试
     }
   }
+
   final TodoRepository todos;
 
   // ── 状态 ────────────────────────────────────────────────────────────────
@@ -222,6 +227,7 @@ class AppState extends ChangeNotifier {
 
   /// 重新拉取列表与侧边数据。
   Future<void> refresh() async {
+    _dataRevision++;
     _collections = _visibleCollections();
     _tags = repo.allTags(hiddenOnly: _privacyMode);
     _notes = repo.listNotes(_effectiveFilter);
@@ -230,12 +236,14 @@ class AppState extends ChangeNotifier {
   }
 
   /// 只刷新列表（筛选变化时用，避免重算文集统计）。
-  void refreshListOnly() {
+  void refreshListOnly({bool notify = true, bool dataChanged = false}) {
+    if (dataChanged) _dataRevision++;
     _notes = repo.listNotes(_effectiveFilter);
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   Future<void> refreshOverview() async {
+    _dataRevision++;
     _overview = repo.overview(hiddenOnly: _privacyMode);
     _collections = _visibleCollections();
     _tags = repo.allTags(hiddenOnly: _privacyMode);
@@ -249,7 +257,18 @@ class AppState extends ChangeNotifier {
   /// 都走这里而不是让页面直接摸 repo：改完必须重算标签列表和笔记列表
   /// （合并之后旧标签没了、计数也变了），漏一次界面就和数据库对不上。
   Future<void> renameTag(int id, String name) async {
-    repo.renameTag(id, name);
+    final selected = repo
+        .allTags(hiddenOnly: _privacyMode)
+        .where((t) => t.id == id)
+        .firstOrNull;
+    final renamedId = repo.renameTag(id, name);
+    if (selected != null && _filter.tag == selected.name) {
+      final renamed = repo
+          .allTags(hiddenOnly: _privacyMode)
+          .where((t) => t.id == renamedId)
+          .firstOrNull;
+      if (renamed != null) _filter = _filter.copyWith(tag: renamed.name);
+    }
     await refresh();
   }
 
@@ -298,9 +317,9 @@ class AppState extends ChangeNotifier {
   /// 当前该显示哪些文件夹。
   List<Collection> _visibleCollections() => _privacyMode
       ? repo
-          .allCollections(includeHidden: true)
-          .where((c) => c.isHidden)
-          .toList()
+            .allCollections(includeHidden: true)
+            .where((c) => c.isHidden)
+            .toList()
       : repo.allCollections();
 
   // ── 筛选 ────────────────────────────────────────────────────────────────
@@ -345,9 +364,8 @@ class AppState extends ChangeNotifier {
   /// 「收藏 且 未分类」两个条件同时成立 —— 侧栏里两行**同时高亮**
   /// （用户截到的就是这个），列表也几乎一定是空的。
   /// 侧栏这些入口是**互斥**的：点谁就是只看谁。
-  void selectUncategorized() => setFilter(
-    NoteFilter(uncategorizedOnly: true, sort: _filter.sort),
-  );
+  void selectUncategorized() =>
+      setFilter(NoteFilter(uncategorizedOnly: true, sort: _filter.sort));
 
   /// 回到「全部笔记」。
   void selectAll() => setFilter(NoteFilter(sort: _filter.sort));
@@ -359,10 +377,7 @@ class AppState extends ChangeNotifier {
   void toggleFavorites() => setFilter(
     _filter.favoritesOnly
         ? const NoteFilter().copyWith(sort: _filter.sort)
-        : NoteFilter(
-            favoritesOnly: true,
-            sort: _filter.sort,
-          ),
+        : NoteFilter(favoritesOnly: true, sort: _filter.sort),
   );
 
   // ── 文集（文件夹）管理 ──────────────────────────────────────────────────
@@ -374,7 +389,16 @@ class AppState extends ChangeNotifier {
     int? parentId,
   }) async {
     final id = repo.createCollection(name, color: color, parentId: parentId);
-    if (id != null) await refresh();
+    if (id != null) {
+      final parent = repo
+          .allCollections(includeHidden: true)
+          .where((c) => c.id == parentId)
+          .firstOrNull;
+      if (_privacyMode || (parent?.isHidden ?? false)) {
+        repo.setCollectionHidden(id, true);
+      }
+      await refresh();
+    }
     return id;
   }
 
@@ -434,16 +458,17 @@ class AppState extends ChangeNotifier {
   FieldRepository get fields => _fields ??= FieldRepository(db);
 
   /// 参数定义被改动后叫一声，让依赖它的界面重建。
-  void notifyDataChanged() => notifyListeners();
+  void notifyDataChanged() {
+    _dataRevision++;
+    notifyListeners();
+  }
 
   /// 是否显示头参数 / 尾参数。
   ///
   /// 默认都开：参数是这套笔记的一部分，阅读时当然要看得到，
   /// 不能只在编辑态露脸。不想看的人可以在设置里单独关掉。
-  bool get headFieldsEnabled =>
-      repo.getSetting('fields.headEnabled') != '0';
-  bool get tailFieldsEnabled =>
-      repo.getSetting('fields.tailEnabled') != '0';
+  bool get headFieldsEnabled => repo.getSetting('fields.headEnabled') != '0';
+  bool get tailFieldsEnabled => repo.getSetting('fields.tailEnabled') != '0';
 
   void setHeadFieldsEnabled(bool v) {
     repo.setSetting('fields.headEnabled', v ? '1' : '0');
@@ -480,7 +505,8 @@ class AppState extends ChangeNotifier {
   }
 
   /// 目录停靠在哪一侧（`left` / `right`）。
-  String get tocSide => repo.getSetting('toc.side') == 'left' ? 'left' : 'right';
+  String get tocSide =>
+      repo.getSetting('toc.side') == 'left' ? 'left' : 'right';
 
   void setTocSide(String side) {
     repo.setSetting('toc.side', side == 'left' ? 'left' : 'right');
@@ -489,8 +515,10 @@ class AppState extends ChangeNotifier {
 
   /// 目录栏宽度，可拖动。
   double get tocWidth =>
-      (double.tryParse(repo.getSetting('toc.width') ?? '') ?? 220)
-          .clamp(160.0, 420.0);
+      (double.tryParse(repo.getSetting('toc.width') ?? '') ?? 220).clamp(
+        160.0,
+        420.0,
+      );
 
   void setTocWidth(double w) =>
       repo.setSetting('toc.width', w.clamp(160.0, 420.0).round().toString());
@@ -560,6 +588,13 @@ class AppState extends ChangeNotifier {
       charCount: 0,
       wordCount: 0,
     );
+    final collection = repo
+        .allCollections(includeHidden: true)
+        .where((c) => c.id == (collectionId ?? _filter.collectionId))
+        .firstOrNull;
+    if (_privacyMode || (collection?.isHidden ?? false)) {
+      repo.setNoteHidden(id, true);
+    }
     return id;
   }
 

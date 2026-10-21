@@ -79,13 +79,13 @@ void main() {
 
     for (final title in <String>[
       '概览',
-      '写作趋势',
+      '发布趋势',
       '累计增长',
       '文集分布',
       '发布热力图',
-      '写作时段',
+      '发布时段',
       '篇幅分布',
-      '连续写作',
+      '连续发布',
       '长文排行',
       '标签分布',
       '高频词',
@@ -108,7 +108,7 @@ void main() {
     expect(find.text('40'), findsWidgets);
   });
 
-  testWidgets('写作时段能算出最常写作的小时', (tester) async {
+  testWidgets('发布时段能算出最常写作的小时', (tester) async {
     seed();
     await state.refresh();
     await pumpStats(tester);
@@ -455,7 +455,7 @@ void main() {
 
       final yKeywords = tester.getTopLeft(find.text('高频词')).dy;
       final yOverview = tester.getTopLeft(find.text('概览')).dy;
-      final yTrend = tester.getTopLeft(find.text('写作趋势')).dy;
+      final yTrend = tester.getTopLeft(find.text('发布趋势')).dy;
 
       expect(yKeywords, lessThan(yOverview), reason: '高频词应该排到最前');
       expect(yOverview, lessThan(yTrend));
@@ -469,7 +469,7 @@ void main() {
       state.repo.setSetting('stats.order', '["keywords","overview"]');
       await pumpStats(tester);
 
-      for (final title in <String>['高频词', '概览', '写作趋势', '文件夹对比', '连续写作']) {
+      for (final title in <String>['高频词', '概览', '发布趋势', '文件夹对比', '连续发布']) {
         expect(find.text(title), findsWidgets, reason: '「$title」不该被丢掉');
       }
     });
@@ -496,7 +496,7 @@ void main() {
       await pumpStats(tester);
 
       expect(find.text('概览'), findsWidgets);
-      expect(find.text('写作趋势'), findsWidgets);
+      expect(find.text('发布趋势'), findsWidgets);
     });
   });
 
@@ -514,7 +514,7 @@ void main() {
     await state.refresh();
     await pumpStats(tester);
 
-    expect(find.text('写作趋势'), findsWidgets);
+    expect(find.text('发布趋势'), findsWidgets);
 
     await tester.tap(find.byTooltip('选择要显示的模块'));
     await tester.pumpAndSettle();
@@ -526,7 +526,7 @@ void main() {
     final dialog = find.byType(Dialog);
     final row = find
         .ancestor(
-          of: find.descendant(of: dialog, matching: find.text('写作趋势')),
+          of: find.descendant(of: dialog, matching: find.text('发布趋势')),
           matching: find.byType(Row),
         )
         .first;
@@ -535,7 +535,7 @@ void main() {
     await tester.tap(find.text('完成'));
     await tester.pumpAndSettle();
 
-    expect(find.text('写作趋势'), findsNothing);
+    expect(find.text('发布趋势'), findsNothing);
     // 偏好已经落库，下次打开还是这样
     expect(state.repo.getSetting('stats.hidden'), contains('trend'));
   });
@@ -559,7 +559,7 @@ void main() {
 
     expect(yOf('高频词'), lessThan(yOf('概览')),
         reason: '面板里也要按用户排的顺序显示');
-    expect(yOf('概览'), lessThan(yOf('写作趋势')));
+    expect(yOf('概览'), lessThan(yOf('发布趋势')));
   });
 
   testWidgets('面板里的模块可以拖拽（把手挂在可拖拽列表上）', (tester) async {

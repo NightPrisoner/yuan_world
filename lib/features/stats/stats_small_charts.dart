@@ -3,6 +3,7 @@
 /// 这里是 `stats_charts.dart` 的一部分（`part of`），理由见
 /// stats_trend_chart.dart 的说明。
 part of 'stats_charts.dart';
+
 class HourlyChart extends StatelessWidget {
   const HourlyChart({super.key, required this.hours});
 
@@ -25,9 +26,8 @@ class HourlyChart extends StatelessWidget {
             touchTooltipData: BarTouchTooltipData(
               fitInsideHorizontally: true,
               fitInsideVertically: true,
-              getTooltipColor: (_) => c.isDark
-                  ? const Color(0xFF2C2C2E)
-                  : const Color(0xFF1C1C1E),
+              getTooltipColor: (_) =>
+                  c.isDark ? const Color(0xFF2C2C2E) : const Color(0xFF1C1C1E),
               getTooltipItem: (group, gi, rod, ri) => BarTooltipItem(
                 '${group.x.toString().padLeft(2, '0')}:00\n',
                 AppText.caption2.copyWith(color: Colors.white70),
@@ -44,9 +44,15 @@ class HourlyChart extends StatelessWidget {
             ),
           ),
           titlesData: FlTitlesData(
-            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            leftTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
             bottomTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
@@ -58,7 +64,9 @@ class HourlyChart extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
                       '$h时',
-                      style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+                      style: AppText.caption2.copyWith(
+                        color: c.quaternaryLabel,
+                      ),
                     ),
                   );
                 },
@@ -183,10 +191,9 @@ class LengthHistogram extends StatelessWidget {
     final total = buckets.fold<int>(0, (s, b) => s + b.count);
 
     // 柱子必须从 0 起：柱长就是它的语义，截断基线等于撒谎
-    final y = trendYRange(
-      <double>[for (final b in buckets) b.count.toDouble()],
-      forceZeroBase: true,
-    );
+    final y = trendYRange(<double>[
+      for (final b in buckets) b.count.toDouble(),
+    ], forceZeroBase: true);
 
     return SizedBox(
       height: 170,
@@ -199,15 +206,15 @@ class LengthHistogram extends StatelessWidget {
             touchTooltipData: BarTouchTooltipData(
               fitInsideHorizontally: true,
               fitInsideVertically: true,
-              getTooltipColor: (_) => c.isDark
-                  ? const Color(0xFF2C2C2E)
-                  : const Color(0xFF1C1C1E),
+              getTooltipColor: (_) =>
+                  c.isDark ? const Color(0xFF2C2C2E) : const Color(0xFF1C1C1E),
               getTooltipItem: (group, gi, rod, ri) => BarTooltipItem(
                 '${buckets[group.x].label}\n',
                 AppText.caption2.copyWith(color: Colors.white70),
                 children: [
                   TextSpan(
-                    text: '${buckets[group.x].count} 篇'
+                    text:
+                        '${buckets[group.x].count} 篇'
                         '${total == 0 ? '' : '（${(buckets[group.x].count / total * 100).round()}%）'}',
                     style: AppText.footnote.copyWith(
                       color: Colors.white,
@@ -219,8 +226,12 @@ class LengthHistogram extends StatelessWidget {
             ),
           ),
           titlesData: FlTitlesData(
-            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
@@ -255,8 +266,9 @@ class LengthHistogram extends StatelessWidget {
                         for (final p in parts)
                           Text(
                             p,
-                            style:
-                                AppText.caption2.copyWith(color: c.quaternaryLabel),
+                            style: AppText.caption2.copyWith(
+                              color: c.quaternaryLabel,
+                            ),
                           ),
                       ],
                     ),
@@ -290,7 +302,10 @@ class LengthHistogram extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
-                      colors: [c.palette[4].withValues(alpha: 0.5), c.palette[4]],
+                      colors: [
+                        c.palette[4].withValues(alpha: 0.5),
+                        c.palette[4],
+                      ],
                     ),
                   ),
                 ],

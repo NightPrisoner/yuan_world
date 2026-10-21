@@ -24,7 +24,7 @@ extension _WsFolders on _DesktopWorkspaceState {
     final collapsed = _collapsed.contains(col.id);
     // 小三角要**立刻**翻过来：真等到动画播完再翻，点下去像没反应
     final showsCollapsed = collapsed || _collapsing.contains(col.id);
-    return _TreeReveal(
+    return FolderTreeReveal(
       // 每一行的动画状态跟着自己的文件夹 id 走：列表会在动画期间增删行，
       // 不挂 key 的话 element 顺位复用会把"别人播到 0 的状态"塞给这一行。
       key: ValueKey<int>(col.id),

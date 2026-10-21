@@ -40,10 +40,12 @@ Future<void> showVersionEgg(BuildContext context) => Navigator.of(context).push(
     transitionDuration: AppMotion.page,
     reverseTransitionDuration: AppMotion.page,
     pageBuilder: (_, _, _) => const VersionEggPage(),
-    transitionsBuilder: (_, anim, _, child) => FadeTransition(
-      opacity: CurvedAnimation(parent: anim, curve: AppMotion.enter),
-      child: child,
-    ),
+    transitionsBuilder: (ctx, anim, _, child) => AppMotion.reduceMotion(ctx)
+        ? child
+        : FadeTransition(
+            opacity: anim.drive(CurveTween(curve: AppMotion.enter)),
+            child: child,
+          ),
   ),
 );
 

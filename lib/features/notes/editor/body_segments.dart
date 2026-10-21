@@ -7,7 +7,7 @@
 /// 每次编辑都会悄悄改坏用户的正文。所以这套逻辑写成纯函数并单独测。
 library;
 
-import '../../../data/media/media_importer.dart';
+import '../../../data/media/media_counts.dart';
 
 /// 一段正文。
 sealed class BodySegment {
@@ -20,8 +20,7 @@ class TextSegment extends BodySegment {
   final String text;
 
   @override
-  bool operator ==(Object other) =>
-      other is TextSegment && other.text == text;
+  bool operator ==(Object other) => other is TextSegment && other.text == text;
 
   @override
   int get hashCode => text.hashCode;
@@ -110,10 +109,12 @@ List<BodySegment> ensureTextSegment(List<BodySegment> segments) {
 
 /// 拼回。与 [splitBodySegments] 严格互逆。
 String joinBodySegments(List<BodySegment> segments) => segments
-    .map((s) => switch (s) {
-          TextSegment(:final text) => text,
-          ImageSegment(:final raw) => raw,
-        })
+    .map(
+      (s) => switch (s) {
+        TextSegment(:final text) => text,
+        ImageSegment(:final raw) => raw,
+      },
+    )
     .join('\n');
 
 /// 图片段的展示位置（第几张图），用于显示 "图 1 / 3"。
@@ -138,15 +139,5 @@ int mediaCountOf(String markdown) => imageCountOf(splitBodySegments(markdown));
 ///
 /// 详情页那行要分别显示，用户才知道"2 图 1 视频"而不是笼统的"3 个"。
 ({int images, int videos}) mediaBreakdown(String markdown) {
-  var images = 0;
-  var videos = 0;
-  for (final seg in splitBodySegments(markdown)) {
-    if (seg is! ImageSegment) continue;
-    if (MediaImporter.isVideo(seg.path)) {
-      videos++;
-    } else {
-      images++;
-    }
-  }
-  return (images: images, videos: videos);
+  return countNoteMedia(markdown);
 }

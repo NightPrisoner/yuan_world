@@ -18,4 +18,3 @@ part 'stats_heatmap.dart';
 part 'stats_small_charts.dart';
 part 'stats_share_chart.dart';
 part 'stats_trend_chart.dart';
-

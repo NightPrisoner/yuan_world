@@ -30,29 +30,34 @@ class AppRefresh {
       onRefresh: onRefresh,
       refreshTriggerPullDistance: 92,
       refreshIndicatorExtent: 56,
-      builder: (
-        context,
-        mode,
-        pulledExtent,
-        refreshTriggerPullDistance,
-        refreshIndicatorExtent,
-      ) {
-        final t = (pulledExtent / refreshTriggerPullDistance).clamp(0.0, 1.0);
-        final spinning = mode == RefreshIndicatorMode.refresh ||
-            mode == RefreshIndicatorMode.armed;
-        // 指示器随下拉淡入，避免一冒头就很突兀
-        final opacity = switch (mode) {
-          RefreshIndicatorMode.inactive => 0.0,
-          RefreshIndicatorMode.drag => t,
-          _ => 1.0,
-        };
-        return Center(
-          child: Opacity(
-            opacity: opacity,
-            child: _RefreshRing(progress: t, spinning: spinning),
-          ),
-        );
-      },
+      builder:
+          (
+            context,
+            mode,
+            pulledExtent,
+            refreshTriggerPullDistance,
+            refreshIndicatorExtent,
+          ) {
+            final t = (pulledExtent / refreshTriggerPullDistance).clamp(
+              0.0,
+              1.0,
+            );
+            final spinning =
+                mode == RefreshIndicatorMode.refresh ||
+                mode == RefreshIndicatorMode.armed;
+            // 指示器随下拉淡入，避免一冒头就很突兀
+            final opacity = switch (mode) {
+              RefreshIndicatorMode.inactive => 0.0,
+              RefreshIndicatorMode.drag => t,
+              _ => 1.0,
+            };
+            return Center(
+              child: Opacity(
+                opacity: opacity,
+                child: _RefreshRing(progress: t, spinning: spinning),
+              ),
+            );
+          },
     );
   }
 }
@@ -189,11 +194,14 @@ class EmptyHint extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 48),
         child: TweenAnimationBuilder<double>(
           tween: Tween<double>(begin: 0, end: 1),
-          duration: AppMotion.normal,
+          duration: AppMotion.respecting(context, AppMotion.normal),
           curve: AppMotion.enter,
           builder: (context, t, child) => Opacity(
             opacity: t,
-            child: Transform.translate(offset: Offset(0, (1 - t) * 10), child: child),
+            child: Transform.translate(
+              offset: Offset(0, (1 - t) * 10),
+              child: child,
+            ),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,

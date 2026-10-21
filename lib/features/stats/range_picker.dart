@@ -79,13 +79,11 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
 
   static DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  void _shiftMonth(int delta) => setState(
-    () => _month = DateTime(_month.year, _month.month + delta),
-  );
+  void _shiftMonth(int delta) =>
+      setState(() => _month = DateTime(_month.year, _month.month + delta));
 
-  void _shiftYear(int delta) => setState(
-    () => _month = DateTime(_month.year + delta, _month.month),
-  );
+  void _shiftYear(int delta) =>
+      setState(() => _month = DateTime(_month.year + delta, _month.month));
 
   /// 点日期：第一次定起点，第二次定终点；再点则重新开始。
   void _tapDay(DateTime d) {
@@ -127,13 +125,19 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
 
     final m = RegExp(r'^(\d{4})\D+(\d{1,2})\D+(\d{1,2})$').firstMatch(s);
     if (m != null) {
-      return _safe(int.parse(m.group(1)!), int.parse(m.group(2)!),
-          int.parse(m.group(3)!));
+      return _safe(
+        int.parse(m.group(1)!),
+        int.parse(m.group(2)!),
+        int.parse(m.group(3)!),
+      );
     }
     final compact = RegExp(r'^(\d{4})(\d{2})(\d{2})$').firstMatch(s);
     if (compact != null) {
-      return _safe(int.parse(compact.group(1)!), int.parse(compact.group(2)!),
-          int.parse(compact.group(3)!));
+      return _safe(
+        int.parse(compact.group(1)!),
+        int.parse(compact.group(2)!),
+        int.parse(compact.group(3)!),
+      );
     }
     return null;
   }
@@ -148,10 +152,7 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
 
   void _confirm() {
     if (_start == null) return;
-    Navigator.pop(
-      context,
-      DateTimeRange(start: _start!, end: _end ?? _start!),
-    );
+    Navigator.pop(context, DateTimeRange(start: _start!, end: _end ?? _start!));
   }
 
   @override
@@ -170,10 +171,7 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                '统计时间范围',
-                style: AppText.headline.copyWith(color: c.label),
-              ),
+              Text('统计时间范围', style: AppText.headline.copyWith(color: c.label)),
               const SizedBox(height: 10),
               _modeTabs(c),
               const SizedBox(height: 12),
@@ -246,10 +244,18 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
       children: [
         Row(
           children: [
-            _navBtn(c, Icons.keyboard_double_arrow_left_rounded, '上一年',
-                () => _shiftYear(-1)),
-            _navBtn(c, Icons.chevron_left_rounded, '上一月',
-                () => _shiftMonth(-1)),
+            _navBtn(
+              c,
+              Icons.keyboard_double_arrow_left_rounded,
+              '上一年',
+              () => _shiftYear(-1),
+            ),
+            _navBtn(
+              c,
+              Icons.chevron_left_rounded,
+              '上一月',
+              () => _shiftMonth(-1),
+            ),
             Expanded(
               child: Center(
                 child: Text(
@@ -261,10 +267,18 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
                 ),
               ),
             ),
-            _navBtn(c, Icons.chevron_right_rounded, '下一月',
-                () => _shiftMonth(1)),
-            _navBtn(c, Icons.keyboard_double_arrow_right_rounded, '下一年',
-                () => _shiftYear(1)),
+            _navBtn(
+              c,
+              Icons.chevron_right_rounded,
+              '下一月',
+              () => _shiftMonth(1),
+            ),
+            _navBtn(
+              c,
+              Icons.keyboard_double_arrow_right_rounded,
+              '下一年',
+              () => _shiftYear(1),
+            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -337,7 +351,8 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
     final d = DateTime(_month.year, _month.month, day);
     final isStart = _start != null && _day(_start!) == d;
     final isEnd = _end != null && _day(_end!) == d;
-    final inRange = _start != null &&
+    final inRange =
+        _start != null &&
         _end != null &&
         d.isAfter(_day(_start!)) &&
         d.isBefore(_day(_end!));
@@ -360,9 +375,7 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
         child: Text(
           '$day',
           style: AppText.footnote.copyWith(
-            color: edge
-                ? Colors.white
-                : (d == today ? c.tint : c.label),
+            color: edge ? Colors.white : (d == today ? c.tint : c.label),
             fontWeight: edge || d == today ? FontWeight.w700 : null,
           ),
         ),
@@ -438,7 +451,9 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
         ),
         TextButton(
           // 手打模式走另一条提交路径
-          onPressed: _mode == 0 ? (_start == null ? null : _confirm) : _submitInput,
+          onPressed: _mode == 0
+              ? (_start == null ? null : _confirm)
+              : _submitInput,
           child: const Text('确定'),
         ),
       ],

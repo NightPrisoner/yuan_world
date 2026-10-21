@@ -116,13 +116,21 @@ class _SpringAnimatedValueState extends State<SpringAnimatedValue>
   void didUpdateWidget(covariant SpringAnimatedValue old) {
     super.didUpdateWidget(old);
     if (widget.value != old.value) {
+      if (AppMotion.reduceMotion(context)) {
+        _c.value = widget.value;
+        return;
+      }
       final spring = widget.spring ?? AppMotion.snappy;
       // 继承当前速度，保证连续操作时运动连续
       final current = _c.velocity;
-      _c.animateWith(
-        SpringSimulation(spring, _c.value, widget.value, current),
-      );
+      _c.animateWith(SpringSimulation(spring, _c.value, widget.value, current));
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (AppMotion.reduceMotion(context)) _c.value = widget.value;
   }
 
   @override
@@ -132,11 +140,15 @@ class _SpringAnimatedValueState extends State<SpringAnimatedValue>
   }
 
   @override
-  Widget build(BuildContext context) =>
-      AnimatedBuilder(
-        animation: _c,
-        builder: (c, _) => widget.builder(c, _c.value),
-      );
+  Widget build(BuildContext context) {
+    if (AppMotion.reduceMotion(context)) {
+      return widget.builder(context, widget.value);
+    }
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (c, _) => widget.builder(c, _c.value),
+    );
+  }
 }
 
 /// 鼠标悬停时的"轻微抬起"：上浮一点点 + 轻微放大，用**弹簧**驱动。
@@ -288,7 +300,9 @@ class _PressableState extends State<Pressable> {
     // 但按下去要快、松开稍慢，和缩放的节奏对上
     body = AnimatedOpacity(
       opacity: (!reduce && _down) ? widget.opacity : 1.0,
-      duration: _down
+      duration: reduce
+          ? Duration.zero
+          : _down
           ? const Duration(milliseconds: 90)
           : const Duration(milliseconds: 220),
       curve: _down ? Curves.easeOut : AppMotion.enter,
@@ -306,10 +320,12 @@ class _PressableState extends State<Pressable> {
         onTapCancel: widget.onTap == null ? null : () => _set(false),
         onTap: widget.onTap,
         onLongPress: widget.onLongPress,
-        onSecondaryTapDown:
-            hasSecondary ? (d) => _secondaryAt = d.globalPosition : null,
-        onSecondaryTap:
-            hasSecondary ? () => widget.onSecondaryTap!(_secondaryAt) : null,
+        onSecondaryTapDown: hasSecondary
+            ? (d) => _secondaryAt = d.globalPosition
+            : null,
+        onSecondaryTap: hasSecondary
+            ? () => widget.onSecondaryTap!(_secondaryAt)
+            : null,
         child: body,
       ),
     );

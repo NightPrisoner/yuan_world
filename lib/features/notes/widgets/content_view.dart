@@ -158,9 +158,9 @@ class ContentBlockView extends StatelessWidget {
         };
         return Padding(
           padding: EdgeInsets.only(top: block.level <= 2 ? 20 : 14, bottom: 8),
-          child: Text(
-            block.text,
-            style: AppText.title3.copyWith(
+          child: RichParagraph(
+            text: block.text,
+            base: AppText.title3.copyWith(
               fontSize: size,
               color: c.label,
               height: 1.4,
@@ -186,7 +186,7 @@ class ContentBlockView extends StatelessWidget {
             ),
             child: RichParagraph(
               text: block.text,
-              base: AppText.body.copyWith(color: c.secondaryLabel, height: 1.75),
+              base: AppText.reading.copyWith(color: c.secondaryLabel),
             ),
           ),
         );
@@ -194,22 +194,52 @@ class ContentBlockView extends StatelessWidget {
       case ContentBlockType.bullet:
       case ContentBlockType.ordered:
         return Padding(
-          padding: const EdgeInsets.only(bottom: 8, left: 4),
+          padding: EdgeInsets.only(bottom: 8, left: 4 + block.level * 20.0),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 9, right: 10),
-                child: Container(
-                  width: 5,
-                  height: 5,
-                  decoration: BoxDecoration(
+              if (block.isTodo)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Icon(
+                    block.checked
+                        ? Icons.check_box_rounded
+                        : Icons.check_box_outline_blank_rounded,
+                    size: 18,
                     color: c.tint,
-                    shape: BoxShape.circle,
+                  ),
+                )
+              else if (block.type == ContentBlockType.ordered)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text(
+                    '${block.listNumber ?? block.level + 1}.',
+                    style: AppText.reading.copyWith(color: c.tint),
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(top: 12, right: 10),
+                  child: Container(
+                    width: 5,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: c.tint,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: RichParagraph(
+                  text: block.text,
+                  base: AppText.reading.copyWith(
+                    color: block.isTodo ? c.secondaryLabel : c.label,
+                    decoration: block.isTodo && block.checked
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.none,
                   ),
                 ),
               ),
-              Expanded(child: RichParagraph(text: block.text)),
             ],
           ),
         );
@@ -280,8 +310,11 @@ class ContentBlockView extends StatelessWidget {
       borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
     ),
     child: Center(
-      child: Icon(Icons.image_not_supported_outlined,
-          color: c.tertiaryLabel, size: 22),
+      child: Icon(
+        Icons.image_not_supported_outlined,
+        color: c.tertiaryLabel,
+        size: 22,
+      ),
     ),
   );
 }
@@ -328,7 +361,7 @@ class RichParagraph extends StatelessWidget {
     final re = RegExp(
       r'(\[\[[^\[\]\n]+\]\]'
       r'|\[[^\]]+\]\([^)]+\)|https?://[^\s<>()（）【】]+'
-      r'|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)',
+      r'|\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|`[^`]+`)',
     );
     var last = 0;
     for (final m in re.allMatches(input)) {
@@ -342,21 +375,47 @@ class RichParagraph extends StatelessWidget {
         spans.add(_linkSpan(context, token, base, c));
       } else if (token.startsWith('http')) {
         spans.add(_bareLinkSpan(context, token, base, c));
+      } else if (token.startsWith('***')) {
+        spans.add(
+          TextSpan(
+            text: token.substring(3, token.length - 3),
+            style: base.copyWith(
+              fontWeight: FontWeight.w700,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        );
       } else if (token.startsWith('**')) {
-        spans.add(TextSpan(
-          text: token.substring(2, token.length - 2),
-          style: base.copyWith(fontWeight: FontWeight.w700),
-        ));
+        spans.add(
+          TextSpan(
+            text: token.substring(2, token.length - 2),
+            style: base.copyWith(fontWeight: FontWeight.w700),
+          ),
+        );
+      } else if (token.startsWith('~~')) {
+        spans.add(
+          TextSpan(
+            text: token.substring(2, token.length - 2),
+            style: base.copyWith(decoration: TextDecoration.lineThrough),
+          ),
+        );
       } else if (token.startsWith('`')) {
-        spans.add(TextSpan(
-          text: token.substring(1, token.length - 1),
-          style: base.copyWith(fontFamily: 'Consolas', backgroundColor: c.fill),
-        ));
+        spans.add(
+          TextSpan(
+            text: token.substring(1, token.length - 1),
+            style: base.copyWith(
+              fontFamily: 'Consolas',
+              backgroundColor: c.fill,
+            ),
+          ),
+        );
       } else {
-        spans.add(TextSpan(
-          text: token.substring(1, token.length - 1),
-          style: base.copyWith(fontStyle: FontStyle.italic),
-        ));
+        spans.add(
+          TextSpan(
+            text: token.substring(1, token.length - 1),
+            style: base.copyWith(fontStyle: FontStyle.italic),
+          ),
+        );
       }
       last = m.end;
     }
@@ -410,7 +469,9 @@ class RichParagraph extends StatelessWidget {
             return;
           }
           Navigator.of(context).push(
-            ApplePageRoute<void>(pageBuilder: (_) => NoteDetailPage(noteId: id)),
+            ApplePageRoute<void>(
+              pageBuilder: (_) => NoteDetailPage(noteId: id),
+            ),
           );
         },
         child: Container(
@@ -420,10 +481,7 @@ class RichParagraph extends StatelessWidget {
             color: c.tint.withValues(alpha: 0.10),
             borderRadius: BorderRadius.circular(4),
           ),
-          child: Text(
-            link.label,
-            style: base.copyWith(color: c.tint),
-          ),
+          child: Text(link.label, style: base.copyWith(color: c.tint)),
         ),
       ),
     );
@@ -441,15 +499,14 @@ class RichParagraph extends StatelessWidget {
     String label,
     TextStyle style,
     VoidCallback onTap,
-  ) =>
-      WidgetSpan(
-        alignment: PlaceholderAlignment.middle,
-        child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onTap: onTap,
-          child: Text(label, style: style),
-        ),
-      );
+  ) => WidgetSpan(
+    alignment: PlaceholderAlignment.middle,
+    child: GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: onTap,
+      child: Text(label, style: style),
+    ),
+  );
 
   /// 裸链接（正文里直接躺着一串 https://…）。
   /// Word 文档导进来常常是这种形态，不认它用户就会觉得"链接点了没反应"。
@@ -461,7 +518,8 @@ class RichParagraph extends StatelessWidget {
   ) {
     // 结尾的标点多半是句子的一部分，不该算进链接
     var clean = url;
-    while (clean.isNotEmpty && '.,;:!?、。，；：！？）)】」”.'.contains(clean.characters.last)) {
+    while (clean.isNotEmpty &&
+        '.,;:!?、。，；：！？）)】」”.'.contains(clean.characters.last)) {
       clean = clean.substring(0, clean.length - 1);
     }
     if (clean.isEmpty) return TextSpan(text: url);
@@ -546,9 +604,8 @@ class RichParagraph extends StatelessWidget {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (_) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('打不开这个链接')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('打不开这个链接')));
     }
   }
 }
@@ -576,10 +633,12 @@ Future<void> showImageViewer(
       reverseTransitionDuration: AppMotion.fast,
       pageBuilder: (ctx, a, s) =>
           ImageViewer(images: images, initialIndex: start, noteId: noteId),
-      transitionsBuilder: (ctx, a, s, child) => FadeTransition(
-        opacity: CurvedAnimation(parent: a, curve: AppMotion.enter),
-        child: child,
-      ),
+      transitionsBuilder: (ctx, a, s, child) => AppMotion.reduceMotion(ctx)
+          ? child
+          : FadeTransition(
+              opacity: a.drive(CurveTween(curve: AppMotion.enter)),
+              child: child,
+            ),
     ),
   );
 }
@@ -600,8 +659,11 @@ class ImageViewer extends StatefulWidget {
   State<ImageViewer> createState() => _ImageViewerState();
 }
 
-class _ImageViewerState extends State<ImageViewer> {
-  double _drag = 0;
+class _ImageViewerState extends State<ImageViewer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _drag = AnimationController.unbounded(
+    vsync: this,
+  );
   late int _index = widget.initialIndex;
   late final PageController _pages = PageController(initialPage: _index);
 
@@ -618,6 +680,7 @@ class _ImageViewerState extends State<ImageViewer> {
 
   @override
   void dispose() {
+    _drag.dispose();
     _pages.dispose();
     super.dispose();
   }
@@ -627,9 +690,17 @@ class _ImageViewerState extends State<ImageViewer> {
     if (next < 0 || next >= widget.images.length) return;
     _pages.animateToPage(
       next,
-      duration: AppMotion.normal,
+      duration: AppMotion.respecting(context, AppMotion.normal),
       curve: AppMotion.enter,
     );
+  }
+
+  void _returnImage() {
+    if (AppMotion.reduceMotion(context)) {
+      _drag.value = 0;
+    } else {
+      _drag.animateTo(0, duration: AppMotion.fast, curve: AppMotion.enter);
+    }
   }
 
   /// 把当前这张图设为头图。
@@ -685,28 +756,40 @@ class _ImageViewerState extends State<ImageViewer> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onVerticalDragUpdate: (d) => setState(() => _drag += d.delta.dy),
+      onVerticalDragStart: (_) => _drag.stop(),
+      onVerticalDragUpdate: (d) => _drag.value += d.delta.dy,
+      onVerticalDragCancel: _returnImage,
       onVerticalDragEnd: (d) {
-        if (_drag.abs() > 110) {
+        if (_drag.value.abs() > 110 ||
+            (_drag.value.abs() > 30 &&
+                (d.primaryVelocity ?? 0).abs() > 700 &&
+                (d.primaryVelocity ?? 0).sign == _drag.value.sign)) {
           Navigator.of(context).maybePop();
         } else {
-          setState(() => _drag = 0);
+          _returnImage();
         }
       },
       child: Stack(
         children: [
           Positioned.fill(
-            child: Transform.translate(
-              offset: Offset(0, _drag),
-              child: Transform.scale(
-                scale: (1 - (_drag.abs() / 1400)).clamp(0.85, 1.0),
-                // 点一下图片 → 收起/展开控件。
-                // 用 translucent 而不是 opaque：横滑手势要照常传给 PageView，
-                // 只有"没怎么动就抬手"才算点击。
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: () => setState(() => _uiVisible = !_uiVisible),
-                  // 横滑翻页：手机上直接左右划，桌面上也可以用触控板
+            child: AnimatedBuilder(
+              animation: _drag,
+              builder: (context, child) => Transform.translate(
+                key: const ValueKey('image-viewer-drag-surface'),
+                offset: Offset(0, _drag.value),
+                child: Transform.scale(
+                  scale: (1 - (_drag.value.abs() / 1400)).clamp(0.85, 1.0),
+                  child: child,
+                ),
+              ),
+              // 点一下图片 → 收起/展开控件。
+              // 用 translucent 而不是 opaque：横滑手势要照常传给 PageView，
+              // 只有"没怎么动就抬手"才算点击。
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => setState(() => _uiVisible = !_uiVisible),
+                // 横滑翻页：手机上直接左右划，桌面上也可以用触控板
+                child: RepaintBoundary(
                   child: PageView.builder(
                     controller: _pages,
                     itemCount: widget.images.length,
@@ -742,7 +825,7 @@ class _ImageViewerState extends State<ImageViewer> {
               ignoring: !_uiVisible,
               child: AnimatedOpacity(
                 opacity: _uiVisible ? 1 : 0,
-                duration: AppMotion.normal,
+                duration: AppMotion.respecting(context, AppMotion.normal),
                 curve: AppMotion.enter,
                 child: Stack(
                   children: [
@@ -790,7 +873,10 @@ class _ImageViewerState extends State<ImageViewer> {
                       top: MediaQuery.paddingOf(context).top + 8,
                       right: 12,
                       child: IconButton(
-                        icon: const Icon(Icons.close_rounded, color: Colors.white),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                        ),
                         onPressed: () => Navigator.of(context).maybePop(),
                       ),
                     ),
@@ -837,9 +923,7 @@ class _ImageViewerState extends State<ImageViewer> {
               shape: BoxShape.circle,
             ),
             child: Icon(
-              left
-                  ? Icons.chevron_left_rounded
-                  : Icons.chevron_right_rounded,
+              left ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
               size: 26,
               color: Colors.white,
             ),

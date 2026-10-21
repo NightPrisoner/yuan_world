@@ -35,7 +35,7 @@ Future<bool> revealTocTarget({
     if (ctx == null || !ctx.mounted) return false;
     await Scrollable.ensureVisible(
       ctx,
-      duration: const Duration(milliseconds: 300),
+      duration: AppMotion.respecting(ctx, AppMotion.normal),
       curve: Curves.easeOutCubic,
       alignment: alignment,
     );
@@ -140,8 +140,11 @@ class TocPanel extends StatelessWidget {
                     message: '关闭目录',
                     child: Padding(
                       padding: const EdgeInsets.all(4),
-                      child: Icon(Icons.close_rounded,
-                          size: 15, color: c.tertiaryLabel),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 15,
+                        color: c.tertiaryLabel,
+                      ),
                     ),
                   ),
                 ),
@@ -232,7 +235,7 @@ class _TocResizerState extends State<TocResizer> {
           width: 8,
           child: Align(
             child: AnimatedContainer(
-              duration: AppMotion.instant,
+              duration: AppMotion.respecting(context, AppMotion.instant),
               width: active ? 2 : 0.5,
               height: double.infinity,
               color: active ? c.tint : c.separator,
@@ -240,6 +243,111 @@ class _TocResizerState extends State<TocResizer> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 目录窗格的尺寸和内容同时过渡。
+///
+/// 目录开关以前直接从树里增删，正文会在一帧内改宽，长文编辑时尤其明显。
+/// 保留窗格在树里，只补间它的裁切宽度和透明度，正文宽度就会连续变化；
+/// 关闭时也能沿原路收回，不会突然把输入区推走。
+class TocMotion extends StatefulWidget {
+  const TocMotion({
+    super.key,
+    required this.open,
+    required this.side,
+    required this.width,
+    required this.duration,
+    required this.child,
+  });
+
+  final bool open;
+  final String side;
+  final double width;
+  final Duration duration;
+  final Widget child;
+
+  @override
+  State<TocMotion> createState() => _TocMotionState();
+}
+
+class _TocMotionState extends State<TocMotion>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: widget.duration,
+    value: widget.open ? 1 : 0,
+  );
+  late final Animation<double> _progress = _controller.drive(
+    CurveTween(curve: AppMotion.enter),
+  );
+
+  @override
+  void didUpdateWidget(covariant TocMotion oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _controller.duration = widget.duration;
+    if (widget.open != oldWidget.open || widget.duration == Duration.zero) {
+      if (widget.duration == Duration.zero) {
+        _controller.value = widget.open ? 1 : 0;
+      } else if (widget.open) {
+        _controller.forward();
+      } else {
+        _controller.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Do not mount the panel on the initial closed state. Besides avoiding
+    // unnecessary layout work, this keeps the closed editor semantically a
+    // plain editor with no hidden interactive controls.
+    if (!widget.open && _controller.value == 0) {
+      return const SizedBox.shrink();
+    }
+
+    return AnimatedBuilder(
+      animation: _progress,
+      builder: (context, _) {
+        if (!widget.open && _controller.value == 0) {
+          return const SizedBox.shrink();
+        }
+        final value = _progress.value.clamp(0.0, 1.0);
+        return SizedBox(
+          width: widget.width * value,
+          child: ClipRect(
+            child: Opacity(
+              opacity: value,
+              child: IgnorePointer(
+                ignoring: !widget.open,
+                child: Transform.translate(
+                  offset: Offset(
+                    (widget.side == 'left' ? -1 : 1) *
+                        widget.width *
+                        (1 - value),
+                    0,
+                  ),
+                  child: OverflowBox(
+                    alignment: widget.side == 'left'
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
+                    minWidth: widget.width,
+                    maxWidth: widget.width,
+                    child: widget.child,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

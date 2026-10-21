@@ -3,12 +3,9 @@
 /// 这里是 `stats_charts.dart` 的一部分（`part of`），理由见
 /// stats_trend_chart.dart 的说明。
 part of 'stats_charts.dart';
+
 class ShareChart extends StatelessWidget {
-  const ShareChart({
-    super.key,
-    required this.items,
-    required this.style,
-  });
+  const ShareChart({super.key, required this.items, required this.style});
 
   final List<ShareItem> items;
   final ShareStyle style;
@@ -28,57 +25,59 @@ class ShareChart extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 5),
               child: Row(
-                  children: [
-                    SizedBox(
-                      width: 96,
-                      child: Text(
-                        it.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppText.footnote.copyWith(color: c.label),
-                      ),
+                children: [
+                  SizedBox(
+                    width: 96,
+                    child: Text(
+                      it.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppText.footnote.copyWith(color: c.label),
                     ),
-                    Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(
-                            begin: 0,
-                            end: maxV == 0 ? 0 : it.value / maxV,
-                          ),
-                          duration: AppMotion.normal,
-                          curve: AppMotion.enter,
-                          builder: (context, v, _) => LinearProgressIndicator(
-                            value: v,
-                            minHeight: 7,
-                            backgroundColor: c.fill,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Color(it.color),
-                            ),
+                  ),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween<double>(
+                          begin: 0,
+                          end: maxV == 0 ? 0 : it.value / maxV,
+                        ),
+                        duration: AppMotion.normal,
+                        curve: AppMotion.enter,
+                        builder: (context, v, _) => LinearProgressIndicator(
+                          value: v,
+                          minHeight: 7,
+                          backgroundColor: c.fill,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Color(it.color),
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    SizedBox(
-                      width: 40,
-                      child: Text(
-                        '${it.value}',
-                        textAlign: TextAlign.right,
-                        style: AppText.caption1.copyWith(color: c.secondaryLabel),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 40,
+                    child: Text(
+                      '${it.value}',
+                      textAlign: TextAlign.right,
+                      style: AppText.caption1.copyWith(color: c.secondaryLabel),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 54,
+                    child: Text(
+                      fmtNum(it.extra),
+                      textAlign: TextAlign.right,
+                      style: AppText.caption1.copyWith(
+                        color: c.quaternaryLabel,
                       ),
                     ),
-                    SizedBox(
-                      width: 54,
-                      child: Text(
-                        fmtNum(it.extra),
-                        textAlign: TextAlign.right,
-                        style: AppText.caption1.copyWith(color: c.quaternaryLabel),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
+            ),
         ],
       );
     }
@@ -113,7 +112,10 @@ class ShareChart extends StatelessWidget {
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('$total', style: AppText.title2.copyWith(color: c.label)),
+                    Text(
+                      '$total',
+                      style: AppText.title2.copyWith(color: c.label),
+                    ),
                     Text(
                       '篇',
                       style: AppText.caption2.copyWith(color: c.tertiaryLabel),
@@ -132,39 +134,42 @@ class ShareChart extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 7),
                   child: Row(
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: Color(it.color),
-                            borderRadius: BorderRadius.circular(2),
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: Color(it.color),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          it.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppText.footnote.copyWith(color: c.label),
+                        ),
+                      ),
+                      Text(
+                        '${it.value}',
+                        style: AppText.caption1.copyWith(
+                          color: c.tertiaryLabel,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 46,
+                        child: Text(
+                          fmtNum(it.extra),
+                          textAlign: TextAlign.right,
+                          style: AppText.caption1.copyWith(
+                            color: c.quaternaryLabel,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            it.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppText.footnote.copyWith(color: c.label),
-                          ),
-                        ),
-                        Text(
-                          '${it.value}',
-                          style: AppText.caption1.copyWith(color: c.tertiaryLabel),
-                        ),
-                        const SizedBox(width: 6),
-                        SizedBox(
-                          width: 46,
-                          child: Text(
-                            fmtNum(it.extra),
-                            textAlign: TextAlign.right,
-                            style:
-                                AppText.caption1.copyWith(color: c.quaternaryLabel),
-                          ),
-                        ),
-                      ],
+                      ),
+                    ],
                   ),
                 ),
             ],
@@ -194,7 +199,10 @@ class ShareChart extends StatelessWidget {
   final from = rangeFrom ?? dataFrom;
   final to = rangeTo ?? dataTo;
   if (from == null || to == null || from.isAfter(to)) {
-    return (from: today.subtract(const Duration(days: 364)), to: today);
+    return (
+      from: DateTime(today.year, today.month, today.day - 364),
+      to: today,
+    );
   }
   return (from: day(from), to: day(to));
 }

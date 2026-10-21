@@ -149,7 +149,7 @@ void main() {
         .getCenter(
           find.descendant(
             of: expandBtn,
-            matching: find.byIcon(Icons.chevron_right_rounded),
+            matching: find.byIcon(Icons.chevron_left_rounded),
           ),
         )
         .dy;
@@ -157,7 +157,8 @@ void main() {
     expect(
       (collapsedY - expandedY).abs(),
       lessThan(2),
-      reason: '收起($collapsedY) 和展开($expandedY) 的箭头中心差了 '
+      reason:
+          '收起($collapsedY) 和展开($expandedY) 的箭头中心差了 '
           '${(collapsedY - expandedY).abs().toStringAsFixed(1)}px',
     );
   });

@@ -34,6 +34,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import '../db/app_database.dart';
+import '../db/schema.dart';
 
 /// 备份清单，压在包里的 `backup.json`，恢复前先认一下是不是我们的包。
 class BackupManifest {
@@ -63,7 +64,8 @@ class BackupManifest {
     if (j['app'] != 'yuan_world') return null;
     return BackupManifest(
       createdAt:
-          DateTime.tryParse('${j['createdAt']}') ?? DateTime.fromMillisecondsSinceEpoch(0),
+          DateTime.tryParse('${j['createdAt']}') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
       schemaVersion: (j['schemaVersion'] as int?) ?? 0,
       noteCount: (j['noteCount'] as int?) ?? 0,
       withMedia: j['withMedia'] == true,
@@ -87,7 +89,8 @@ class RestoreResult {
   /// 恢复前的**安全副本**路径（恢复错了还能再回去）。
   final String? safetyCopy;
 
-  String get summary => '已恢复 $notes 篇笔记、$collections 个文集'
+  String get summary =>
+      '已恢复 $notes 篇笔记、$collections 个文集'
       '${mediaFiles > 0 ? '，$mediaFiles 个媒体文件' : ''}';
 }
 
@@ -116,7 +119,9 @@ class BackupService {
   }
 
   int _count(String table) {
-    final r = db.db.select('SELECT COUNT(*) AS c FROM $table WHERE deleted_at IS NULL');
+    final r = db.db.select(
+      'SELECT COUNT(*) AS c FROM $table WHERE deleted_at IS NULL',
+    );
     return (r.first['c'] as int?) ?? 0;
   }
 
@@ -134,7 +139,11 @@ class BackupService {
     try {
       final dbFile = _exportDbTo(p.join(tmp.path, 'yuanworld.db'));
       archive.addFile(
-        ArchiveFile('yuanworld.db', dbFile.lengthSync(), dbFile.readAsBytesSync()),
+        ArchiveFile(
+          'yuanworld.db',
+          dbFile.lengthSync(),
+          dbFile.readAsBytesSync(),
+        ),
       );
 
       var mediaCount = 0;
@@ -174,7 +183,8 @@ class BackupService {
   File snapshot({int keep = 7}) {
     final now = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
-    final stamp = '${now.year}${two(now.month)}${two(now.day)}'
+    final stamp =
+        '${now.year}${two(now.month)}${two(now.day)}'
         '-${two(now.hour)}${two(now.minute)}${two(now.second)}';
     // 同一秒里连拍两张会同名 —— 后一张会把前一张**覆盖**掉，
     // 于是"轮转保留 N 份"永远只有 1 份。重名就加序号。
@@ -192,12 +202,13 @@ class BackupService {
   /// 现有的快照，**新的在前**。
   List<File> snapshots() {
     if (!snapshotDir.existsSync()) return const <File>[];
-    final files = snapshotDir
-        .listSync()
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.db'))
-        .toList()
-      ..sort((a, b) => b.path.compareTo(a.path));
+    final files =
+        snapshotDir
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.db'))
+            .toList()
+          ..sort((a, b) => b.path.compareTo(a.path));
     return files;
   }
 
@@ -242,7 +253,14 @@ class BackupService {
         File? dbEntry;
         for (final f in archive) {
           if (!f.isFile) continue;
-          final out = File(p.join(tmp.path, f.name));
+          // ZIP 文件名来自外部输入。统一分隔符并检查规范化后的路径，
+          // 避免 `../` 或绝对路径把文件写到临时目录之外。
+          final entryName = f.name.replaceAll('\\', '/');
+          final outPath = p.normalize(p.join(tmp.path, entryName));
+          if (!p.isWithin(tmp.path, outPath)) {
+            throw StateError('备份包含越界文件路径：${f.name}');
+          }
+          final out = File(outPath);
           out.parent.createSync(recursive: true);
           out.writeAsBytesSync(f.content as List<int>);
           if (f.name == 'yuanworld.db') dbEntry = out;
@@ -264,6 +282,32 @@ class BackupService {
         throw StateError('这份备份里一篇笔记都没有，为免误清空，已取消恢复');
       }
 
+      // Run migration against a disposable copy before touching the live DB.
+      // An integrity check alone accepts structurally incomplete SQLite files.
+      final stagedDir = Directory(p.join(tmp.path, 'validated'))..createSync();
+      final stagedFile = incoming.copySync(
+        p.join(stagedDir.path, 'yuanworld.db'),
+      );
+      final staged = AppDatabase.openAt(stagedDir.path);
+      try {
+        staged.db.select(
+          'SELECT title, content, excerpt, collection_id, '
+          'char_count, word_count, image_count, is_hidden, is_archived, '
+          'is_pinned, is_favorite, updated_at, created_at, cover_image '
+          'FROM notes LIMIT 0',
+        );
+        staged.db.select(
+          'SELECT name, color, parent_id, is_hidden, is_pinned, '
+          'sort_order FROM collections LIMIT 0',
+        );
+        staged.db.select('SELECT key, value FROM settings LIMIT 0');
+        if (staged.db.select('PRAGMA foreign_key_check').isNotEmpty) {
+          throw StateError('备份包含不完整的数据关联，已取消恢复');
+        }
+      } finally {
+        staged.close();
+      }
+
       // 1) 先给**当前**数据留一份安全副本（恢复错了还能回去）
       final safety = _exportDbTo(
         p.join(
@@ -273,25 +317,59 @@ class BackupService {
       );
 
       // 2) 关连接 → 换数据库文件 → 再打开（重新跑迁移/自愈）
+      // Preserve overwritten media too, so a partial media copy can roll back.
+      final previousMedia = <String, File?>{};
+      final rollbackDir = Directory(p.join(tmp.path, 'previous-media'))
+        ..createSync();
+      for (final f in media) {
+        final rel = p.relative(f.path, from: p.join(tmp.path, 'images'));
+        final target = File(p.join(db.imageRoot.path, rel));
+        File? previous;
+        if (target.existsSync()) {
+          previous = File(p.join(rollbackDir.path, rel));
+          previous.parent.createSync(recursive: true);
+          target.copySync(previous.path);
+        }
+        previousMedia[target.path] = previous;
+      }
+
+      var copied = 0;
+      final changedMedia = <String>[];
       db.closeForRestore();
       try {
         for (final suffix in <String>['', '-wal', '-shm']) {
           final f = File('${db.dbPath}$suffix');
           if (f.existsSync()) f.deleteSync();
         }
-        incoming.copySync(db.dbPath);
-      } finally {
+        stagedFile.copySync(db.dbPath);
         db.reopen();
-      }
-
-      // 3) 媒体：有就覆盖，没有就保持原样（快照不含媒体，不能因此把图片删了）
-      var copied = 0;
-      for (final f in media) {
-        final rel = p.relative(f.path, from: p.join(tmp.path, 'images'));
-        final target = File(p.join(db.imageRoot.path, rel));
-        target.parent.createSync(recursive: true);
-        f.copySync(target.path);
-        copied++;
+        // Snapshots have no media, so retain existing media in that case.
+        for (final f in media) {
+          final rel = p.relative(f.path, from: p.join(tmp.path, 'images'));
+          final target = File(p.join(db.imageRoot.path, rel));
+          target.parent.createSync(recursive: true);
+          changedMedia.add(target.path);
+          f.copySync(target.path);
+          copied++;
+        }
+      } catch (_) {
+        db.closeForRestore();
+        for (final suffix in <String>['', '-wal', '-shm']) {
+          final f = File('${db.dbPath}$suffix');
+          if (f.existsSync()) f.deleteSync();
+        }
+        safety.copySync(db.dbPath);
+        db.reopen();
+        for (final path in changedMedia.reversed) {
+          final previous = previousMedia[path];
+          if (previous != null) {
+            previous.copySync(path);
+          } else {
+            final target = File(path);
+            if (target.existsSync()) target.deleteSync();
+          }
+        }
+        rethrow;
       }
 
       final after = _readStats(File(db.dbPath));
@@ -313,6 +391,11 @@ class BackupService {
       probe = sqlite3.open(f.path, mode: OpenMode.readOnly);
       final check = probe.select('PRAGMA integrity_check').first.columnAt(0);
       if (check != 'ok') throw StateError('备份文件损坏：$check');
+      final version =
+          probe.select('PRAGMA user_version').first.columnAt(0) as int;
+      if (version > kSchemaVersion) {
+        throw StateError('备份来自更新版本，请先升级元世界再恢复');
+      }
       final tables = probe
           .select("SELECT name FROM sqlite_master WHERE type='table'")
           .map((r) => r['name'])

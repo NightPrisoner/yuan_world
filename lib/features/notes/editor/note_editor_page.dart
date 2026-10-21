@@ -102,14 +102,19 @@ class _MediaDeleteButton extends StatelessWidget {
             shape: BoxShape.circle,
             border: Border.all(color: c.separator, width: 0.5),
           ),
-          child: Icon(Icons.delete_outline_rounded, size: 17, color: c.destructive),
+          child: Icon(
+            Icons.delete_outline_rounded,
+            size: 17,
+            color: c.destructive,
+          ),
         ),
       ),
     );
   }
 }
 
-class NoteEditorPage extends StatefulWidget {  const NoteEditorPage({
+class NoteEditorPage extends StatefulWidget {
+  const NoteEditorPage({
     super.key,
     required this.noteId,
     this.embedded = false,
@@ -153,6 +158,9 @@ class NoteEditorPage extends StatefulWidget {  const NoteEditorPage({
 }
 
 class _NoteEditorPageState extends State<NoteEditorPage> {
+  final GlobalKey _headingButtonKey = GlobalKey();
+  final GlobalKey _linkButtonKey = GlobalKey();
+  late final AppState _appState;
   final TextEditingController _title = TextEditingController();
   // 用带实时样式的控制器：**加粗**、# 标题、`代码` 输入即生效
   final MarkdownEditingController _body = MarkdownEditingController();
@@ -181,6 +189,24 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   /// 正文那个滚动区（目录跳转要按偏移量精确滚）。
   final ScrollController _scroll = ScrollController();
   int? _focusedSegment;
+
+  MarkdownEditingController? _toolbarSelectionController;
+  TextSelection? _toolbarSelection;
+  // 工具栏按钮按下时，TextField 可能已经先失焦。保留每个正文段最近一次
+  // 有效选区，避免连续点「加粗 / 斜体 / 删除线」时选区被 Flutter 清掉。
+  final Map<MarkdownEditingController, TextSelection> _segmentSelections =
+      <MarkdownEditingController, TextSelection>{};
+
+  void _rememberToolbarSelection() {
+    final target = _activeBody;
+    final selection = target.selection.isValid
+        ? target.selection
+        : _segmentSelections[target];
+    if (selection != null && selection.isValid) {
+      _toolbarSelectionController = target;
+      _toolbarSelection = selection;
+    }
+  }
 
   /// 是否正有文件悬停在编辑区上方（画那层"松手即插入"的蒙层用）。
   bool _dragging = false;
@@ -212,6 +238,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _segControllers.clear();
     _segFocus.clear();
     _segKeys.clear();
+    _segmentSelections.clear();
     _focusedSegment = null;
   }
 
@@ -231,7 +258,16 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       node.addListener(() {
         if (node.hasFocus) _focusedSegment = index;
       });
-      if (seg is TextSegment) controller.addListener(_onSegmentChanged);
+      if (seg is TextSegment) {
+        controller.addListener(() {
+          final selection = controller.selection;
+          if (selection.isValid) _segmentSelections[controller] = selection;
+          _onSegmentChanged();
+        });
+        if (controller.selection.isValid) {
+          _segmentSelections[controller] = controller.selection;
+        }
+      }
       _segControllers.add(controller);
       _segFocus.add(node);
       // 每段落一个 key：目录跳转要靠它 ensureVisible
@@ -247,21 +283,31 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     final next = <BodySegment>[];
     for (var i = 0; i < _segments.length; i++) {
       final seg = _segments[i];
-      next.add(
-        seg is TextSegment ? TextSegment(_segControllers[i].text) : seg,
-      );
+      next.add(seg is TextSegment ? TextSegment(_segControllers[i].text) : seg);
     }
     _segments = next;
 
     final joined = joinBodySegments(next);
-    if (joined != _body.text) _body.text = joined;
+    if (joined != _body.text) {
+      _body.text = joined;
+    } else if (mounted) {
+      // Cursor-only moves must update the heading/format indicators too.
+      setState(() {});
+    }
   }
 
   Timer? _saveTimer;
   bool _loaded = false;
 
   /// 当前生效的标题级别（0 = 正文），供工具栏按钮显示状态。
-  int _headingLevel = 0;
+  int get _headingLevel {
+    final target = _activeBody;
+    final at = target.selection.isValid ? target.selection.start : 0;
+    final start = at == 0 ? 0 : target.text.lastIndexOf('\n', at - 1) + 1;
+    final match = RegExp(r'^(#{1,6})\s+')
+        .firstMatch(target.text.substring(start));
+    return match?.group(1)?.length ?? 0;
+  }
 
   // ── 撤销 / 重做 ─────────────────────────────────────────────────────────
   final List<TextEditingValue> _undoStack = <TextEditingValue>[];
@@ -278,6 +324,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   void initState() {
     super.initState();
     final state = context.read<AppState>();
+    _appState = state;
     _tocSide = state.tocSide;
     _tocWidth = state.tocWidth;
     final note = state.repo.getNote(widget.noteId);
@@ -305,6 +352,10 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   void dispose() {
     _saveTimer?.cancel();
     _snapshotTimer?.cancel();
+    // Desktop selection/layout changes may remove this editor without going
+    // through its Done button. Persist the pending draft before disposal;
+    // avoid notifying widgets while their tree is being rebuilt.
+    _save(notify: false);
     _title.removeListener(_markDirty);
     _body.removeListener(_onBodyChanged);
     _disposeSegments();
@@ -347,7 +398,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   }
 
   /// 落库。返回**这次是不是真的写了**（没改动就什么都不做，返回 false）。
-  bool _save() {
+  bool _save({bool notify = true}) {
     final text = _body.text;
     final title = _title.text.trim();
 
@@ -359,7 +410,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 漏一个就会退化成旧行为。
     if (title == _savedTitle && text == _savedBody) return false;
 
-    final state = context.read<AppState>();
+    final state = _appState;
     state.repo.updateNote(
       id: widget.noteId,
       title: title,
@@ -377,8 +428,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 以前保存只写库、不发通知：手机上手势返回（不走 _flushAndLeave）以后
     // 回到列表，看到的还是旧标题/旧摘要，得下拉才刷新。这里用的是
     // `refreshListOnly()`（只重查列表那一条轻量查询），自动保存期间也扛得住。
-    state.refreshListOnly();
-    if (mounted) setState(() {});
+    state.refreshListOnly(notify: notify, dataChanged: true);
+    if (notify && mounted) setState(() {});
     return true;
   }
 
@@ -527,8 +578,10 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('从笔记里移除这个文件？'),
-        content: const Text('只会去掉正文里的这一行，磁盘上的文件会保留，'
-            '需要的话可以重新插入。'),
+        content: const Text(
+          '只会去掉正文里的这一行，磁盘上的文件会保留，'
+          '需要的话可以重新插入。',
+        ),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -536,7 +589,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: context.colors.destructive),
+            style: TextButton.styleFrom(
+              foregroundColor: context.colors.destructive,
+            ),
             child: const Text('移除'),
           ),
         ],
@@ -589,12 +644,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       if (mounted) setState(() => _dragging = false);
     },
     onDragDone: _onDropFiles,
-    child: Stack(
-      children: [
-        child,
-        if (_dragging) _dropOverlay(c),
-      ],
-    ),
+    child: Stack(children: [child, if (_dragging) _dropOverlay(c)]),
   );
 
   /// 悬停蒙层。**不能吃事件**（IgnorePointer），
@@ -649,9 +699,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
     if (accepted.isEmpty) {
       // 说清楚该去哪儿，否则用户只知道"拖不进去"
-      _toast(skipped.isEmpty
-          ? '没有识别到文件'
-          : '只能拖入图片或视频；${skipped.first} 这类文档请到「导入」页拖入');
+      _toast(
+        skipped.isEmpty
+            ? '没有识别到文件'
+            : '只能拖入图片或视频；${skipped.first} 这类文档请到「导入」页拖入',
+      );
       return;
     }
 
@@ -662,25 +714,48 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         if (skipped.isNotEmpty) '${skipped.length} 个不是图片/视频，已跳过',
         if (r.failed.isNotEmpty) '${r.failed.length} 个导入失败',
       ];
-      _toast(extra.isEmpty
-          ? '已插入 ${r.ok} 个'
-          : '已插入 ${r.ok} 个（${extra.join('；')}）');
+      _toast(
+        extra.isEmpty ? '已插入 ${r.ok} 个' : '已插入 ${r.ok} 个（${extra.join('；')}）',
+      );
     } else if (r.failed.isNotEmpty) {
       _toast('导入失败：${r.failed.first}');
     }
   }
 
   void _withBody(void Function() action) {
+    final before = _body.value;
     final target = _activeBody;
-    action();
-    // 工具栏改的是"当前这一段"，改完要立刻拼回整体
-    if (identical(target, _body)) {
-      // 走到这里说明连一个文字段都没有（理论上不会，_rebuildSegments
-      // 保证至少有一段），兜底把 _body 的内容铺回界面上
-      _rebuildSegments();
-    } else {
-      _onSegmentChanged();
+    final saved = identical(target, _toolbarSelectionController)
+        ? _toolbarSelection
+        : _segmentSelections[target];
+    if (saved != null && saved.isValid && saved.end <= target.text.length) {
+      target.selection = saved;
     }
+    _applyingHistory = true;
+    try {
+      action();
+      // 工具栏改的是当前这一段，改完立刻拼回整体。
+      if (identical(target, _body)) {
+        _rebuildSegments();
+      } else {
+        _onSegmentChanged();
+      }
+    } finally {
+      _applyingHistory = false;
+    }
+    if (before.text != _body.text) {
+      _snapshotTimer?.cancel();
+      _undoStack.add(before);
+      if (_undoStack.length > 120) _undoStack.removeAt(0);
+      _redoStack.clear();
+      _lastValue = _body.value;
+    }
+    final index = _segControllers.indexOf(target);
+    if (index >= 0 && index < _segFocus.length) {
+      _segFocus[index].requestFocus();
+    }
+    _toolbarSelectionController = null;
+    _toolbarSelection = null;
     _scheduleSave();
     setState(() {});
   }
@@ -693,6 +768,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   Future<void> _insertLinkFlow() async {
     final kind = await showAppMenu<String>(
       context,
+      anchor: AppMenuAnchor(context: _linkButtonKey.currentContext),
       header: '插入链接',
       items: <AppMenuItem<String>>[
         AppMenuItem(
@@ -714,23 +790,28 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       return;
     }
 
-    final picked = await pickNoteToLink(
-      context,
-      excludeNoteId: widget.noteId,
-    );
+    final picked = await pickNoteToLink(context, excludeNoteId: widget.noteId);
     if (!mounted || picked == null) return;
     _withBody(() => MarkdownEditing.insertNoteLink(_activeBody, picked.title));
     _toast('已插入指向《${picked.title}》的链接');
   }
 
-  void _cycleHeading() {
-    final next = switch (_headingLevel) {
-      0 => 1,
-      1 => 2,
-      2 => 3,
-      _ => 0,
-    };
-    setState(() => _headingLevel = next);
+  Future<void> _chooseHeading() async {
+    final next = await showAppMenu<int>(
+      context,
+      anchor: AppMenuAnchor(context: _headingButtonKey.currentContext),
+      header: '段落样式',
+      items: [
+        AppMenuItem(value: 0, label: '正文', icon: Icons.text_fields_rounded),
+        for (var i = 1; i <= 6; i++)
+          AppMenuItem(
+            value: i,
+            label: '$i 级标题 · H$i',
+            icon: Icons.title_rounded,
+          ),
+      ],
+    );
+    if (!mounted || next == null) return;
     _withBody(() => MarkdownEditing.setHeading(_activeBody, next));
   }
 
@@ -772,16 +853,13 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   /// 焦点要是落在这一层外面（比如工作区那个节点），这里一条都收不到。
   /// 所以编辑器一建好就主动把 [_shortcutFocus] 拿到手。
   Widget _shortcuts(Widget child) => CallbackShortcuts(
-        bindings: bindShortcuts(<String, VoidCallback>{
-          AppShortcutIds.save: _saveNow,
-          AppShortcutIds.edit: _flushAndLeave,
-          AppShortcutIds.exitFullscreen: _escape,
-        }),
-        child: Focus(
-          focusNode: _shortcutFocus,
-          child: child,
-        ),
-      );
+    bindings: bindShortcuts(<String, VoidCallback>{
+      AppShortcutIds.save: _saveNow,
+      AppShortcutIds.edit: _flushAndLeave,
+      AppShortcutIds.exitFullscreen: _escape,
+    }),
+    child: Focus(focusNode: _shortcutFocus, child: child),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -827,95 +905,96 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
       return _wrapDrop(
         _shortcuts(
-        Focus(
-          canRequestFocus: false,
-          skipTraversal: true,
-          child: Column(
-            children: [
-              Container(
-                height: 46,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(
-                  color: c.background,
-                  border:
-                      Border(bottom: BorderSide(color: c.separator, width: 0.5)),
-                ),
-                child: Row(
-                  children: [
-                    Text(
-                      '编辑',
-                      style: AppText.footnote.copyWith(
-                        color: c.secondaryLabel,
-                        fontWeight: FontWeight.w600,
-                      ),
+          Focus(
+            canRequestFocus: false,
+            skipTraversal: true,
+            child: Column(
+              children: [
+                Container(
+                  height: 46,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: c.background,
+                    border: Border(
+                      bottom: BorderSide(color: c.separator, width: 0.5),
                     ),
-                    const Spacer(),
-                    _saveHint(c),
-                    const SizedBox(width: 8),
-                    // 目录：正文里有标题时才给入口（编辑长文要能跳段）
-                    if (toc.isNotEmpty) ...[
-                      GlassIconButton(
-                        icon: Icons.toc_rounded,
-                        size: 28,
-                        iconSize: 16,
-                        color: _tocOpen ? c.tint : null,
-                        tooltip: _tocOpen ? '关闭目录' : '目录',
-                        onTap: () => setState(() => _tocOpen = !_tocOpen),
-                      ),
-                      const SizedBox(width: 4),
-                    ],
-                    // 占满页面：收起三栏，文章铺满应用窗口。窗口本身不动。
-                    if (widget.onToggleFullscreen != null)
-                      GlassIconButton(
-                        icon: widget.fullscreen
-                            ? Icons.close_fullscreen_rounded
-                            : Icons.open_in_full_rounded,
-                        size: 28,
-                        iconSize: 16,
-                        color: widget.fullscreen ? c.tint : null,
-                        tooltip: widget.fullscreen ? '退出占满页面' : '占满页面',
-                        onTap: widget.onToggleFullscreen!,
-                      ),
-                    // ⛶ 无边框窗口全屏：画面放大、盖住任务栏。
-                    if (widget.onToggleWindowFullscreen != null) ...[
-                      const SizedBox(width: 4),
-                      GlassIconButton(
-                        icon: widget.windowFullscreen
-                            ? Icons.fullscreen_exit_rounded
-                            : Icons.fullscreen_rounded,
-                        size: 28,
-                        iconSize: 16,
-                        color: widget.windowFullscreen ? c.tint : null,
-                        tooltip: widget.windowFullscreen
-                            ? '退出窗口全屏（Esc）'
-                            : '窗口全屏',
-                        onTap: widget.onToggleWindowFullscreen!,
-                      ),
-                    ],
-                    const SizedBox(width: 4),
-                    TextButton(
-                      onPressed: _flushAndLeave,
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: Text(
-                        '完成',
-                        style: AppText.callout.copyWith(
-                          color: c.tint,
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        '编辑',
+                        style: AppText.footnote.copyWith(
+                          color: c.secondaryLabel,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                    ),
-                  ],
+                      const Spacer(),
+                      _saveHint(c),
+                      const SizedBox(width: 8),
+                      // 目录：正文里有标题时才给入口（编辑长文要能跳段）
+                      if (toc.isNotEmpty) ...[
+                        GlassIconButton(
+                          icon: Icons.toc_rounded,
+                          size: 28,
+                          iconSize: 16,
+                          color: _tocOpen ? c.tint : null,
+                          tooltip: _tocOpen ? '关闭目录' : '目录',
+                          onTap: () => setState(() => _tocOpen = !_tocOpen),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      // 占满页面：收起三栏，文章铺满应用窗口。窗口本身不动。
+                      if (widget.onToggleFullscreen != null)
+                        GlassIconButton(
+                          icon: widget.fullscreen
+                              ? Icons.close_fullscreen_rounded
+                              : Icons.open_in_full_rounded,
+                          size: 28,
+                          iconSize: 16,
+                          color: widget.fullscreen ? c.tint : null,
+                          tooltip: widget.fullscreen ? '退出占满页面' : '占满页面',
+                          onTap: widget.onToggleFullscreen!,
+                        ),
+                      // ⛶ 无边框窗口全屏：画面放大、盖住任务栏。
+                      if (widget.onToggleWindowFullscreen != null) ...[
+                        const SizedBox(width: 4),
+                        GlassIconButton(
+                          icon: widget.windowFullscreen
+                              ? Icons.fullscreen_exit_rounded
+                              : Icons.fullscreen_rounded,
+                          size: 28,
+                          iconSize: 16,
+                          color: widget.windowFullscreen ? c.tint : null,
+                          tooltip: widget.windowFullscreen
+                              ? '退出窗口全屏（Esc）'
+                              : '窗口全屏',
+                          onTap: widget.onToggleWindowFullscreen!,
+                        ),
+                      ],
+                      const SizedBox(width: 4),
+                      TextButton(
+                        onPressed: _flushAndLeave,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: Text(
+                          '完成',
+                          style: AppText.callout.copyWith(
+                            color: c.tint,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              toolbar,
-              Expanded(child: _withToc(context, body, toc)),
-            ],
+                toolbar,
+                Expanded(child: _withToc(context, body, toc)),
+              ],
+            ),
           ),
-        ),
         ),
         c,
       );
@@ -923,61 +1002,61 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
     return _wrapDrop(
       _shortcuts(
-      // **任何退出方式都要先落库 + 刷新状态。**
-      //
-      // 以前只有左上角那个返回箭头走 `_flushAndLeave`；手机上是手势返回 /
-      // 系统返回键，那条路直接 pop —— 于是：1) `dispose` 把 1.2 秒的自动保存
-      // 定时器**取消掉**，刚敲的字可能根本没落库；2) 列表页拿不到通知，
-      // 回去看到的是旧内容，得下拉才更新（用户报的正是这个）。
-      PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (didPop) return;
-          _flushAndLeave();
-        },
-        child: Scaffold(
-      backgroundColor: c.background,
-      appBar: AppBar(
-        backgroundColor: c.background,
-        surfaceTintColor: Colors.transparent,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19),
-          onPressed: _flushAndLeave,
-        ),
-        titleSpacing: 20,
-        title: Text(
-          '编辑',
-          style: AppText.headline.copyWith(color: c.label),
-        ),
-        actions: [
-          // 目录：正文里有两个以上标题才给入口（没标题时它是空面板）
-          if (toc.isNotEmpty)
-            GlassIconButton(
-              icon: Icons.toc_rounded,
-              size: 30,
-              iconSize: 17,
-              color: _tocOpen ? c.tint : null,
-              tooltip: _tocOpen ? '关闭目录' : '目录',
-              onTap: () => setState(() => _tocOpen = !_tocOpen),
+        // **任何退出方式都要先落库 + 刷新状态。**
+        //
+        // 以前只有左上角那个返回箭头走 `_flushAndLeave`；手机上是手势返回 /
+        // 系统返回键，那条路直接 pop —— 于是：1) `dispose` 把 1.2 秒的自动保存
+        // 定时器**取消掉**，刚敲的字可能根本没落库；2) 列表页拿不到通知，
+        // 回去看到的是旧内容，得下拉才更新（用户报的正是这个）。
+        PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            _flushAndLeave();
+          },
+          child: Scaffold(
+            backgroundColor: c.background,
+            appBar: AppBar(
+              backgroundColor: c.background,
+              surfaceTintColor: Colors.transparent,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19),
+                onPressed: _flushAndLeave,
+              ),
+              titleSpacing: 20,
+              title: Text(
+                '编辑',
+                style: AppText.headline.copyWith(color: c.label),
+              ),
+              actions: [
+                // 目录：正文里有两个以上标题才给入口（没标题时它是空面板）
+                if (toc.isNotEmpty)
+                  GlassIconButton(
+                    icon: Icons.toc_rounded,
+                    size: 30,
+                    iconSize: 17,
+                    color: _tocOpen ? c.tint : null,
+                    tooltip: _tocOpen ? '关闭目录' : '目录',
+                    onTap: () => setState(() => _tocOpen = !_tocOpen),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 14),
+                  child: Center(child: _saveHint(c)),
+                ),
+              ],
             ),
-          Padding(
-            padding: const EdgeInsets.only(right: 14),
-            child: Center(child: _saveHint(c)),
+            body: SafeArea(
+              top: false,
+              child: Column(
+                children: [
+                  Expanded(child: _withToc(context, content, toc)),
+                  // 手机上工具栏放底部：键盘弹起时会跟着抬起，手指够得着
+                  toolbar,
+                ],
+              ),
+            ),
           ),
-        ],
-      ),
-      body: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            Expanded(child: _withToc(context, content, toc)),
-            // 手机上工具栏放底部：键盘弹起时会跟着抬起，手指够得着
-            toolbar,
-          ],
         ),
-        ),
-      ),
-      ),
       ),
       c,
     );
@@ -988,7 +1067,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   /// 和阅读页共用同一个 [TocPanel]，两边长得一样、行为也一样；
   /// 但编辑器里的跳转是"滚到那一段并把光标放进去"，见 [_jumpToHeading]。
   Widget _withToc(BuildContext context, Widget body, List<TocEntry> toc) {
-    if (!_tocOpen || toc.isEmpty) return body;
+    if (toc.isEmpty) return body;
     final app = context.read<AppState>();
     final panel = TocPanel(
       entries: toc,
@@ -1006,15 +1085,27 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 编辑器的工具栏和分段立刻撑爆（阅读页那边真机上已经踩过了：
     // 一开目录就出现 "RIGHT OVERFLOWED BY ..." 的条纹）。改成浮层。
     final narrow = MediaQuery.sizeOf(context).width < 700;
+    final duration = AppMotion.respecting(context, AppMotion.normal);
+
     if (narrow) {
       return Stack(
         children: [
           body,
           Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => setState(() => _tocOpen = false),
-              child: ColoredBox(color: Colors.black.withValues(alpha: 0.18)),
+            child: IgnorePointer(
+              ignoring: !_tocOpen,
+              child: AnimatedOpacity(
+                opacity: _tocOpen ? 1 : 0,
+                duration: duration,
+                curve: AppMotion.enter,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _tocOpen = false),
+                  child: ColoredBox(
+                    color: Colors.black.withValues(alpha: 0.18),
+                  ),
+                ),
+              ),
             ),
           ),
           Positioned(
@@ -1022,18 +1113,39 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
             bottom: 0,
             left: _tocSide == 'left' ? 0 : null,
             right: _tocSide == 'right' ? 0 : null,
-            child: panel,
+            child: TocMotion(
+              open: _tocOpen,
+              side: _tocSide,
+              width: _tocWidth,
+              duration: duration,
+              child: panel,
+            ),
           ),
         ],
       );
     }
     return Row(
       children: [
-        if (_tocSide == 'left') ...[panel, TocResizer(onDrag: _resizeToc)],
+        if (_tocSide == 'left') ...[
+          TocMotion(
+            open: _tocOpen,
+            side: _tocSide,
+            width: _tocWidth,
+            duration: duration,
+            child: panel,
+          ),
+          if (_tocOpen) TocResizer(onDrag: _resizeToc),
+        ],
         Expanded(child: body),
         if (_tocSide == 'right') ...[
-          TocResizer(onDrag: (d) => _resizeToc(-d)),
-          panel,
+          if (_tocOpen) TocResizer(onDrag: (d) => _resizeToc(-d)),
+          TocMotion(
+            open: _tocOpen,
+            side: _tocSide,
+            width: _tocWidth,
+            duration: duration,
+            child: panel,
+          ),
         ],
       ],
     );
@@ -1104,8 +1216,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // 顺便把光标放进那一段：跳过去就是为了接着改
     if (segIndex < _segFocus.length && seg is TextSegment) {
       _segFocus[segIndex].requestFocus();
-      _segControllers[segIndex].selection =
-          TextSelection.collapsed(offset: offsetInSegment);
+      _segControllers[segIndex].selection = TextSelection.collapsed(
+        offset: offsetInSegment,
+      );
     }
   }
 
@@ -1139,8 +1252,10 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     final want = _scroll.position.viewportDimension * 0.12;
     final delta = dy - want;
     if (delta.abs() < 2) return;
-    final target = (_scroll.offset + delta)
-        .clamp(0.0, _scroll.position.maxScrollExtent);
+    final target = (_scroll.offset + delta).clamp(
+      0.0,
+      _scroll.position.maxScrollExtent,
+    );
     await _scroll.animateTo(
       target,
       duration: const Duration(milliseconds: 280),
@@ -1235,9 +1350,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     return TextField(
       controller: _segControllers[i],
       focusNode: _segFocus[i],
-      style: AppText.body.copyWith(color: c.label, height: 1.75),
+      style: AppText.reading.copyWith(color: c.label),
       maxLines: null,
       keyboardType: TextInputType.multiline,
+      inputFormatters: [_segControllers[i].inputFormatter],
+      selectionWidthStyle: MarkdownEditingController.selectionWidthStyle,
       // 语法符号被渲染成透明且近乎零宽，光标落到它附近时
       // 默认会按极小字号画得看不见，所以固定一个光标高度。
       cursorHeight: 22,
@@ -1251,8 +1368,8 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         // 提示只在第一段显示，否则每段都顶着一段说明很吵
         hintText: i == 0
             ? '开始写点什么…\n\n'
-                '支持 Markdown：# 标题、**加粗**、- 列表、> 引用、- [ ] 待办\n'
-                '格式符号会自动隐藏，看到的就是最终效果'
+                  '支持 Markdown：# 标题、**加粗**、- 列表、> 引用、- [ ] 待办\n'
+                  '格式符号会自动隐藏，看到的就是最终效果'
             : null,
         hintStyle: AppText.body.copyWith(
           color: c.quaternaryLabel,
@@ -1340,139 +1457,163 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     final canUndo = _undoStack.isNotEmpty;
     final canRedo = _redoStack.isNotEmpty;
 
-    return Container(
-      decoration: BoxDecoration(
-        color: c.secondaryBackground,
-        border: Border(top: BorderSide(color: c.separator, width: 0.5)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            height: 46,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              children: [
-                _ToolButton(
-                  icon: Icons.undo_rounded,
-                  tooltip: '撤销',
-                  enabled: canUndo,
-                  onTap: _undo,
-                ),
-                _ToolButton(
-                  icon: Icons.redo_rounded,
-                  tooltip: '重做',
-                  enabled: canRedo,
-                  onTap: _redo,
-                ),
-                _Sep(c),
-                _ToolButton(
-                  icon: Icons.title_rounded,
-                  tooltip: _headingLevel == 0 ? '设为标题' : '标题 H$_headingLevel',
-                  active: _headingLevel > 0,
-                  badge: _headingLevel == 0 ? null : 'H$_headingLevel',
-                  onTap: _cycleHeading,
-                ),
-                _ToolButton(
-                  icon: Icons.format_bold_rounded,
-                  tooltip: '加粗',
-                  onTap: () => _withBody(() => MarkdownEditing.wrap(_activeBody, '**')),
-                ),
-                _ToolButton(
-                  icon: Icons.format_italic_rounded,
-                  tooltip: '斜体',
-                  onTap: () => _withBody(() => MarkdownEditing.wrap(_activeBody, '*')),
-                ),
-                _ToolButton(
-                  icon: Icons.format_strikethrough_rounded,
-                  tooltip: '删除线',
-                  onTap: () => _withBody(() => MarkdownEditing.wrap(_activeBody, '~~')),
-                ),
-                _ToolButton(
-                  icon: Icons.code_rounded,
-                  tooltip: '行内代码',
-                  onTap: () => _withBody(() => MarkdownEditing.wrap(_activeBody, '`')),
-                ),
-                _Sep(c),
-                _ToolButton(
-                  icon: Icons.format_quote_rounded,
-                  tooltip: '引用',
-                  onTap: () =>
-                      _withBody(() => MarkdownEditing.toggleLinePrefix(_activeBody, '> ')),
-                ),
-                _ToolButton(
-                  icon: Icons.format_list_bulleted_rounded,
-                  tooltip: '无序列表',
-                  onTap: () =>
-                      _withBody(() => MarkdownEditing.toggleLinePrefix(_activeBody, '- ')),
-                ),
-                _ToolButton(
-                  icon: Icons.format_list_numbered_rounded,
-                  tooltip: '有序列表',
-                  onTap: () =>
-                      _withBody(() => MarkdownEditing.toggleLinePrefix(_activeBody, '1. ')),
-                ),
-                _ToolButton(
-                  icon: Icons.check_box_outlined,
-                  tooltip: '待办',
-                  onTap: () => _withBody(
-                    () => MarkdownEditing.toggleLinePrefix(_activeBody, '- [ ] '),
+    return Listener(
+      onPointerDown: (_) => _rememberToolbarSelection(),
+      child: Container(
+        decoration: BoxDecoration(
+          color: c.secondaryBackground,
+          border: Border(top: BorderSide(color: c.separator, width: 0.5)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              height: 46,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                children: [
+                  _ToolButton(
+                    icon: Icons.undo_rounded,
+                    tooltip: '撤销',
+                    enabled: canUndo,
+                    onTap: _undo,
                   ),
-                ),
-                _Sep(c),
-                _ToolButton(
-                  icon: Icons.link_rounded,
-                  tooltip: '插入链接',
-                  onTap: _insertLinkFlow,
-                ),
-                _ToolButton(
-                  icon: Icons.horizontal_rule_rounded,
-                  tooltip: '分割线',
-                  onTap: () =>
-                      _withBody(() => MarkdownEditing.insertBlock(_activeBody, '---')),
-                ),
-                _Sep(c),
-                // 插入本地媒体：图片 / gif / 视频
-                _ToolButton(
-                  icon: Icons.add_photo_alternate_outlined,
-                  tooltip: '插入图片或动图',
-                  onTap: () => _insertMedia(MediaKind.image),
-                ),
-                _ToolButton(
-                  icon: Icons.videocam_outlined,
-                  tooltip: '插入视频',
-                  onTap: () => _insertMedia(MediaKind.video),
-                ),
-              ],
-            ),
-          ),
-          Container(height: 0.5, color: c.separator),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
-            child: Row(
-              children: [
-                Text(
-                  '$chars 字 · $words 词',
-                  style: AppText.caption1.copyWith(color: c.tertiaryLabel),
-                ),
-                const Spacer(),
-                // 让用户知道"不用切到预览也能看到效果"
-                Row(
-                  children: [
-                    Icon(Icons.auto_awesome,
-                        size: 10, color: c.quaternaryLabel),
-                    const SizedBox(width: 4),
-                    Text(
-                      '输入即生效',
-                      style: AppText.caption2.copyWith(color: c.quaternaryLabel),
+                  _ToolButton(
+                    icon: Icons.redo_rounded,
+                    tooltip: '重做',
+                    enabled: canRedo,
+                    onTap: _redo,
+                  ),
+                  _Sep(c),
+                  _ToolButton(
+                    key: _headingButtonKey,
+                    icon: Icons.title_rounded,
+                    tooltip: _headingLevel == 0 ? '设为标题' : '标题 H$_headingLevel',
+                    active: _headingLevel > 0,
+                    badge: _headingLevel == 0 ? null : 'H$_headingLevel',
+                    onTap: _chooseHeading,
+                  ),
+                  _ToolButton(
+                    icon: Icons.format_bold_rounded,
+                    tooltip: '加粗',
+                    active: _activeBody.typingMarkActive('**'),
+                    onTap: () =>
+                        _withBody(() => _activeBody.toggleInline('**')),
+                  ),
+                  _ToolButton(
+                    icon: Icons.format_italic_rounded,
+                    tooltip: '斜体',
+                    active: _activeBody.typingMarkActive('*'),
+                    onTap: () => _withBody(() => _activeBody.toggleInline('*')),
+                  ),
+                  _ToolButton(
+                    icon: Icons.format_strikethrough_rounded,
+                    tooltip: '删除线',
+                    active: _activeBody.typingMarkActive('~~'),
+                    onTap: () =>
+                        _withBody(() => _activeBody.toggleInline('~~')),
+                  ),
+                  _ToolButton(
+                    icon: Icons.code_rounded,
+                    tooltip: '行内代码',
+                    active: _activeBody.typingMarkActive('`'),
+                    onTap: () => _withBody(() => _activeBody.toggleInline('`')),
+                  ),
+                  _Sep(c),
+                  _ToolButton(
+                    icon: Icons.format_quote_rounded,
+                    tooltip: '引用',
+                    onTap: () => _withBody(
+                      () => MarkdownEditing.toggleLinePrefix(_activeBody, '> '),
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                  _ToolButton(
+                    icon: Icons.format_list_bulleted_rounded,
+                    tooltip: '无序列表',
+                    onTap: () => _withBody(
+                      () => MarkdownEditing.toggleLinePrefix(_activeBody, '- '),
+                    ),
+                  ),
+                  _ToolButton(
+                    icon: Icons.format_list_numbered_rounded,
+                    tooltip: '有序列表',
+                    onTap: () => _withBody(
+                      () =>
+                          MarkdownEditing.toggleLinePrefix(_activeBody, '1. '),
+                    ),
+                  ),
+                  _ToolButton(
+                    icon: Icons.check_box_outlined,
+                    tooltip: '待办',
+                    onTap: () => _withBody(
+                      () => MarkdownEditing.toggleLinePrefix(
+                        _activeBody,
+                        '- [ ] ',
+                      ),
+                    ),
+                  ),
+                  _Sep(c),
+                  _ToolButton(
+                    key: _linkButtonKey,
+                    icon: Icons.link_rounded,
+                    tooltip: '插入链接',
+                    onTap: _insertLinkFlow,
+                  ),
+                  _ToolButton(
+                    icon: Icons.horizontal_rule_rounded,
+                    tooltip: '分割线',
+                    onTap: () => _withBody(
+                      () => MarkdownEditing.insertBlock(_activeBody, '---'),
+                    ),
+                  ),
+                  _Sep(c),
+                  // 插入本地媒体：图片 / gif / 视频
+                  _ToolButton(
+                    icon: Icons.add_photo_alternate_outlined,
+                    tooltip: '插入图片或动图',
+                    onTap: () => _insertMedia(MediaKind.image),
+                  ),
+                  _ToolButton(
+                    icon: Icons.videocam_outlined,
+                    tooltip: '插入视频',
+                    onTap: () => _insertMedia(MediaKind.video),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            Container(height: 0.5, color: c.separator),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
+              child: Row(
+                children: [
+                  Text(
+                    '$chars 字 · $words 词',
+                    style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                  ),
+                  const Spacer(),
+                  // 让用户知道"不用切到预览也能看到效果"
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.auto_awesome,
+                        size: 10,
+                        color: c.quaternaryLabel,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '输入即生效',
+                        style: AppText.caption2.copyWith(
+                          color: c.quaternaryLabel,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1480,6 +1621,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
 class _ToolButton extends StatelessWidget {
   const _ToolButton({
+    super.key,
     required this.icon,
     required this.tooltip,
     required this.onTap,

@@ -63,8 +63,12 @@ extension NoteTrash on NoteRepository {
   }
 
   int trashedCount() =>
-      _d.select('SELECT COUNT(*) AS c FROM notes WHERE deleted_at IS NOT NULL')
-          .first['c'] as int;
+      _d
+              .select(
+                'SELECT COUNT(*) AS c FROM notes WHERE deleted_at IS NOT NULL',
+              )
+              .first['c']
+          as int;
 
   /// 从回收站恢复笔记。
   ///
@@ -116,6 +120,7 @@ extension NoteTrash on NoteRepository {
   /// 只恢复文件夹的话，里面的笔记还留在回收站，
   /// 用户会以为"恢复没生效"。
   void restoreCollection(int id) {
+    _restoreCollectionChain(id);
     final ids = <int>[id, ...descendantCollectionIdsIncludingTrashed(id)];
     _d.execute(
       'UPDATE collections SET deleted_at = NULL WHERE id IN (${ids.join(',')})',
@@ -192,9 +197,7 @@ extension NoteTrash on NoteRepository {
         .map((r) => r['id'] as int)
         .toList();
     if (cols.isNotEmpty) {
-      _d.execute(
-        'DELETE FROM collections WHERE id IN (${cols.join(',')})',
-      );
+      _d.execute('DELETE FROM collections WHERE id IN (${cols.join(',')})');
     }
     _d.execute('DELETE FROM notes WHERE deleted_at IS NOT NULL');
     _purgeMedia(doomed);
@@ -209,11 +212,13 @@ extension NoteTrash on NoteRepository {
     final cutoff = DateTime.now()
         .subtract(Duration(days: days))
         .millisecondsSinceEpoch;
-    final n = _d.select(
-      'SELECT COUNT(*) AS c FROM notes '
-      'WHERE deleted_at IS NOT NULL AND deleted_at < ?',
-      <Object?>[cutoff],
-    ).first['c'] as int;
+    final n =
+        _d.select(
+              'SELECT COUNT(*) AS c FROM notes '
+              'WHERE deleted_at IS NOT NULL AND deleted_at < ?',
+              <Object?>[cutoff],
+            ).first['c']
+            as int;
 
     _d.execute(
       'DELETE FROM collections WHERE deleted_at IS NOT NULL AND deleted_at < ?',

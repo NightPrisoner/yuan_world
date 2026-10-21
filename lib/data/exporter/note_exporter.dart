@@ -87,6 +87,7 @@ class NoteExporter {
     required List<({List<String> path, Note note})> items,
     ExportFormat format = ExportFormat.docx,
     String? imageRoot,
+
     /// 单个视频进包的上限，默认 [kMaxPackedVideoBytes]。
     /// 测试里压到 1 字节就能造出"超大视频"的场景，不用真写几百 MB 的文件。
     int? maxVideoBytes,
@@ -121,13 +122,22 @@ class NoteExporter {
       // 否则就是在骗人（这正是之前"视频不见了"的同类问题）。
       final packed = <String>[];
       final oversized = <String>[];
-      for (final rel in videoRelsOf(note)) {
-        final file = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+      final mediaRels = <String>[
+        ...videoRelsOf(note),
+        // Markdown keeps local image references as-is, so the image files
+        // must travel with the archive as well. HTML embeds images as data
+        // URIs; its external videos are already included by the first list.
+        if (format == ExportFormat.markdown) ...imageRelsOf(note),
+      ];
+      for (final rel in mediaRels) {
+        final file = imageRoot == null
+            ? File(rel)
+            : File(p.join(imageRoot, rel));
         if (!file.existsSync()) continue;
         // 整包是在内存里拼出来的（`ZipEncoder().encodeBytes`），
         // 一个几 GB 的视频会把内存吃光，最后连整个导出都失败 ——
         // 宁可这一条不打包并在正文里说明，也不要整个文件夹导不出来。
-        if (file.lengthSync() > videoLimit) {
+        if (MediaImporter.isVideoPath(rel) && file.lengthSync() > videoLimit) {
           oversized.add(rel);
         } else {
           packed.add(rel);
@@ -155,10 +165,13 @@ class NoteExporter {
       // docx 放 `<笔记名>.files/`（和正文里那行说明对上）；
       // markdown/html 里写的就是原始相对路径，所以原地放，链接才不断。
       for (final rel in packed) {
-        final file = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+        final file = imageRoot == null
+            ? File(rel)
+            : File(p.join(imageRoot, rel));
         final data = file.readAsBytesSync();
-        final target =
-            format.isBinary ? '$videoFolder/${p.basename(rel)}' : rel;
+        final target = format.isBinary
+            ? '$videoFolder/${p.basename(rel)}'
+            : <String>[...dirs, rel.replaceAll('\\', '/')].join('/');
         if (!used.add(target)) continue;
         archive.addFile(
           ArchiveFile(target, data.length, data)
@@ -191,11 +204,7 @@ class NoteExporter {
   }
 
   /// 渲染单篇。[imageRoot] 用于 HTML 里把图片写成绝对路径。
-  static String render(
-    Note note,
-    ExportFormat format, {
-    String? imageRoot,
-  }) =>
+  static String render(Note note, ExportFormat format, {String? imageRoot}) =>
       switch (format) {
         ExportFormat.markdown => _markdown(note),
         ExportFormat.text => _plainText(note),
@@ -256,7 +265,8 @@ class NoteExporter {
       '<Default Extension="xml" ContentType="application/xml"/>',
     );
     // 每种实际用到的图片扩展名都要声明，否则 Word 不认识 media 里的文件
-    for (final ext in images.map((i) => p.extension(i.fileName).substring(1)).toSet()) {
+    for (final ext
+        in images.map((i) => p.extension(i.fileName).substring(1)).toSet()) {
       contentTypes.write(
         '<Default Extension="$ext" ContentType="${_mimeOf(ext)}"/>',
       );
@@ -280,15 +290,19 @@ class NoteExporter {
     final links = <_DocxLink>[];
 
     final archive = Archive()
-      ..addFile(ArchiveFile.string('[Content_Types].xml', contentTypes.toString()))
-      ..addFile(ArchiveFile.string(
-        '_rels/.rels',
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
-        '</Relationships>',
-      ))
+      ..addFile(
+        ArchiveFile.string('[Content_Types].xml', contentTypes.toString()),
+      )
+      ..addFile(
+        ArchiveFile.string(
+          '_rels/.rels',
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+              '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+              '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+              '</Relationships>',
+        ),
+      )
       // 文档属性里带上笔记的创建/修改时间：Word 的「文件 → 信息」显示的就是它，
       // 不写的话 Word 会当成"刚刚创建"，用户从属性里看不出这篇是什么时候写的
       ..addFile(ArchiveFile.string('docProps/core.xml', _coreXml(note)))
@@ -296,11 +310,19 @@ class NoteExporter {
       // 列表要有 numbering.xml 才是**真列表**（Word 里能继续编号、
       // 能调级别）；不写的话项目符号只能手打一个「·」，编号则完全丢失
       ..addFile(ArchiveFile.string('word/numbering.xml', _numberingXml()))
-      ..addFile(ArchiveFile.string('word/document.xml',
-          _documentXml(note, blocks, images,
-              videoFolder: videoFolder,
-              oversizedVideos: oversizedVideos,
-              links: links)));
+      ..addFile(
+        ArchiveFile.string(
+          'word/document.xml',
+          _documentXml(
+            note,
+            blocks,
+            images,
+            videoFolder: videoFolder,
+            oversizedVideos: oversizedVideos,
+            links: links,
+          ),
+        ),
+      );
 
     // **document.xml.rels 要无条件生成**：以前只在有图片时才写，
     // 而没有 styles 关系的话 Word 也不会去读 styles.xml。
@@ -371,7 +393,10 @@ class NoteExporter {
     // abstractNum 1：阿拉伯数字，层级用 1. / 1.1 / 1.1.1 这种写法
     b.write('<w:abstractNum w:abstractNumId="1">');
     for (var i = 0; i < indent.length; i++) {
-      final pattern = List<String>.generate(i + 1, (k) => '%${k + 1}').join('.');
+      final pattern = List<String>.generate(
+        i + 1,
+        (k) => '%${k + 1}',
+      ).join('.');
       b.write(
         '<w:lvl w:ilvl="$i"><w:start w:val="1"/>'
         '<w:numFmt w:val="decimal"/><w:lvlText w:val="$pattern."/>'
@@ -464,20 +489,25 @@ class NoteExporter {
     List<_DocxLink>? links,
   }) {
     var imgIndex = 0;
-    final b = StringBuffer()      ..write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
-      ..write('<w:document '
-          'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
-          'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
-          'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
-          'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
-          '<w:body>');
+    final b = StringBuffer()
+      ..write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+      ..write(
+        '<w:document '
+        'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        '<w:body>',
+      );
 
     if (note.title.trim().isNotEmpty) {
       // 用 Word 的「标题」样式，而不是手动加粗放大 ——
       // 这样在 Word 里能生成导航目录
-      b.write('<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
-          '<w:r><w:t xml:space="preserve">${_xesc(note.title.trim())}</w:t></w:r></w:p>');
+      b.write(
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+        '<w:r><w:t xml:space="preserve">${_xesc(note.title.trim())}</w:t></w:r></w:p>',
+      );
     }
 
     // **正文前面不写目录。**
@@ -502,8 +532,11 @@ class NoteExporter {
         while (i < blocks.length && _isTableRow(blocks[i])) {
           final cells = _splitTableRow(blocks[i].text.trim());
           // `| --- | --- |` 是表头分隔行，Word 里不需要
-          final isSeparator = cells.isNotEmpty &&
-              cells.every((cell) => RegExp(r'^:?-{2,}:?$').hasMatch(cell.trim()));
+          final isSeparator =
+              cells.isNotEmpty &&
+              cells.every(
+                (cell) => RegExp(r'^:?-{2,}:?$').hasMatch(cell.trim()),
+              );
           if (!isSeparator) rows.add(cells);
           i++;
         }
@@ -517,11 +550,15 @@ class NoteExporter {
         // URL，OLE 对象要 Word 原生支持且换台机器就失效），所以正文里留一行
         // 能看见的说明，真正的视频文件由 zipBytes 放进制表同名 .files 目录。
         if (MediaImporter.isVideoPath(rel)) {
-          b.write(_para(_videoNote(
-            rel,
-            videoFolder ?? _videoFolderOf(note),
-            skipped: oversizedVideos.contains(rel),
-          )));
+          b.write(
+            _para(
+              _videoNote(
+                rel,
+                videoFolder ?? _videoFolderOf(note),
+                skipped: oversizedVideos.contains(rel),
+              ),
+            ),
+          );
         } else {
           _DocxImage? img;
           for (final candidate in images) {
@@ -594,9 +631,11 @@ class NoteExporter {
       for (final cell in cells) {
         // 第一行当表头，加粗
         final runProps = r == 0 ? '<w:rPr><w:b/></w:rPr>' : '';
-        b.write('<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr>'
-            '<w:p><w:r>$runProps'
-            '<w:t xml:space="preserve">${_xesc(cell)}</w:t></w:r></w:p></w:tc>');
+        b.write(
+          '<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr>'
+          '<w:p><w:r>$runProps'
+          '<w:t xml:space="preserve">${_xesc(cell)}</w:t></w:r></w:p></w:tc>',
+        );
       }
       b.write('</w:tr>');
     }
@@ -653,7 +692,8 @@ class NoteExporter {
         b[1] == 0x50 &&
         b[2] == 0x4E &&
         b[3] == 0x47) {
-      int be(int o) => (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3];
+      int be(int o) =>
+          (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3];
       return (width: be(16), height: be(20));
     }
 
@@ -715,25 +755,33 @@ class NoteExporter {
       }
       final id = 'rIdLink${links.length + 1}';
       links.add(_DocxLink(relId: id, target: target));
-      out.write('<w:hyperlink r:id="$id">'
-          '<w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>'
-          '<w:t xml:space="preserve">${_xesc(label)}</w:t></w:r>'
-          '</w:hyperlink>');
+      out.write(
+        '<w:hyperlink r:id="$id">'
+        '<w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>'
+        '<w:t xml:space="preserve">${_xesc(label)}</w:t></w:r>'
+        '</w:hyperlink>',
+      );
     }
 
     for (final m in re.allMatches(text)) {
       plain(text.substring(last, m.start));
       final t = m.group(0)!;
       if (t.startsWith('**')) {
-        out.write('<w:r><w:rPr><w:b/></w:rPr>'
-            '<w:t xml:space="preserve">${_xesc(t.substring(2, t.length - 2))}</w:t></w:r>');
+        out.write(
+          '<w:r><w:rPr><w:b/></w:rPr>'
+          '<w:t xml:space="preserve">${_xesc(t.substring(2, t.length - 2))}</w:t></w:r>',
+        );
       } else if (t.startsWith('~~')) {
-        out.write('<w:r><w:rPr><w:strike/></w:rPr>'
-            '<w:t xml:space="preserve">${_xesc(t.substring(2, t.length - 2))}</w:t></w:r>');
+        out.write(
+          '<w:r><w:rPr><w:strike/></w:rPr>'
+          '<w:t xml:space="preserve">${_xesc(t.substring(2, t.length - 2))}</w:t></w:r>',
+        );
       } else if (t.startsWith('`')) {
-        out.write('<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'
-            '<w:shd w:val="clear" w:fill="F2F2F7"/></w:rPr>'
-            '<w:t xml:space="preserve">${_xesc(t.substring(1, t.length - 1))}</w:t></w:r>');
+        out.write(
+          '<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'
+          '<w:shd w:val="clear" w:fill="F2F2F7"/></w:rPr>'
+          '<w:t xml:space="preserve">${_xesc(t.substring(1, t.length - 1))}</w:t></w:r>',
+        );
       } else if (t.startsWith('[')) {
         final md = RegExp(r'^\[([^\]]+)\]\(([^)]+)\)$').firstMatch(t)!;
         link(md.group(1)!, md.group(2)!);
@@ -741,8 +789,10 @@ class NoteExporter {
         // 裸网址也做成可点的 —— 笔记里贴链接是常态，导出后点不动很别扭
         link(t, t);
       } else {
-        out.write('<w:r><w:rPr><w:i/></w:rPr>'
-            '<w:t xml:space="preserve">${_xesc(t.substring(1, t.length - 1))}</w:t></w:r>');
+        out.write(
+          '<w:r><w:rPr><w:i/></w:rPr>'
+          '<w:t xml:space="preserve">${_xesc(t.substring(1, t.length - 1))}</w:t></w:r>',
+        );
       }
       last = m.end;
     }
@@ -826,11 +876,12 @@ class NoteExporter {
   /// 标题文字 → HTML 锚点 id。
   ///
   /// 标题的 id 保留：用户自己在笔记里写 `[跳过去](#某标题)` 时要能落地。
-  static String _slug(String raw) => stripInline(raw)
-      .trim()
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^\w\u4e00-\u9fa5]+'), '-')
-      .replaceAll(RegExp(r'^-|-$'), '');
+  static String _slug(String raw) =>
+      stripInline(raw)
+          .trim()
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^\w\u4e00-\u9fa5]+'), '-')
+          .replaceAll(RegExp(r'^-|-$'), '');
 
   // ── Markdown ────────────────────────────────────────────────────────────
 
@@ -872,9 +923,7 @@ class NoteExporter {
           // 视频块和图片块在正文里是同一个 type，纯文本里也要分开写，
           // 否则导出后的 txt/html 会把 mp4 说成"图片"
           final rel = _imagePathOf(block.text.trim());
-          b.writeln(
-            MediaImporter.isVideoPath(rel) ? '[视频] $rel' : '[图片] $rel',
-          );
+          b.writeln(MediaImporter.isVideoPath(rel) ? '[视频] $rel' : '[图片] $rel');
         case ContentBlockType.divider:
           b.writeln('-' * 40);
         case ContentBlockType.heading:
@@ -919,11 +968,17 @@ class NoteExporter {
       ..writeln('h2{font-size:22px;margin:32px 0 12px;}')
       ..writeln('h3{font-size:19px;margin:26px 0 10px;}')
       ..writeln('p{margin:0 0 16px;}')
-      ..writeln('blockquote{margin:16px 0;padding:8px 16px;'
-          'border-left:3px solid #3b82f6;color:#6b7280;background:#f7f7fa;}')
-      ..writeln('img{max-width:100%;border-radius:12px;display:block;margin:18px 0;}')
-      ..writeln('code{background:#f2f2f7;padding:2px 5px;border-radius:4px;'
-          'font-family:Consolas,monospace;font-size:15px;}')
+      ..writeln(
+        'blockquote{margin:16px 0;padding:8px 16px;'
+        'border-left:3px solid #3b82f6;color:#6b7280;background:#f7f7fa;}',
+      )
+      ..writeln(
+        'img{max-width:100%;border-radius:12px;display:block;margin:18px 0;}',
+      )
+      ..writeln(
+        'code{background:#f2f2f7;padding:2px 5px;border-radius:4px;'
+        'font-family:Consolas,monospace;font-size:15px;}',
+      )
       ..writeln('.meta{color:#8e8e93;font-size:14px;margin-bottom:28px;}')
       ..writeln('hr{border:none;border-top:1px solid #e5e5ea;margin:28px 0;}')
       ..writeln('a{color:#3b82f6;}')
@@ -1045,9 +1100,7 @@ class NoteExporter {
       if (bytes.length > 4 * 1024 * 1024) {
         return Uri.file(file.path).toString();
       }
-      final ext = rel.contains('.')
-          ? rel.split('.').last.toLowerCase()
-          : 'png';
+      final ext = rel.contains('.') ? rel.split('.').last.toLowerCase() : 'png';
       return 'data:${_mimeOf(ext)};base64,${base64.encode(bytes)}';
     } catch (_) {
       return rel;
@@ -1118,17 +1171,28 @@ class NoteExporter {
     return out;
   }
 
+  /// 正文里引用到的图片文件（相对路径，去重、保持出现顺序）。
+  ///
+  /// Markdown 导出保留原始 `![](path)`，因此压缩包必须把图片放到
+  /// 笔记所在目录下，否则笔记移出压缩包后链接会断。
+  static List<String> imageRelsOf(Note note) {
+    final out = <String>[];
+    for (final block in parseContent(note.content)) {
+      if (block.type != ContentBlockType.image) continue;
+      final rel = _imagePathOf(block.text.trim());
+      if (rel.isEmpty || !MediaImporter.isImagePath(rel)) continue;
+      if (!out.contains(rel)) out.add(rel);
+    }
+    return out;
+  }
+
   /// 单篇导出后，把正文里的视频**拷到 docx 旁边**的同名 `.files` 目录里。
   /// 单篇导出走的是「选保存位置」这条路，没有压缩包可放视频 ——
   /// 而 docx 正文里已经写了"视频放在 XXX.files 文件夹"，
   /// 不把文件夹真的建出来，那句话就是骗人的。
   ///
   /// 返回拷了几个文件。
-  static int copyVideosNextTo(
-    String docxPath,
-    Note note, {
-    String? imageRoot,
-  }) {
+  static int copyVideosNextTo(String docxPath, Note note, {String? imageRoot}) {
     final savedBase = p.basenameWithoutExtension(docxPath);
     final dir = Directory(p.join(p.dirname(docxPath), '$savedBase.files'));
     var count = 0;
@@ -1137,6 +1201,33 @@ class NoteExporter {
       if (!src.existsSync()) continue;
       dir.createSync(recursive: true);
       src.copySync(p.join(dir.path, p.basename(rel)));
+      count++;
+    }
+    return count;
+  }
+
+  /// 把 Markdown/HTML 单篇导出仍会引用的本地媒体复制到导出文件旁边。
+  ///
+  /// Markdown 保留图片和视频的相对路径；HTML 的图片会内联，视频仍是
+  /// 相对路径。按原相对路径创建子目录，移动整个导出目录后链接仍然有效。
+  static int copyLinkedMediaNextTo(
+    String savedPath,
+    Note note, {
+    String? imageRoot,
+    bool includeImages = true,
+    bool includeVideos = true,
+  }) {
+    final rels = <String>{
+      if (includeImages) ...imageRelsOf(note),
+      if (includeVideos) ...videoRelsOf(note),
+    };
+    var count = 0;
+    for (final rel in rels) {
+      final src = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+      if (!src.existsSync()) continue;
+      final target = File(p.join(p.dirname(savedPath), rel));
+      target.parent.createSync(recursive: true);
+      src.copySync(target.path);
       count++;
     }
     return count;
@@ -1159,7 +1250,10 @@ class NoteExporter {
     if (!parent.existsSync()) parent.createSync(recursive: true);
 
     if (format.isBinary) {
-      file.writeAsBytesSync(renderDocxBytes(note, imageRoot: imageRoot), flush: true);
+      file.writeAsBytesSync(
+        renderDocxBytes(note, imageRoot: imageRoot),
+        flush: true,
+      );
     } else {
       file.writeAsStringSync(
         render(note, format, imageRoot: imageRoot),
@@ -1174,8 +1268,7 @@ class NoteExporter {
   }
 
   /// 建议的文件名（不含扩展名），给保存对话框做默认值。
-  static String suggestedName(Note note) =>
-      _safeFileName(note, <String>{});
+  static String suggestedName(Note note) => _safeFileName(note, <String>{});
 
   /// 把若干篇导出到目录，每篇一个文件。返回实际写出的文件数。
   static int exportToDirectory({
@@ -1195,7 +1288,10 @@ class NoteExporter {
       final file = File(p.join(dir, '$name.${format.ext}'));
       try {
         if (format.isBinary) {
-          file.writeAsBytesSync(renderDocxBytes(note, imageRoot: imageRoot), flush: true);
+          file.writeAsBytesSync(
+            renderDocxBytes(note, imageRoot: imageRoot),
+            flush: true,
+          );
         } else {
           file.writeAsStringSync(
             render(note, format, imageRoot: imageRoot),

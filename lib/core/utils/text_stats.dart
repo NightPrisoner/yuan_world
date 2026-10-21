@@ -16,8 +16,8 @@ bool isCjk(int codeUnit) {
 /// 中文标点。Word 把它们**算进字数**，所以这里也要算。
 bool isCjkPunctuation(int r) {
   return (r >= 0x3000 && r <= 0x303F) || // 。、《》「」…
-      (r >= 0xFF00 && r <= 0xFFEF) ||   // 全角形式：，！？（）
-      r == 0x00B7;                       // 间隔号 ·
+      (r >= 0xFF00 && r <= 0xFFEF) || // 全角形式：，！？（）
+      r == 0x00B7; // 间隔号 ·
 }
 
 /// 统计字数 —— **对齐 Word 的「字数」**。
@@ -151,7 +151,10 @@ String makeExcerpt(String markdown, {int maxLength = 120}) {
       // 图片整行去掉
       .replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), '')
       // 链接保留文字
-      .replaceAllMapped(RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m.group(1) ?? '')
+      .replaceAllMapped(
+        RegExp(r'\[([^\]]*)\]\([^)]*\)'),
+        (m) => m.group(1) ?? '',
+      )
       // 标题、引用、列表符号
       .replaceAll(RegExp(r'^\s{0,3}#{1,6}\s*', multiLine: true), '')
       .replaceAll(RegExp(r'^\s{0,3}>\s?', multiLine: true), '')
@@ -186,14 +189,29 @@ class ContentBlock {
     required this.type,
     required this.text,
     this.level = 0,
+    this.listNumber,
+    this.isTodo = false,
+    this.checked = false,
   });
 
   final ContentBlockType type;
   final String text;
   final int level;
+  final int? listNumber;
+  final bool isTodo;
+  final bool checked;
 }
 
-enum ContentBlockType { heading, paragraph, quote, bullet, ordered, code, image, divider }
+enum ContentBlockType {
+  heading,
+  paragraph,
+  quote,
+  bullet,
+  ordered,
+  code,
+  image,
+  divider,
+}
 
 /// 列表项的缩进 → 层级（0 起，最深 4 级）。
 ///
@@ -214,7 +232,12 @@ List<ContentBlock> parseContent(String markdown) {
 
   void flush() {
     if (buffer.isEmpty) return;
-    blocks.add(ContentBlock(type: ContentBlockType.paragraph, text: buffer.join('\n').trim()));
+    blocks.add(
+      ContentBlock(
+        type: ContentBlockType.paragraph,
+        text: buffer.join('\n').trim(),
+      ),
+    );
     buffer.clear();
   }
 
@@ -229,18 +252,22 @@ List<ContentBlock> parseContent(String markdown) {
     final img = RegExp(r'^!\[[^\]]*\]\(([^)]+)\)\s*$').firstMatch(line.trim());
     if (img != null) {
       flush();
-      blocks.add(ContentBlock(type: ContentBlockType.image, text: img.group(1)!));
+      blocks.add(
+        ContentBlock(type: ContentBlockType.image, text: img.group(1)!),
+      );
       continue;
     }
 
     final h = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(line);
     if (h != null) {
       flush();
-      blocks.add(ContentBlock(
-        type: ContentBlockType.heading,
-        text: h.group(2)!.trim(),
-        level: h.group(1)!.length,
-      ));
+      blocks.add(
+        ContentBlock(
+          type: ContentBlockType.heading,
+          text: h.group(2)!.trim(),
+          level: h.group(1)!.length,
+        ),
+      );
       continue;
     }
 
@@ -253,7 +280,27 @@ List<ContentBlock> parseContent(String markdown) {
     final quote = RegExp(r'^\s{0,3}>\s?(.*)$').firstMatch(line);
     if (quote != null) {
       flush();
-      blocks.add(ContentBlock(type: ContentBlockType.quote, text: quote.group(1)!.trim()));
+      blocks.add(
+        ContentBlock(
+          type: ContentBlockType.quote,
+          text: quote.group(1)!.trim(),
+        ),
+      );
+      continue;
+    }
+
+    final todo = RegExp(r'^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$').firstMatch(line);
+    if (todo != null) {
+      flush();
+      blocks.add(
+        ContentBlock(
+          type: ContentBlockType.bullet,
+          text: todo.group(3)!.trim(),
+          level: _listLevel(todo.group(1)!),
+          isTodo: true,
+          checked: todo.group(2)!.toLowerCase() == 'x',
+        ),
+      );
       continue;
     }
 
@@ -263,28 +310,38 @@ List<ContentBlock> parseContent(String markdown) {
     final bullet = RegExp(r'^(\s*)[-*+]\s+(.*)$').firstMatch(line);
     if (bullet != null) {
       flush();
-      blocks.add(ContentBlock(
-        type: ContentBlockType.bullet,
-        text: bullet.group(2)!.trim(),
-        level: _listLevel(bullet.group(1)!),
-      ));
+      blocks.add(
+        ContentBlock(
+          type: ContentBlockType.bullet,
+          text: bullet.group(2)!.trim(),
+          level: _listLevel(bullet.group(1)!),
+        ),
+      );
       continue;
     }
 
-    final ordered = RegExp(r'^(\s*)\d+\.\s+(.*)$').firstMatch(line);
+    final ordered = RegExp(r'^(\s*)(\d+)\.\s+(.*)$').firstMatch(line);
     if (ordered != null) {
       flush();
-      blocks.add(ContentBlock(
-        type: ContentBlockType.ordered,
-        text: ordered.group(2)!.trim(),
-        level: _listLevel(ordered.group(1)!),
-      ));
+      blocks.add(
+        ContentBlock(
+          type: ContentBlockType.ordered,
+          text: ordered.group(3)!.trim(),
+          level: _listLevel(ordered.group(1)!),
+          listNumber: int.tryParse(ordered.group(2)!),
+        ),
+      );
       continue;
     }
 
     if (line.trimLeft().startsWith('```')) {
       flush();
-      blocks.add(ContentBlock(type: ContentBlockType.code, text: line.replaceAll('`', '').trim()));
+      blocks.add(
+        ContentBlock(
+          type: ContentBlockType.code,
+          text: line.replaceAll('`', '').trim(),
+        ),
+      );
       continue;
     }
 

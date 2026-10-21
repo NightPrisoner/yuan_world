@@ -26,7 +26,8 @@ class AppMenuAnchor {
   final BuildContext? context;
   final Offset? position;
 
-  factory AppMenuAnchor.at(Offset position) => AppMenuAnchor(position: position);
+  factory AppMenuAnchor.at(Offset position) =>
+      AppMenuAnchor(position: position);
 }
 
 /// 一个菜单项。
@@ -116,17 +117,26 @@ Future<T?> showAppMenu<T>(
       final overlay =
           Overlay.of(context).context.findRenderObject() as RenderBox?;
       if (overlay != null && overlay.hasSize) {
-        // 贴着锚点下沿展开；右边界给 0 让菜单自己决定宽度
-        final position = RelativeRect.fromLTRB(
-          rect.left,
-          rect.bottom + 4,
-          overlay.size.width - rect.left,
-          0,
-        );
+        RelativeRect menuPosition() {
+          // Explicit button anchors follow layout/size changes while open.
+          // Their global coordinates must be converted to this Navigator's
+          // overlay coordinates (a nested overlay may have a nonzero origin).
+          final current = anchor == null
+              ? rect
+              : (_anchorRect(context, anchor) ?? rect);
+          final topLeft = overlay.globalToLocal(current.topLeft);
+          final bottomRight = overlay.globalToLocal(current.bottomRight);
+          return RelativeRect.fromLTRB(
+            topLeft.dx,
+            bottomRight.dy + 4,
+            overlay.size.width - topLeft.dx,
+            0,
+          );
+        }
 
         return showMenu<T>(
           context: context,
-          position: position,
+          positionBuilder: (_, _) => menuPosition(),
           color: c.secondaryBackground,
           elevation: 12,
           shape: RoundedRectangleBorder(
@@ -325,8 +335,9 @@ class _SheetRow<T> extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: AppText.callout.copyWith(
                   color: color,
-                  fontWeight:
-                      item.destructive ? FontWeight.w600 : FontWeight.w400,
+                  fontWeight: item.destructive
+                      ? FontWeight.w600
+                      : FontWeight.w400,
                 ),
               ),
             ),

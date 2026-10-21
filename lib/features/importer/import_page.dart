@@ -130,6 +130,7 @@ class _ImportPageState extends State<ImportPage> {
         collectionName: _folderName,
         // 有根目录时按相对路径还原嵌套结构
         rootDir: _folderRoot,
+        isCancellationRequested: () => _cancelRequested,
         onProgress: (stage, done, total, label) {
           if (!mounted) return;
           setState(() {

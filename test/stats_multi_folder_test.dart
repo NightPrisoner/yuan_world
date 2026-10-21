@@ -124,7 +124,7 @@ void main() {
     await selectAllFolders(tester);
 
     expect(tester.takeException(), isNull);
-    expect(find.text('写作趋势'), findsOneWidget);
+    expect(find.text('发布趋势'), findsOneWidget);
     // 多序列会带图例
     expect(find.text('文集甲'), findsWidgets);
   });

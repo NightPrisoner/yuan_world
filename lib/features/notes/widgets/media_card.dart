@@ -27,6 +27,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -93,9 +94,9 @@ class _MediaCardState extends State<MediaCard>
 
   /// 首帧图**应该**在的位置（不一定存在）。
   String get _posterFile => p.join(
-        p.dirname(widget.path),
-        p.basename(MediaCard.posterNameFor(widget.relPath)),
-      );
+    p.dirname(widget.path),
+    p.basename(MediaCard.posterNameFor(widget.relPath)),
+  );
 
   /// 首帧图的绝对路径；没有就 null。
   String? get _posterPath {
@@ -402,8 +403,9 @@ class _MediaCardState extends State<MediaCard>
                           subtitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style:
-                              AppText.caption1.copyWith(color: c.tertiaryLabel),
+                          style: AppText.caption1.copyWith(
+                            color: c.tertiaryLabel,
+                          ),
                         ),
                       ],
                     ),
@@ -752,7 +754,7 @@ class _VideoControlsState extends State<_VideoControls> {
           //    否则那个看不见的圆钮会吃掉画面正中的点击。
           AnimatedOpacity(
             opacity: (!_playing && barVisible) ? 1 : 0,
-            duration: AppMotion.fast,
+            duration: AppMotion.respecting(context, AppMotion.fast),
             child: IgnorePointer(
               ignoring: _playing || !barVisible,
               child: Center(
@@ -773,7 +775,7 @@ class _VideoControlsState extends State<_VideoControls> {
               ignoring: !barVisible,
               child: AnimatedOpacity(
                 opacity: barVisible ? 1 : 0,
-                duration: AppMotion.fast,
+                duration: AppMotion.respecting(context, AppMotion.fast),
                 child: _controlBar(player),
               ),
             ),
@@ -801,14 +803,12 @@ class _VideoControlsState extends State<_VideoControls> {
   /// 一直显示（播放中是"暂停"、暂停时是"播放"、播完是"重播"），
   /// 这样"点中间才管播放"这条规则在任何状态下都成立。
   Widget _centerButton() => _BigPlayButton(
-        icon: _playing
-            ? Icons.pause_rounded
-            : (_completed ? Icons.replay_rounded : Icons.play_arrow_rounded),
-        tip: _playing
-            ? '暂停'
-            : (_completed ? '重新播放' : '播放'),
-        onTap: () => unawaited(_toggle()),
-      );
+    icon: _playing
+        ? Icons.pause_rounded
+        : (_completed ? Icons.replay_rounded : Icons.play_arrow_rounded),
+    tip: _playing ? '暂停' : (_completed ? '重新播放' : '播放'),
+    onTap: () => unawaited(_toggle()),
+  );
 
   // ── 底部控制条 ──────────────────────────────────────────────────────────
   //
@@ -845,13 +845,14 @@ class _VideoControlsState extends State<_VideoControls> {
                 value: dur.inMilliseconds == 0
                     ? 0
                     : pos.inMilliseconds
-                        .clamp(0, dur.inMilliseconds)
-                        .toDouble(),
+                          .clamp(0, dur.inMilliseconds)
+                          .toDouble(),
                 // 时长还没读到时给 1，避免 max=0 让 Slider 断言失败
-                max: dur.inMilliseconds < 1 ? 1.0 : dur.inMilliseconds.toDouble(),
-                onChanged: (v) => player.seek(
-                  Duration(milliseconds: v.round()),
-                ),
+                max: dur.inMilliseconds < 1
+                    ? 1.0
+                    : dur.inMilliseconds.toDouble(),
+                onChanged: (v) =>
+                    player.seek(Duration(milliseconds: v.round())),
               ),
             ),
             Row(

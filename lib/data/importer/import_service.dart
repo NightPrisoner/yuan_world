@@ -21,6 +21,7 @@ import 'txt_importer.dart';
 
 /// 导入进度回调。
 typedef ImportProgress = void Function(ImportStage stage, int done, int total, String label);
+typedef ImportCancellation = bool Function();
 
 enum ImportStage { reading, parsing, saving, done }
 
@@ -39,6 +40,9 @@ class ImportSummary {
   /// 混在一起用户会以为"重新导入文件夹什么也没发生"。
   int moved = 0;
 
+  /// 用户在文件边界请求停止后置为 true。
+  bool cancelled = false;
+
   /// 被跳过的表格数量。
   ///
   /// 表格没有对应的 Markdown 表示，只能整块跳过 ——
@@ -56,6 +60,7 @@ class ImportSummary {
     if (moved > 0) b.write('，归入文集 $moved 篇');
     if (failed > 0) b.write('，失败 $failed 篇');
     if (tables > 0) b.write('；$tables 个表格未导入');
+    if (cancelled) b.write('，已按请求停止');
     return b.toString();
   }
 }
@@ -70,6 +75,7 @@ class ImportService {
   Future<ImportSummary> importDocx(
     List<File> files, {
     ImportProgress? onProgress,
+    ImportCancellation? isCancellationRequested,
     String? collectionName,
     String? rootDir,
   }) async {
@@ -77,6 +83,12 @@ class ImportService {
     var done = 0;
 
     for (final file in files) {
+      // 取消只在文件边界生效：当前文件的解析/图片落盘完成后，
+      // 下一篇开始前退出，避免留下半篇笔记。
+      if (isCancellationRequested?.call() ?? false) {
+        summary.cancelled = true;
+        break;
+      }
       done++;
       final name = p.basename(file.path);
       try {
@@ -236,9 +248,14 @@ class ImportService {
         summary.failed++;
         summary.errors.add('$name: $e');
       }
+
+      if (isCancellationRequested?.call() ?? false) {
+        summary.cancelled = true;
+        break;
+      }
     }
 
-    onProgress?.call(ImportStage.done, files.length, files.length, '');
+    onProgress?.call(ImportStage.done, done, files.length, '');
     return summary;
   }
 
@@ -272,7 +289,7 @@ class ImportService {
   int? _existingNoteId(ParsedDocument d, int? collectionId) {
     if (d.sourceUrl.isNotEmpty) {
       final hit = db.db.select(
-        'SELECT id FROM notes WHERE source_url = ? LIMIT 1',
+        'SELECT id FROM notes WHERE source_url = ? AND deleted_at IS NULL LIMIT 1',
         [d.sourceUrl],
       );
       if (hit.isNotEmpty) return hit.first['id'] as int;
@@ -282,11 +299,13 @@ class ImportService {
     // 只按标题去重会把后面几个文集误判成重复而全部跳过。
     final rows = collectionId == null
         ? db.db.select(
-            'SELECT id FROM notes WHERE title = ? AND collection_id IS NULL LIMIT 1',
+            'SELECT id FROM notes WHERE title = ? AND collection_id IS NULL '
+            'AND deleted_at IS NULL LIMIT 1',
             <Object?>[d.title],
           )
         : db.db.select(
-            'SELECT id FROM notes WHERE title = ? AND collection_id = ? LIMIT 1',
+            'SELECT id FROM notes WHERE title = ? AND collection_id = ? '
+            'AND deleted_at IS NULL LIMIT 1',
             <Object?>[d.title, collectionId],
           );
     if (rows.isNotEmpty) return rows.first['id'] as int;
@@ -297,7 +316,8 @@ class ImportService {
     // 上面两条都匹配不上，会凭空多出一份副本。
     // 正文逐字相同基本可以断定是同一个文件。
     final byContent = db.db.select(
-      'SELECT id FROM notes WHERE title = ? AND content = ? LIMIT 1',
+      'SELECT id FROM notes WHERE title = ? AND content = ? '
+      'AND deleted_at IS NULL LIMIT 1',
       <Object?>[d.title, d.markdown],
     );
     return byContent.isEmpty ? null : byContent.first['id'] as int;

@@ -13,6 +13,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../db/app_database.dart';
 import '../models.dart';
+import 'stats_repository.dart';
 
 class FieldRepository {
   FieldRepository(this.db);
@@ -26,15 +27,15 @@ class FieldRepository {
   // ── 定义 ────────────────────────────────────────────────────────────────
 
   List<FieldDef> all() => _d
-      .select('SELECT * FROM field_defs ORDER BY slot ASC, sort_order ASC, id ASC')
+      .select(
+        'SELECT * FROM field_defs ORDER BY slot ASC, sort_order ASC, id ASC',
+      )
       .map(FieldDef.fromRow)
       .toList();
 
-  List<FieldDef> headFields() =>
-      all().where((f) => f.isHead).toList();
+  List<FieldDef> headFields() => all().where((f) => f.isHead).toList();
 
-  List<FieldDef> tailFields() =>
-      all().where((f) => f.isTail).toList();
+  List<FieldDef> tailFields() => all().where((f) => f.isTail).toList();
 
   /// 新建参数。名字重复返回 null。
   int? createField({
@@ -48,13 +49,19 @@ class FieldRepository {
   }) {
     final n = name.trim();
     if (n.isEmpty) return null;
-    final clash = _d.select('SELECT 1 FROM field_defs WHERE name = ?', <Object?>[n]);
+    final clash = _d.select(
+      'SELECT 1 FROM field_defs WHERE name = ?',
+      <Object?>[n],
+    );
     if (clash.isNotEmpty) return null;
 
-    final next = (_d
-                .select('SELECT IFNULL(MAX(sort_order), -1) AS m FROM field_defs '
-                    'WHERE slot = ?', <Object?>[slot])
-                .first['m'] as int) +
+    final next =
+        (_d.select(
+              'SELECT IFNULL(MAX(sort_order), -1) AS m FROM field_defs '
+              'WHERE slot = ?',
+              <Object?>[slot],
+            ).first['m']
+            as int) +
         1;
 
     _d.execute(
@@ -113,7 +120,9 @@ class FieldRepository {
     if (orderedIds.isEmpty) return;
     _d.execute('BEGIN');
     try {
-      final stmt = _d.prepare('UPDATE field_defs SET sort_order = ? WHERE id = ?');
+      final stmt = _d.prepare(
+        'UPDATE field_defs SET sort_order = ? WHERE id = ?',
+      );
       for (var i = 0; i < orderedIds.length; i++) {
         stmt.execute(<Object?>[i, orderedIds[i]]);
       }
@@ -178,7 +187,9 @@ class FieldRepository {
           final isOverridden = manual != null;
           // 按参数**自己**的自动来源取时间，而不是按它属于头还是尾 ——
           // 用户可以把任意参数放到任意一侧，还允许指定它跟创建还是跟编辑。
-          final t = def.autoSource == 'created' ? note.createdAt : note.updatedAt;
+          final t = def.autoSource == 'created'
+              ? note.createdAt
+              : note.updatedAt;
           final value = isOverridden
               ? manual
               : (def.isAuto ? autoValue(def, t) : '');
@@ -229,18 +240,20 @@ class FieldRepository {
   List<({String value, int count})> valueDistribution(
     int fieldId, {
     bool hiddenOnly = false,
+    StatsQuery? query,
   }) {
     final def = all().where((f) => f.id == fieldId).firstOrNull;
     if (def == null) return const <({String value, int count})>[];
 
     final counts = <String, int>{};
-    final hideFlag = hiddenOnly ? 1 : 0;
+    final scope = StatsRepository(db)
+        .notePredicate(query ?? StatsQuery(hiddenOnly: hiddenOnly), alias: 'n');
 
     // 手动值
     final rows = _d.select(
       'SELECT nf.value, COUNT(*) AS cnt FROM note_fields nf '
-      'JOIN notes n ON n.id = nf.note_id AND n.is_hidden = $hideFlag '
-      'WHERE nf.field_id = ? GROUP BY nf.value',
+      'JOIN notes n ON n.id = nf.note_id '
+      'WHERE nf.field_id = ? AND $scope GROUP BY nf.value',
       <Object?>[fieldId],
     );
     for (final r in rows) {
@@ -252,14 +265,15 @@ class FieldRepository {
     // 自动值：对没手写过的笔记现算
     if (def.isAuto) {
       final notes = _d.select(
-        'SELECT id, created_at, updated_at FROM notes '
-        'WHERE is_hidden = $hideFlag AND is_archived = 0 '
-        'AND id NOT IN (SELECT note_id FROM note_fields WHERE field_id = ?)',
+        'SELECT n.id, n.created_at, n.updated_at FROM notes n '
+        'WHERE $scope '
+        'AND n.id NOT IN (SELECT note_id FROM note_fields WHERE field_id = ?)',
         <Object?>[fieldId],
       );
       for (final r in notes) {
         final t = DateTime.fromMillisecondsSinceEpoch(
-          (def.autoSource == 'created' ? r['created_at'] : r['updated_at']) as int,
+          (def.autoSource == 'created' ? r['created_at'] : r['updated_at'])
+              as int,
         );
         final v = autoValue(def, t);
         counts[v] = (counts[v] ?? 0) + 1;
@@ -274,6 +288,7 @@ class FieldRepository {
   /// 数值型参数的总和 / 均值，用于「所有参数都可以被统计计算」。
   List<({FieldDef def, double sum, double avg, int count})> numericSummary({
     bool hiddenOnly = false,
+    StatsQuery? query,
   }) {
     final out = <({FieldDef def, double sum, double avg, int count})>[];
 
@@ -281,7 +296,11 @@ class FieldRepository {
       var sum = 0.0;
       var count = 0;
 
-      for (final row in valueDistribution(def.id, hiddenOnly: hiddenOnly)) {
+      for (final row in valueDistribution(
+        def.id,
+        hiddenOnly: hiddenOnly,
+        query: query,
+      )) {
         final v = double.tryParse(row.value);
         if (v == null) continue;
         sum += v * row.count;

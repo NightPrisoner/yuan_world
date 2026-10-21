@@ -11,11 +11,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:yuan_world/app_state.dart';
+import 'package:yuan_world/core/motion/apple_page_route.dart';
+import 'package:yuan_world/core/motion/app_motion.dart';
 import 'package:yuan_world/core/theme/app_theme.dart';
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
 import 'package:yuan_world/features/notes/note_detail_page.dart';
+import 'package:yuan_world/features/notes/editor/note_editor_page.dart';
 import 'package:yuan_world/features/notes/widgets/note_card.dart';
 import 'package:yuan_world/features/shell/home_shell.dart';
 
@@ -136,6 +139,123 @@ void main() {
       await tester.tap(find.byTooltip('收起正文栏'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('收起正文栏'), findsNothing);
+    });
+
+    testWidgets('收起正文按钮醒目且位于阅读顶栏最右侧', (tester) async {
+      state.repo.insertNote(title: '位置测试', content: '# 标题\n正文', excerpt: '');
+      await state.refresh();
+      await pumpApp(tester, size: const Size(1400, 900));
+      await tester.tap(find.text('位置测试').first);
+      await tester.pumpAndSettle();
+      final close = find.byTooltip('收起正文栏');
+      final button = tester.widget<GlassIconButton>(
+        find.ancestor(of: close, matching: find.byType(GlassIconButton)),
+      );
+      expect(button.background, AppColors.light.tint);
+      expect(button.color, Colors.white);
+      final closeRect = tester.getRect(close);
+      final appBar = tester.widget<SliverAppBar>(find.byType(SliverAppBar));
+      for (final action in appBar.actions!) {
+        if (action is SizedBox ||
+            action is GlassIconButton && action.tooltip == '收起正文栏') {
+          continue;
+        }
+        expect(
+          tester.getRect(find.byWidget(action)).right,
+          lessThan(closeRect.left),
+        );
+      }
+      expect(tester.takeException(), isNull);
+    });
+
+    for (final grid in [false, true]) {
+      testWidgets('再次点击当前文章收起，点击其他文章切换 grid=$grid', (tester) async {
+        final a = state.repo.insertNote(
+          title: '文章甲',
+          content: '甲正文',
+          excerpt: '',
+        );
+        final b = state.repo.insertNote(
+          title: '文章乙',
+          content: '乙正文',
+          excerpt: '',
+        );
+        state.setGridMode(grid);
+        await state.refresh();
+        await pumpApp(tester, size: const Size(1400, 900));
+        await tester.tap(find.text('文章甲').first);
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<NoteDetailPage>(find.byType(NoteDetailPage)).noteId,
+          a,
+        );
+        await tester.tap(find.text('文章乙').first);
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<NoteDetailPage>(find.byType(NoteDetailPage)).noteId,
+          b,
+        );
+        await tester.tap(find.text('文章乙').first);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+        expect(
+          find.byType(NoteDetailPage),
+          findsOneWidget,
+          reason: '保留正文直到收起动画结束',
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(NoteDetailPage), findsNothing);
+        await tester.tap(find.text('文章乙').first);
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<NoteDetailPage>(find.byType(NoteDetailPage)).noteId,
+          b,
+        );
+      });
+    }
+
+    testWidgets('当前文章收起途中再次点击可连续重新展开', (tester) async {
+      state.repo.insertNote(title: '快速开合', content: '正文', excerpt: '');
+      await state.refresh();
+      await pumpApp(tester, size: const Size(1400, 900));
+      await tester.tap(find.text('快速开合').first);
+      await tester.pumpAndSettle();
+      final pane = find.byKey(const ValueKey('detail-pane'));
+      await tester.tap(find.text('快速开合').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+      final width = tester.getSize(pane).width;
+      await tester.tap(find.text('快速开合').first);
+      await tester.pump();
+      expect(tester.getSize(pane).width, closeTo(width, 0.01));
+      await tester.pumpAndSettle();
+      expect(tester.getSize(pane).width, greaterThan(width));
+      expect(find.byType(NoteDetailPage), findsOneWidget);
+    });
+
+    testWidgets('编辑时再次点击当前文章收起仍保存未自动落库的内容', (tester) async {
+      final id = state.repo.insertNote(
+        title: '保存测试',
+        content: '原正文',
+        excerpt: '',
+      );
+      await state.refresh();
+      await pumpApp(tester, size: const Size(1400, 900));
+      await tester.tap(find.text('保存测试').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('编辑'));
+      await tester.pumpAndSettle();
+      final body = find
+          .descendant(
+            of: find.byType(NoteEditorPage),
+            matching: find.byType(TextField),
+          )
+          .last;
+      await tester.enterText(body, '尚未自动保存的新正文');
+      await tester.tap(find.text('保存测试').first);
+      await tester.pumpAndSettle();
+      expect(find.byType(NoteEditorPage), findsNothing);
+      expect(state.repo.getNote(id)!.content, contains('尚未自动保存的新正文'));
     });
 
     testWidgets('新建笔记会自动展开正文栏', (tester) async {
@@ -978,6 +1098,11 @@ void main() {
       // 编辑器已经不再有"编辑/预览"两个模式，打开就是所见即所得
       expect(find.byTooltip('加粗'), findsOneWidget);
       expect(find.text('预览'), findsNothing);
+      expect(
+        ModalRoute.of(tester.element(find.byType(NoteEditorPage))),
+        isA<EditorPageRoute<void>>(),
+        reason: '窄屏从阅读进入编辑应使用原地淡入缩放，不应从右侧推入',
+      );
     });
   });
 }

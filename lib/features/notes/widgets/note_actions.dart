@@ -90,7 +90,8 @@ Future<void> exportZip(
     );
   } catch (e) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('导出失败：$e')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('导出失败：$e')));
     return;
   }
   if (target == null || !context.mounted) return;
@@ -193,9 +194,8 @@ Future<void> exportSingleNote(BuildContext context, Note note) async {
     );
   } catch (e) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('导出失败：$e')),
-    );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('导出失败：$e')));
     return;
   }
   if (target == null || !context.mounted) return;
@@ -222,6 +222,20 @@ Future<void> exportSingleNote(BuildContext context, Note note) async {
       }
       NoteExporter.copyVideosNextTo(savedPath, full, imageRoot: imageRoot);
     }
+  } else if (format == ExportFormat.markdown) {
+    NoteExporter.copyLinkedMediaNextTo(
+      target.toFilePath(),
+      full,
+      imageRoot: imageRoot,
+    );
+  } else if (format == ExportFormat.html) {
+    // HTML 图片是 data URI，只有原始视频链接仍需随文件带走。
+    NoteExporter.copyLinkedMediaNextTo(
+      target.toFilePath(),
+      full,
+      imageRoot: imageRoot,
+      includeImages: false,
+    );
   }
 
   // 时间戳跟随笔记：保存框写出来的文件默认是"刚刚"，用户在资源管理器里
@@ -281,7 +295,9 @@ Future<NoteAction> showNoteActions(
       AppMenuItem(
         value: NoteAction.archived,
         label: note.isArchived ? '取消归档' : '归档',
-        icon: note.isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+        icon: note.isArchived
+            ? Icons.unarchive_outlined
+            : Icons.archive_outlined,
       ),
       // 在隐私空间里就反过来给「移出」—— 否则内容进去就再也出不来了
       AppMenuItem(
@@ -334,11 +350,7 @@ Future<NoteAction> showNoteActions(
       await state.refresh();
       if (popOnDelete && context.mounted) Navigator.of(context).maybePop();
       messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            movingOut ? '已移出隐私空间，回到普通笔记里了' : '已移入隐私空间',
-          ),
-        ),
+        SnackBar(content: Text(movingOut ? '已移出隐私空间，回到普通笔记里了' : '已移入隐私空间')),
       );
     case NoteAction.cover:
       if (context.mounted) {
@@ -359,9 +371,7 @@ Future<NoteAction> showNoteActions(
       if (popOnDelete && context.mounted) Navigator.of(context).maybePop();
       messenger.showSnackBar(
         SnackBar(
-          content: Text(
-            '已删除「${note.title.isEmpty ? '无标题笔记' : note.title}」',
-          ),
+          content: Text('已删除「${note.title.isEmpty ? '无标题笔记' : note.title}」'),
           duration: const Duration(seconds: 3),
         ),
       );

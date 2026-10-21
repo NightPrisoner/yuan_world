@@ -71,8 +71,11 @@ void main() {
       imageRoot: root.path,
     );
     final a = ZipDecoder().decodeBytes(bytes);
-    expect(findFile(a, 'word/media/image1.png'), isNotNull,
-        reason: '真图片还是要嵌进去');
+    expect(
+      findFile(a, 'word/media/image1.png'),
+      isNotNull,
+      reason: '真图片还是要嵌进去',
+    );
     final media = <String>[
       for (final f in a)
         if (f.name.startsWith('word/media/')) f.name,
@@ -127,8 +130,11 @@ void main() {
         if (f.isFile) f.name,
     ];
     expect(names, contains('无题 (2).docx'));
-    expect(names, contains('无题 (2).files/clip.mp4'),
-        reason: '视频目录名没跟着去重后的文件名走');
+    expect(
+      names,
+      contains('无题 (2).files/clip.mp4'),
+      reason: '视频目录名没跟着去重后的文件名走',
+    );
   });
 
   test('markdown 导出：视频用原始相对路径，解压后链接不断', () {
@@ -159,6 +165,41 @@ void main() {
     );
     final md = entryText(ZipDecoder().decodeBytes(zip), '带视频的笔记.md');
     expect(md, isNot(contains('.files')));
+  });
+
+  test('markdown 压缩包会带上正文引用的图片', () {
+    final zip = NoteExporter.zipBytes(
+      items: <({List<String> path, Note note})>[
+        (path: <String>['文集'], note: videoNote()),
+      ],
+      format: ExportFormat.markdown,
+      imageRoot: root.path,
+    );
+    final names = <String>[
+      for (final f in ZipDecoder().decodeBytes(zip))
+        if (f.isFile) f.name,
+    ];
+    expect(names, contains('文集/7/shot.png'));
+    expect(names, contains('文集/7/clip.mp4'));
+  });
+
+  test('单篇 markdown 导出会把图片和视频复制到相对路径下', () {
+    final out = p.join(root.path, 'out', '笔记.md');
+    Directory(p.dirname(out)).createSync(recursive: true);
+    final copied = NoteExporter.copyLinkedMediaNextTo(
+      out,
+      videoNote(),
+      imageRoot: root.path,
+    );
+    expect(copied, 2);
+    expect(
+      File(p.join(root.path, 'out', '7', 'shot.png')).existsSync(),
+      isTrue,
+    );
+    expect(
+      File(p.join(root.path, 'out', '7', 'clip.mp4')).existsSync(),
+      isTrue,
+    );
   });
 
   test('HTML 里视频走 <video>，不做 base64 内联', () {
@@ -226,9 +267,14 @@ void main() {
       createdAt: DateTime(2026, 1, 1),
       updatedAt: DateTime(2026, 1, 1),
     );
-    expect(NoteExporter.copyVideosNextTo(docxPath, plain, imageRoot: root.path), 0);
-    expect(Directory(p.join(root.path, 'out2', '没视频.files')).existsSync(),
-        isFalse);
+    expect(
+      NoteExporter.copyVideosNextTo(docxPath, plain, imageRoot: root.path),
+      0,
+    );
+    expect(
+      Directory(p.join(root.path, 'out2', '没视频.files')).existsSync(),
+      isFalse,
+    );
   });
 
   test('超大视频不硬塞进包，正文如实说明（不能谎称已放入文件夹）', () {
@@ -253,8 +299,7 @@ void main() {
     );
     final xml = entryText(docx, 'word/document.xml');
     expect(xml, contains('未随导出打包'));
-    expect(xml, isNot(contains('已随导出放入')),
-        reason: '文件明明没在包里，不能说已放入');
+    expect(xml, isNot(contains('已随导出放入')), reason: '文件明明没在包里，不能说已放入');
   });
 
   test('videoRelsOf 去重且保持出现顺序', () {

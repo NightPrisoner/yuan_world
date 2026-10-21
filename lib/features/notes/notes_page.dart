@@ -51,9 +51,10 @@ Future<void> createAndOpenNote(BuildContext context) async {
   await state.refresh();
   if (!context.mounted) return;
   // 新建出来的是空笔记，直接进编辑器 —— 跳阅读页什么也看不到
-  await navigator.push(
-    ApplePageRoute<void>(pageBuilder: (_) => NoteEditorPage(noteId: id)),
-  );
+  final route = MediaQuery.sizeOf(context).width < 1000
+      ? EditorPageRoute<void>(pageBuilder: (_) => NoteEditorPage(noteId: id))
+      : ApplePageRoute<void>(pageBuilder: (_) => NoteEditorPage(noteId: id));
+  await navigator.push(route);
   if (context.mounted) state.refreshListOnly();
 }
 
@@ -199,11 +200,7 @@ class _NotesPageState extends State<NotesPage> {
       context,
       header: '移动到',
       items: <AppMenuItem<int>>[
-        const AppMenuItem(
-          value: -1,
-          label: '未分类',
-          icon: Icons.inbox_rounded,
-        ),
+        const AppMenuItem(value: -1, label: '未分类', icon: Icons.inbox_rounded),
         for (final col in state.collections)
           AppMenuItem(
             value: col.id,
@@ -217,49 +214,46 @@ class _NotesPageState extends State<NotesPage> {
   }
 
   Future<bool?> _confirmBatchDelete(int count) => showDialog<bool>(
-        context: context,
-        builder: (dCtx) => AlertDialog(
-          backgroundColor: dCtx.colors.secondaryBackground,
-          title: Text('删除 $count 篇笔记？', style: AppText.headline),
-          content: Text(
-            '会先放进回收站，之后随时能恢复。',
-            style: AppText.footnote.copyWith(color: dCtx.colors.secondaryLabel),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dCtx).pop(false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(dCtx).pop(true),
-              child: Text(
-                '删除',
-                style: TextStyle(color: dCtx.colors.destructive),
-              ),
-            ),
-          ],
+    context: context,
+    builder: (dCtx) => AlertDialog(
+      backgroundColor: dCtx.colors.secondaryBackground,
+      title: Text('删除 $count 篇笔记？', style: AppText.headline),
+      content: Text(
+        '会先放进回收站，之后随时能恢复。',
+        style: AppText.footnote.copyWith(color: dCtx.colors.secondaryLabel),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dCtx).pop(false),
+          child: const Text('取消'),
         ),
-      );
+        TextButton(
+          onPressed: () => Navigator.of(dCtx).pop(true),
+          child: Text('删除', style: TextStyle(color: dCtx.colors.destructive)),
+        ),
+      ],
+    ),
+  );
 
   /// 多选模式下的底部操作栏（贴在底部标签栏上面）。
   Widget _selectionBar(AppState state, List<Note> notes) {
     final c = context.colors;
     final ids = notes.map((n) => n.id).toSet();
     Widget btn(String label, VoidCallback? onTap) => Pressable(
-          onTap: onTap,
-          scale: 0.95,
-          haptic: false,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Text(
-              label,
-              style: AppText.callout.copyWith(
-                color: onTap == null ? c.quaternaryLabel : c.tint,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+      onTap: onTap,
+      scale: 0.95,
+      haptic: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Text(
+          label,
+          style: AppText.callout.copyWith(
+            color: onTap == null ? c.quaternaryLabel : c.tint,
+            fontWeight: FontWeight.w600,
           ),
-        );
+        ),
+      ),
+    );
 
     return Container(
       decoration: BoxDecoration(
@@ -281,17 +275,23 @@ class _NotesPageState extends State<NotesPage> {
                 ),
               ),
               const Spacer(),
-              btn('全选', () => setState(() {
-                    _selected
-                      ..clear()
-                      ..addAll(ids);
-                  })),
-              btn('反选', () => setState(() {
-                    final next = ids.difference(_selected);
-                    _selected
-                      ..clear()
-                      ..addAll(next);
-                  })),
+              btn(
+                '全选',
+                () => setState(() {
+                  _selected
+                    ..clear()
+                    ..addAll(ids);
+                }),
+              ),
+              btn(
+                '反选',
+                () => setState(() {
+                  final next = ids.difference(_selected);
+                  _selected
+                    ..clear()
+                    ..addAll(next);
+                }),
+              ),
               btn(
                 '批量操作',
                 _selected.isEmpty ? null : () => _batchMenu(state, notes),
@@ -356,8 +356,8 @@ class _NotesPageState extends State<NotesPage> {
     final subtitle = _selecting
         ? '已选 ${_selected.length} 篇'
         : state.filter.collectionId == null && state.filter.tag == null
-            ? '共 $total 篇'
-            : '筛选出 ${state.notes.length} 篇';
+        ? '共 $total 篇'
+        : '筛选出 ${state.notes.length} 篇';
 
     return SliverAppBar(
       pinned: true,
@@ -391,15 +391,17 @@ class _NotesPageState extends State<NotesPage> {
         GlassIconButton(
           icon: Icons.search_rounded,
           tooltip: '搜索',
-          onTap: () => Navigator.of(context).push(
-            ApplePageRoute<void>(pageBuilder: (_) => const SearchPage()),
-          ),
+          onTap: () => Navigator.of(
+            context,
+          ).push(ApplePageRoute<void>(pageBuilder: (_) => const SearchPage())),
         ),
         const SizedBox(width: 6),
         _SortMenu(state: state),
         const SizedBox(width: 4),
         GlassIconButton(
-          icon: state.gridMode ? Icons.view_list_rounded : Icons.grid_view_rounded,
+          icon: state.gridMode
+              ? Icons.view_list_rounded
+              : Icons.grid_view_rounded,
           tooltip: state.gridMode ? '列表视图' : '瀑布流视图',
           onTap: () => state.setGridMode(!state.gridMode),
         ),
@@ -409,7 +411,10 @@ class _NotesPageState extends State<NotesPage> {
         valueListenable: _collapse,
         builder: (context, t, _) {
           return FlexibleSpaceBar(
-            titlePadding: const EdgeInsetsDirectional.only(start: 20, bottom: 12),
+            titlePadding: const EdgeInsetsDirectional.only(
+              start: 20,
+              bottom: 12,
+            ),
             title: Opacity(
               opacity: (1 - t * 1.6).clamp(0.0, 1.0),
               child: Transform.translate(
@@ -461,7 +466,8 @@ class _NotesPageState extends State<NotesPage> {
         // 以前漏了 `archivedOnly` 和 `uncategorizedOnly`：点过「归档」之后，
         // 「全部」和「归档」会**同时高亮**（用户报的"点来点去两个都亮"），
         // 未分类同理。判断条件必须和 tab 的语义一一对应。
-        selected: f.collectionId == null &&
+        selected:
+            f.collectionId == null &&
             f.tag == null &&
             !f.favoritesOnly &&
             !f.uncategorizedOnly &&
@@ -489,11 +495,7 @@ class _NotesPageState extends State<NotesPage> {
           f.archivedOnly
               ? f.copyWith(archivedOnly: false, hiddenOnly: false)
               // 归档和"未归档"是互斥的两边，切过去时先清掉其它互斥筛选
-              : NoteFilter(
-                  archivedOnly: true,
-                  sort: f.sort,
-                  query: f.query,
-                ),
+              : NoteFilter(archivedOnly: true, sort: f.sort, query: f.query),
         ),
       ),
       for (final col in state.collections)
@@ -575,11 +577,7 @@ class _NotesPageState extends State<NotesPage> {
                     color: c.fill,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(
-                    Icons.folder_rounded,
-                    size: 18,
-                    color: c.tint,
-                  ),
+                  child: Icon(Icons.folder_rounded, size: 18, color: c.tint),
                 ),
               ),
             ),
@@ -725,24 +723,30 @@ class _NotesPageState extends State<NotesPage> {
         itemBuilder: (context, i) => Padding(
           padding: const EdgeInsets.only(bottom: AppMetrics.rowGap),
           child: _Staggered(
+            key: ValueKey<int>(notes[i].id),
             index: i,
             child: Builder(
-              builder: (cardCtx) => _selectable(
+              builder: (cardCtx) => _noteOpenHero(
                 notes[i],
-                NoteCard(
-                  note: notes[i],
-                  imageRoot: imageRoot,
-                  onTap: () => _selecting
-                      ? _toggleSelect(notes[i].id)
-                      : _openNote(notes[i]),
-                  onLongPress: () => _selecting
-                      ? _toggleSelect(notes[i].id)
-                      : _showActions(
-                          notes[i],
-                          AppMenuAnchor(context: cardCtx),
-                        ),
-                  onSecondaryTap: (a) => _showActions(notes[i], a),
-                  onMore: (a) => _showActions(notes[i], a),
+                _selectable(
+                  notes[i],
+                  NoteCard(
+                    note: notes[i],
+                    imageRoot: imageRoot,
+                    // 保留原来的卡片 → 正文 Hero，移动端的展开动效依赖它。
+                    enableHero: true,
+                    onTap: () => _selecting
+                        ? _toggleSelect(notes[i].id)
+                        : _openNote(notes[i], cardCtx),
+                    onLongPress: () => _selecting
+                        ? _toggleSelect(notes[i].id)
+                        : _showActions(
+                            notes[i],
+                            AppMenuAnchor(context: cardCtx),
+                          ),
+                    onSecondaryTap: (a) => _showActions(notes[i], a),
+                    onMore: (a) => _showActions(notes[i], a),
+                  ),
                 ),
               ),
             ),
@@ -772,7 +776,9 @@ class _NotesPageState extends State<NotesPage> {
               width: 22,
               height: 22,
               decoration: BoxDecoration(
-                color: on ? c.tint : c.secondaryBackground.withValues(alpha: 0.85),
+                color: on
+                    ? c.tint
+                    : c.secondaryBackground.withValues(alpha: 0.85),
                 shape: BoxShape.circle,
                 border: Border.all(
                   color: on ? c.tint : c.separator,
@@ -780,7 +786,11 @@ class _NotesPageState extends State<NotesPage> {
                 ),
               ),
               child: on
-                  ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
+                  ? const Icon(
+                      Icons.check_rounded,
+                      size: 15,
+                      color: Colors.white,
+                    )
                   : null,
             ),
           ),
@@ -806,25 +816,28 @@ class _NotesPageState extends State<NotesPage> {
         crossAxisSpacing: AppMetrics.rowGap,
         childCount: notes.length,
         itemBuilder: (context, i) => _Staggered(
+          key: ValueKey<int>(notes[i].id),
           index: i,
           child: Builder(
-            builder: (cardCtx) => _selectable(
+            builder: (cardCtx) => _noteOpenHero(
               notes[i],
-              NoteCard(
-                note: notes[i],
-                imageRoot: imageRoot,
-                compact: true,
-                onTap: () => _selecting
-                    ? _toggleSelect(notes[i].id)
-                    : _openNote(notes[i]),
-                onLongPress: () => _selecting
-                    ? _toggleSelect(notes[i].id)
-                    : _showActions(
-                        notes[i],
-                        AppMenuAnchor(context: cardCtx),
-                      ),
-                onSecondaryTap: (a) => _showActions(notes[i], a),
-                onMore: (a) => _showActions(notes[i], a),
+              _selectable(
+                notes[i],
+                NoteCard(
+                  note: notes[i],
+                  imageRoot: imageRoot,
+                  // 保留原来的卡片 → 正文 Hero，移动端的展开动效依赖它。
+                  enableHero: true,
+                  compact: true,
+                  onTap: () => _selecting
+                      ? _toggleSelect(notes[i].id)
+                      : _openNote(notes[i], cardCtx),
+                  onLongPress: () => _selecting
+                      ? _toggleSelect(notes[i].id)
+                      : _showActions(notes[i], AppMenuAnchor(context: cardCtx)),
+                  onSecondaryTap: (a) => _showActions(notes[i], a),
+                  onMore: (a) => _showActions(notes[i], a),
+                ),
               ),
             ),
           ),
@@ -859,12 +872,57 @@ class _NotesPageState extends State<NotesPage> {
 
   // ── 交互 ────────────────────────────────────────────────────────────────
 
-  void _openNote(Note note) {
+  void _openNote(Note note, BuildContext cardContext) {
+    final narrow = MediaQuery.sizeOf(context).width < 1000;
+    final overlayBox = Navigator.of(context).overlay?.context
+        .findRenderObject();
+    Rect? rectOf(BuildContext target) {
+      if (!target.mounted || overlayBox is! RenderBox) return null;
+      final box = target.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) return null;
+      return MatrixUtils.transformRect(
+        box.getTransformTo(overlayBox),
+        Offset.zero & box.size,
+      );
+    }
+
+    BuildContext? sourceCoverContext;
+    if (narrow) {
+      void visit(Element element) {
+        final widget = element.widget;
+        if (widget is Hero && widget.tag == 'note-cover-${note.id}') {
+          sourceCoverContext = element;
+          return;
+        }
+        element.visitChildElements(visit);
+      }
+
+      (cardContext as Element).visitChildElements(visit);
+    }
+    Rect? sourceCoverRect() =>
+        sourceCoverContext == null ? null : rectOf(sourceCoverContext!);
+
+    final coverKey = narrow ? GlobalKey() : null;
     Navigator.of(context).push(
-      ApplePageRoute<void>(
-        pageBuilder: (_) => NoteDetailPage(noteId: note.id),
-      ),
+      narrow
+          ? CardExpandPageRoute<void>(
+              pageBuilder: (_) =>
+                  NoteDetailPage(noteId: note.id, coverKey: coverKey),
+              sourceRect: rectOf(cardContext),
+              sourceRectBuilder: () => rectOf(cardContext),
+              sourceCoverRectBuilder: sourceCoverRect,
+              coverKey: coverKey,
+              verticalOnly: !context.read<AppState>().gridMode,
+            )
+          : ApplePageRoute<void>(
+              pageBuilder: (_) => NoteDetailPage(noteId: note.id),
+            ),
     );
+  }
+
+  Widget _noteOpenHero(Note note, Widget child) {
+    // 页面表面由路由展开，封面继续使用 NoteCard 内原有的 Hero 飞行。
+    return child;
   }
 
   /// 统一走共用菜单：卡片右键、长按、悬停 ⋯ 按钮都调这里，
@@ -877,7 +935,7 @@ class _NotesPageState extends State<NotesPage> {
 /// 错峰淡入：前若干项带一点延迟，形成柔和的出现节奏。
 /// 只对首屏可见的项生效（超过 12 项就不再延迟，避免滚动时反而卡顿）。
 class _Staggered extends StatefulWidget {
-  const _Staggered({required this.index, required this.child});
+  const _Staggered({super.key, required this.index, required this.child});
   final int index;
   final Widget child;
 
@@ -976,11 +1034,7 @@ class _Pill extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (icon != null) ...[
-              Icon(
-                icon,
-                size: 13,
-                color: selected ? Colors.white : tint,
-              ),
+              Icon(icon, size: 13, color: selected ? Colors.white : tint),
               const SizedBox(width: 4),
             ],
             Text(

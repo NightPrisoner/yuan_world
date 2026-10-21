@@ -6,7 +6,7 @@
 /// 用的是 [FieldRepository.valueDistribution]，所以：
 ///   - 手写过的按用户的值算
 ///   - 没写过的按自动值算（「年」这种就能统计出每年写了多少篇）
-///   - 隐私空间的笔记一律不计入
+///   - 时间、文件夹、隐私空间与页面其他统计采用同一范围
 library;
 
 import 'package:flutter/material.dart';
@@ -16,11 +16,18 @@ import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models.dart';
-import '../../data/repositories/stats_repository.dart' show ShareItem, ShareStyle;
+import '../../data/repositories/stats_repository.dart'
+    show ShareItem, ShareStyle, StatsQuery;
 import 'stats_charts.dart';
 
 class FieldStatsCard extends StatefulWidget {
-  const FieldStatsCard({super.key});
+  const FieldStatsCard({
+    super.key,
+    this.query = StatsQuery.empty,
+    this.revision = 0,
+  });
+  final StatsQuery query;
+  final int revision;
 
   @override
   State<FieldStatsCard> createState() => _FieldStatsCardState();
@@ -39,12 +46,20 @@ class _FieldStatsCardState extends State<FieldStatsCard> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
+  @override
+  void didUpdateWidget(covariant FieldStatsCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.query != widget.query ||
+        oldWidget.revision != widget.revision) {
+      _load();
+    }
+  }
+
   void _load() {
     if (!mounted) return;
     final state = context.read<AppState>();
     final fields = state.fields;
     final defs = fields.all();
-    final hidden = state.privacyMode;
 
     // 默认选一个"有东西可看"的：优先数值型（能算总和均值），否则第一个
     final first = defs.isEmpty
@@ -53,11 +68,11 @@ class _FieldStatsCardState extends State<FieldStatsCard> {
 
     setState(() {
       _defs = defs;
-      _selectedId ??= first?.id;
-      _numeric = fields.numericSummary(hiddenOnly: hidden);
+      if (!defs.any((f) => f.id == _selectedId)) _selectedId = first?.id;
+      _numeric = fields.numericSummary(query: widget.query);
       _dist = _selectedId == null
           ? const []
-          : fields.valueDistribution(_selectedId!, hiddenOnly: hidden);
+          : fields.valueDistribution(_selectedId!, query: widget.query);
       _loading = false;
     });
   }
@@ -66,9 +81,9 @@ class _FieldStatsCardState extends State<FieldStatsCard> {
     setState(() {
       _selectedId = id;
       _dist = context.read<AppState>().fields.valueDistribution(
-            id,
-            hiddenOnly: context.read<AppState>().privacyMode,
-          );
+        id,
+        query: widget.query,
+      );
     });
   }
 
@@ -197,8 +212,10 @@ class _FieldStatsCardState extends State<FieldStatsCard> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('总和',
-                  style: AppText.caption1.copyWith(color: c.tertiaryLabel)),
+              Text(
+                '总和',
+                style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+              ),
               const SizedBox(width: 5),
               Text(
                 fmt(entry.sum),
@@ -212,8 +229,10 @@ class _FieldStatsCardState extends State<FieldStatsCard> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('平均',
-                  style: AppText.caption1.copyWith(color: c.tertiaryLabel)),
+              Text(
+                '平均',
+                style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+              ),
               const SizedBox(width: 5),
               Text(
                 fmt(entry.avg),
@@ -227,8 +246,10 @@ class _FieldStatsCardState extends State<FieldStatsCard> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('有值',
-                  style: AppText.caption1.copyWith(color: c.tertiaryLabel)),
+              Text(
+                '有值',
+                style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+              ),
               const SizedBox(width: 5),
               Text(
                 '${entry.count} 篇',

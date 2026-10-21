@@ -46,18 +46,31 @@ class _TodoCheckState extends State<TodoCheck> with TickerProviderStateMixin {
   late final AnimationController _pulse = AnimationController.unbounded(
     vsync: this,
   )..value = 1;
+  late final Listenable _ticker = Listenable.merge([_mark, _pulse]);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (AppMotion.reduceMotion(context)) {
+      _mark.value = widget.checked ? 1 : 0;
+      _pulse.value = 1;
+    }
+  }
 
   @override
   void didUpdateWidget(covariant TodoCheck old) {
     super.didUpdateWidget(old);
     if (widget.checked != old.checked) {
+      if (AppMotion.reduceMotion(context)) {
+        _mark.value = widget.checked ? 1 : 0;
+        _pulse.value = 1;
+        return;
+      }
       if (widget.checked) {
         // 正的初速度 → 先胀出去再荡回来
         _pulse
           ..value = 1
-          ..animateWith(
-            SpringSimulation(AppMotion.bouncy, 1, 1, 4.2),
-          );
+          ..animateWith(SpringSimulation(AppMotion.bouncy, 1, 1, 4.2));
         _mark.animateWith(
           SpringSimulation(AppMotion.bouncy, _mark.value, 1, 0),
         );
@@ -89,7 +102,7 @@ class _TodoCheckState extends State<TodoCheck> with TickerProviderStateMixin {
         height: widget.size + 12,
         child: Center(
           child: AnimatedBuilder(
-            animation: Listenable.merge(<Listenable>[_mark, _pulse]),
+            animation: _ticker,
             builder: (context, _) {
               // 脉冲：弹簧会荡到 1 以上再收回来，直接当倍率用就行。
               // 夹一下范围：弹簧过冲不受控，别让它在极端情况下把圆撑爆。
@@ -159,8 +172,12 @@ class _CheckPainter extends CustomPainter {
       final p3 = Offset(w * 0.73, h * 0.34);
 
       // 用两段进度控制笔迹生长
-      final firstLeg = Curves.easeOut.transform((progress / 0.45).clamp(0.0, 1.0));
-      final secondLeg = Curves.easeOut.transform(((progress - 0.45) / 0.55).clamp(0.0, 1.0));
+      final firstLeg = Curves.easeOut.transform(
+        (progress / 0.45).clamp(0.0, 1.0),
+      );
+      final secondLeg = Curves.easeOut.transform(
+        ((progress - 0.45) / 0.55).clamp(0.0, 1.0),
+      );
 
       final path = Path()..moveTo(p1.dx, p1.dy);
       path.lineTo(
@@ -202,7 +219,7 @@ class AnimatedStrikethrough extends StatelessWidget {
         Positioned.fill(
           child: TweenAnimationBuilder<double>(
             tween: Tween<double>(begin: 0, end: done ? 1 : 0),
-            duration: AppMotion.fast,
+            duration: AppMotion.respecting(context, AppMotion.fast),
             curve: AppMotion.enter,
             builder: (context, t, _) => CustomPaint(
               painter: _StrikePainter(progress: t, color: c.secondaryLabel),
