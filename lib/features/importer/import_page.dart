@@ -1,4 +1,4 @@
-/// 导入页：选择 .docx / .txt 文件或整个文件夹，批量入库。
+/// 导入页：选择 .docx / .txt / .md 文件或整个文件夹，批量入库。
 ///
 /// 导入是耗时操作（最大单文件 160MB），因此：
 /// - 解析在独立 isolate 里跑（见 ImportService）
@@ -57,9 +57,9 @@ class _ImportPageState extends State<ImportPage> {
     List<PlatformFile> res;
     try {
       res = await FilePicker.pickFiles(
-        dialogTitle: '选择要导入的文档（.docx / .txt）',
+        dialogTitle: '选择要导入的文档（.docx / .txt / .md）',
         type: FileType.custom,
-        allowedExtensions: <String>['docx', 'txt'],
+        allowedExtensions: <String>['docx', 'txt', 'md', 'markdown'],
       );
     } catch (e) {
       _toast('打开文件选择器失败：$e');
@@ -97,7 +97,7 @@ class _ImportPageState extends State<ImportPage> {
 
     final files = ImportService.collectDocx(dir);
     if (files.isEmpty) {
-      _toast('该文件夹下没有找到 .docx / .txt 文件');
+      _toast('该文件夹下没有找到可以导入的文档');
       return;
     }
     setState(() {
@@ -268,7 +268,7 @@ class _ImportPageState extends State<ImportPage> {
               ),
               const SizedBox(height: 3),
               Text(
-                '支持 .docx / .txt，文件夹会递归导入',
+                '支持 .docx / .txt / .md，文件夹会递归导入',
                 style: AppText.caption1.copyWith(color: c.tertiaryLabel),
               ),
             ],
@@ -330,7 +330,7 @@ class _ImportPageState extends State<ImportPage> {
               child: _PickCard(
                 icon: Icons.description_outlined,
                 title: '选择文件',
-                subtitle: '手动挑选若干 .docx / .txt',
+                subtitle: '手动挑选若干 .docx / .txt / .md',
                 onTap: _pickFiles,
               ),
             ),
@@ -365,7 +365,7 @@ class _ImportPageState extends State<ImportPage> {
 
   /// 处理拖入的文件和文件夹。
   ///
-  /// 文件夹会**递归**收集里面的 .docx/.txt —— 拖一个文集目录进来
+  /// 文件夹会**递归**收集里面的 .docx/.txt/.md —— 拖一个文集目录进来
   /// 和点「选择文件夹」是同一件事，用户不该被迫分两步。
   void _onDrop(DropDoneDetails details) {
     setState(() => _dragging = false);
@@ -391,8 +391,7 @@ class _ImportPageState extends State<ImportPage> {
         continue;
       }
 
-      final lower = path.toLowerCase();
-      if (lower.endsWith('.docx') || lower.endsWith('.txt')) {
+      if (ImportService.isImportablePath(path)) {
         files.add(File(path));
       } else {
         rejected.add(p.basename(path));

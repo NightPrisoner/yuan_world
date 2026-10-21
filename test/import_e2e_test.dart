@@ -154,19 +154,20 @@ void main() {
       expect(repo.listNotes(const NoteFilter()).single.title, 'TXT 标题');
     });
 
-    test('collectDocx 同时收 docx 和 txt，且跳过 Word 临时文件', () async {
+    test('collectDocx 同时收 docx、txt、md，且跳过 Word 临时文件', () async {
       writeTxt('a.txt', utf8.encode('x'));
       writeTxt('b.docx', utf8.encode('x'));
       writeTxt('~\$c.docx', utf8.encode('x')); // Word 打开时的临时文件
-      writeTxt('d.md', utf8.encode('x'));       // 不支持的格式
+      writeTxt('d.md', utf8.encode('x'));
+      writeTxt('e.pdf', utf8.encode('x')); // 不支持的格式
 
       final found = ImportService.collectDocx(work.path)
           .map((f) => p.basename(f.path))
           .toList();
 
-      expect(found, containsAll(<String>['a.txt', 'b.docx']));
+      expect(found, containsAll(<String>['a.txt', 'b.docx', 'd.md']));
       expect(found.any((n) => n.startsWith('~\$')), isFalse);
-      expect(found.contains('d.md'), isFalse);
+      expect(found.contains('e.pdf'), isFalse);
     });
 
     test('导入的时间取文件自己的，不是"导入了这一刻"', () async {

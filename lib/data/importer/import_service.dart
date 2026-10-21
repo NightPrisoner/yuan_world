@@ -1,6 +1,8 @@
 /// 文集导入服务。
 ///
-/// 流程：解析 docx → 建/取文集 → 落库拿 id → 图片落盘 → 回写正文路径。
+/// 流程：解析文档（docx / txt / md）→ 建/取文集 → 落库拿 id →
+/// 图片落盘 → 回写正文路径。三种格式只在**解析**这一步不同，
+/// 落库、去重、媒体搬运、失败回滚全部共用下面这一条链路。
 ///
 /// 性能注意：数据源里最大的 docx 有 160MB+，解压与 XML 解析都在 CPU 上。
 /// 因此解析步骤放进 [Isolate.run]，避免卡住 UI 线程（否则导入时界面直接定住）。
@@ -16,6 +18,7 @@ import '../media/media_importer.dart';
 import '../repositories/note_repository.dart';
 import '../../core/utils/text_stats.dart';
 import 'docx_importer.dart';
+import 'markdown_importer.dart';
 import 'media_refs.dart';
 import 'txt_importer.dart';
 
@@ -103,10 +106,17 @@ class ImportService {
         // fallbackTitle 用文件名兜底：文档里若找不到合适标题，
         // 也能得到一个有意义的名字，而不是空标题或图片占位符。
         final fallback = p.basenameWithoutExtension(file.path);
-        final isTxt = file.path.toLowerCase().endsWith('.txt');
-        // 按扩展名分派：docx 走 Word 解析，txt 走纯文本解析（带编码嗅探）
+        final lower = file.path.toLowerCase();
+        final isTxt = lower.endsWith('.txt');
+        // Markdown 自己就是一整份正文，解析最轻：只剥 front matter 和
+        // 开头那个重复的一级标题，正文一个字符都不动。
+        final isMarkdown = lower.endsWith('.md') || lower.endsWith('.markdown');
+        // 按扩展名分派：docx 走 Word 解析，txt 走纯文本解析（带编码嗅探），
+        // md 走 Markdown 解析（同样带编码嗅探 —— 国内的 .md 也常是 GBK）
         final parsed = await Isolate.run(
-          () => isTxt
+          () => isMarkdown
+              ? MarkdownImporter.parse(bytes, fallbackTitle: fallback)
+              : isTxt
               ? TxtImporter.parse(bytes, fallbackTitle: fallback)
               : DocxImporter.parse(bytes, fallbackTitle: fallback),
         );
@@ -352,7 +362,7 @@ class ImportService {
     return true;
   }
 
-  /// 递归收集目录下所有可导入的文档（.docx / .txt）。
+  /// 递归收集目录下所有可导入的文档（.docx / .txt / .md）。
   static List<File> collectDocx(String root) {
     final dir = Directory(root);
     if (!dir.existsSync()) return <File>[];
@@ -360,13 +370,25 @@ class ImportService {
     for (final e in dir.listSync(recursive: true, followLinks: false)) {
       if (e is! File) continue;
       final lower = e.path.toLowerCase();
-      if (!lower.endsWith('.docx') && !lower.endsWith('.txt')) continue;
+      if (!isImportablePath(lower)) continue;
       // 跳过 Word 的临时文件（~$ 开头）
       if (p.basename(e.path).startsWith('~\$')) continue;
       out.add(e);
     }
     out.sort((a, b) => a.path.compareTo(b.path));
     return out;
+  }
+
+  /// 这个路径能不能导入。
+  ///
+  /// 收集目录、文件选择器过滤、拖拽判断三处**必须**共用这一份 ——
+  /// 否则会出现"文件夹导入能收 .md，拖一个 .md 进来却被拒"这种自相矛盾。
+  static bool isImportablePath(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.docx') ||
+        lower.endsWith('.txt') ||
+        lower.endsWith('.md') ||
+        lower.endsWith('.markdown');
   }
 
   static String _ext(String placeholder) {
