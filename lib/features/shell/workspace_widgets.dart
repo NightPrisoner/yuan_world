@@ -856,15 +856,20 @@ class _NoteGridCardState extends State<_NoteGridCard> {
             decoration: BoxDecoration(
               color: c.secondaryBackground,
               borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+              // **常态边框宽度固定 0.5，选中时不加粗。**
+              //
+              // 这圈边框是"占布局"的：0.5 → 1.5 会让卡片高度多 2px。
+              // 瀑布流是按列高度分配下一张卡的，任何一张高度变了，
+              // 后面整面墙都会重新排 —— 点一下换一篇，别的卡片满屏乱跳。
+              // 选中的粗描边画在 foregroundDecoration 上（见下），
+              // 前景层只负责画、不参与布局，卡片尺寸永远只由内容决定。
               border: Border.all(
-                color: widget.selected
-                    ? c.tint
-                    : (_hover
-                          ? c.separator.withValues(alpha: c.isDark ? 0.9 : 0.8)
-                          : (c.isDark
-                                ? c.separator.withValues(alpha: 0.4)
-                                : const Color(0x0F000000))),
-                width: widget.selected ? 1.5 : 0.5,
+                color: _hover
+                    ? c.separator.withValues(alpha: c.isDark ? 0.9 : 0.8)
+                    : (c.isDark
+                          ? c.separator.withValues(alpha: 0.4)
+                          : const Color(0x0F000000)),
+                width: 0.5,
               ),
               // 悬停时给一点投影：只有"抬起来"配上影子才成立
               boxShadow: _hover && !widget.selected
@@ -879,6 +884,14 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                     ]
                   : null,
             ),
+            // 选中描边：只画不占位。边框宽度变化不再影响卡片尺寸，
+            // 瀑布流因此不会因为"换了一篇"而整体重排。
+            foregroundDecoration: widget.selected
+                ? BoxDecoration(
+                    borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+                    border: Border.all(color: c.tint, width: 1.5),
+                  )
+                : null,
             clipBehavior: Clip.antiAlias,
             child: Stack(
               children: [
