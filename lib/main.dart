@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -46,9 +47,11 @@ Future<void> main() async {
   if (kDebugMode) _maybeOpenEditorForTesting(navKey);
   if (kDebugMode) _maybeMakePosterProbe();
 
-  // 每日自动快照：放在界面已经可用之后跑。它只拷数据库（几兆），
-  // 而且内部自己吞掉异常 —— 备份失败绝不能挡住启动。
-  state.snapshotIfDue();
+  // 自动备份：放在界面已经可用之后跑。失败绝不挡住启动 ——
+  // checkAutoBackup 内部自己吞异常并记下原因，设置页里能看到。
+  // 定时器让"一开几周不关"的机器也照样会备份，不再只在启动那一刻看一次。
+  state.startAutoBackupWatcher();
+  unawaited(state.checkAutoBackup());
 }
 
 /// 调试用：`YW_MAKE_POSTER=<视频绝对路径>` 抓一帧存成 PNG 然后退出。

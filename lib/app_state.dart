@@ -5,6 +5,7 @@
 /// 避免整棵树无谓重建。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -44,19 +45,150 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 启动时的自动快照：**一天最多一份**，失败绝不影响启动。
+  /// 每周自动完整备份（默认开）。快照只有数据库，图片视频不在里面 ——
+  /// 硬盘坏了照样全没，所以还得有一份带媒体的、留在本机的完整备份。
+  bool get backupAutoFull => repo.getSetting('backup.full') != '0';
+
+  /// 自动完整备份保留几份（默认 2：够回退一次，又不至于占太多盘）。
+  int get backupFullKeep =>
+      int.tryParse(repo.getSetting('backup.fullKeep') ?? '') ?? 2;
+
+  void setBackupAutoFull(bool v) {
+    repo.setSetting('backup.full', v ? '1' : '0');
+    notifyListeners();
+  }
+
+  /// 自动快照的节奏与保留份数 —— 常量提出来，测试不用等一天。
+  static const Duration autoSnapshotEvery = Duration(hours: 24);
+
+  /// 自动完整备份的节奏（一周一次）。几百兆，不能天天来。
+  static const Duration autoFullEvery = Duration(days: 7);
+
+  /// 运行期间多久回头看一次有没有到期。
+  static const Duration autoBackupCheckEvery = Duration(minutes: 30);
+
+  DateTime? _readTime(String key) =>
+      DateTime.tryParse(repo.getSetting(key) ?? '');
+
+  DateTime? get lastSnapshotAt => _readTime('backup.lastSnapshotAt');
+  DateTime? get lastSnapshotErrorAt => _readTime('backup.lastSnapshotErrorAt');
+  String? get lastSnapshotError => repo.getSetting('backup.lastSnapshotError');
+  DateTime? get lastFullBackupAt => _readTime('backup.lastFullAt');
+  DateTime? get lastFullBackupErrorAt => _readTime('backup.lastFullErrorAt');
+  String? get lastFullBackupError => repo.getSetting('backup.lastFullError');
+
+  bool get autoBackupBusy => _autoBackupBusy;
+  bool _autoBackupBusy = false;
+
+  Timer? _autoBackupTimer;
+
+  /// 起一个定时器，运行期间也检查备份是否到期。
   ///
-  /// 放在 AppState 里而不是 main() 里，是为了能被测试直接驱动
-  /// （main 里的东西测不到）。
+  /// 以前只在启动时看一眼 —— 台式机一开几周不关，等于永远不备份。
+  /// 由 `main()` 调用；测试里传个短周期就能验。
+  void startAutoBackupWatcher({Duration? every}) {
+    _autoBackupTimer?.cancel();
+    _autoBackupTimer = Timer.periodic(
+      every ?? autoBackupCheckEvery,
+      (_) => checkAutoBackup(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _autoBackupTimer?.cancel();
+    _autoBackupTimer = null;
+    _disposed = true;
+    super.dispose();
+  }
+
+  bool _disposed = false;
+
+  /// 检查并执行到期的自动备份。启动时调一次，之后由定时器调。
+  ///
+  /// **失败不抛异常**（磁盘满、没权限都不该让应用崩），但会把原因记下来
+  /// 并通知界面 —— 用户有权知道自己的备份其实没成。
+  Future<void> checkAutoBackup() async {
+    if (_disposed || _autoBackupBusy) return;
+    _autoBackupBusy = true;
+    notifyListeners();
+    try {
+      // 先让界面画一帧再干重活（快照要跑 VACUUM INTO）
+      await Future<void>.delayed(Duration.zero);
+      if (_disposed) return;
+      _runSnapshotIfDue();
+      await _runFullBackupIfDue();
+    } finally {
+      _autoBackupBusy = false;
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// 兼容老名字：启动时那次检查。
   void snapshotIfDue() {
+    unawaited(checkAutoBackup());
+  }
+
+  void _runSnapshotIfDue() {
     if (!backupAutoSnapshot) return;
     try {
       final keep = backupKeep;
-      if (!backup.snapshotDue(keep: keep)) return;
-      backup.snapshot(keep: keep);
-    } catch (_) {
-      // 备份失败（磁盘满、没权限）不该挡住启动；下次启动再试
+      if (!backup.snapshotDue(keep: keep, every: autoSnapshotEvery)) return;
+      final file = backup.snapshot(keep: keep);
+      repo.setSetting(
+        'backup.lastSnapshotAt',
+        file.statSync().modified.toIso8601String(),
+      );
+      repo.setSetting('backup.lastSnapshotError', '');
+      repo.setSetting('backup.lastSnapshotErrorAt', '');
+    } catch (e) {
+      _recordError('backup.lastSnapshotError', 'backup.lastSnapshotErrorAt', e);
     }
+  }
+
+  Future<void> _runFullBackupIfDue() async {
+    if (!backupAutoFull) return;
+    try {
+      if (!backup.fullBackupDue(every: autoFullEvery)) return;
+      final file = await backup.createFullBackup(keep: backupFullKeep);
+      repo.setSetting(
+        'backup.lastFullAt',
+        file.statSync().modified.toIso8601String(),
+      );
+      repo.setSetting('backup.lastFullError', '');
+      repo.setSetting('backup.lastFullErrorAt', '');
+    } catch (e) {
+      _recordError('backup.lastFullError', 'backup.lastFullErrorAt', e);
+    }
+  }
+
+  /// 记下失败原因。**写设置失败也不能再抛** —— 否则一次备份失败会变成
+  /// 一次崩溃（比如数据库恰好也读不了的时候）。
+  void _recordError(String key, String atKey, Object e) {
+    try {
+      repo.setSetting(key, '$e');
+      repo.setSetting(atKey, DateTime.now().toIso8601String());
+    } catch (_) {
+      // 连错误都记不下来，那也只能算了
+    }
+  }
+
+  /// 手动触发一次自动完整备份（设置页的"立即做一次完整备份"）。
+  Future<File> createFullBackupNow({
+    void Function(double progress)? onProgress,
+  }) async {
+    final file = await backup.createFullBackup(
+      keep: backupFullKeep,
+      onProgress: onProgress,
+    );
+    repo.setSetting(
+      'backup.lastFullAt',
+      file.statSync().modified.toIso8601String(),
+    );
+    repo.setSetting('backup.lastFullError', '');
+    repo.setSetting('backup.lastFullErrorAt', '');
+    notifyListeners();
+    return file;
   }
 
   final TodoRepository todos;

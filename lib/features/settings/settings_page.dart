@@ -31,14 +31,45 @@ Directory _snapshotDir(AppState state) {
   return d;
 }
 
-/// 底部那句小字：告诉用户上一次快照是什么时候、有几份。
-String _lastSnapshotHint(AppState state) {
+/// 自动完整备份目录（同上）。
+Directory _fullBackupDir(AppState state) => state.backup.fullBackupDir;
+
+String _two(int v) => v.toString().padLeft(2, '0');
+
+String _stamp(DateTime t) =>
+    '${t.year}-${_two(t.month)}-${_two(t.day)} ${_two(t.hour)}:${_two(t.minute)}';
+
+/// 自动快照的实情：成了几次、上次什么时候、上次为什么没成。
+///
+/// 光有一个开关是不够的 —— 开关只代表"想备份"，用户真正要确认的是
+/// "上一次到底备成了没有"。
+String _snapshotHint(AppState state) {
   final shots = state.backup.snapshots();
+  final err = state.lastSnapshotError;
+  if (err != null && err.isNotEmpty) {
+    final at = state.lastSnapshotErrorAt;
+    final when = at == null ? '' : '（${_stamp(at)}）';
+    return '上次自动快照没成功$when：$err';
+  }
   if (shots.isEmpty) return '还没有快照，明天关掉再开就有第一份了。';
-  final last = shots.first.statSync().modified;
-  String two(int v) => v.toString().padLeft(2, '0');
-  return '最近一次快照：${last.year}-${two(last.month)}-${two(last.day)} '
-      '${two(last.hour)}:${two(last.minute)}，共 ${shots.length} 份。';
+  final last = state.lastSnapshotAt ?? shots.first.statSync().modified;
+  return '最近一次自动快照：${_stamp(last)}，共 ${shots.length} 份。';
+}
+
+/// 自动完整备份的实情。比快照更要紧 —— 这是唯一带图片视频的备份。
+String _fullBackupHint(AppState state) {
+  final files = state.backup.fullBackups();
+  final err = state.lastFullBackupError;
+  if (err != null && err.isNotEmpty) {
+    final at = state.lastFullBackupErrorAt;
+    final when = at == null ? '' : '（${_stamp(at)}）';
+    return '上次自动完整备份没成功$when：$err';
+  }
+  if (files.isEmpty) return '还没有自动完整备份，本周内会做第一份。';
+  final last = state.lastFullBackupAt ?? files.first.statSync().modified;
+  final mb = files.fold<int>(0, (s, f) => s + f.lengthSync()) / 1024 / 1024;
+  return '最近一次自动完整备份：${_stamp(last)}，共 ${files.length} 份，'
+      '占 ${mb.toStringAsFixed(0)} MB。';
 }
 
 /// 点一下就有动作的设置行（备份、恢复这类）。
@@ -617,6 +648,15 @@ class SettingsPage extends StatelessWidget {
                   onChanged: (v) => state.setBackupAutoSnapshot(v),
                 ),
                 _RowDivider(),
+                _SwitchRow(
+                  icon: Icons.inventory_2_rounded,
+                  iconColor: c.palette[1],
+                  label: '每周自动完整备份',
+                  subtitle: '数据库 + 全部图片视频，存在本机 backups 目录；保留最近 2 份',
+                  value: state.backupAutoFull,
+                  onChanged: (v) => state.setBackupAutoFull(v),
+                ),
+                _RowDivider(),
                 _ActionRow(
                   icon: Icons.archive_rounded,
                   iconColor: c.palette[2],
@@ -639,13 +679,21 @@ class SettingsPage extends StatelessWidget {
                   label: '快照目录',
                   path: _snapshotDir(state).path,
                 ),
+                _RowDivider(),
+                _PathRow(
+                  icon: Icons.inventory_2_outlined,
+                  iconColor: c.palette[1],
+                  label: '完整备份目录',
+                  path: _fullBackupDir(state).path,
+                ),
               ],
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
               child: Text(
-                '全部数据都在本机，不上传任何服务器。'
-                '${_lastSnapshotHint(state)}',
+                '全部数据都在本机，不上传任何服务器。\n'
+                '${_snapshotHint(state)}\n'
+                '${_fullBackupHint(state)}',
                 style: AppText.caption1.copyWith(
                   color: c.tertiaryLabel,
                   height: 1.6,

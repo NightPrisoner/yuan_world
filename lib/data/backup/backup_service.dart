@@ -9,8 +9,10 @@
 ///
 /// ## 两种备份，各有各的用途
 ///
-///   · **全量备份**（`exportAll`）：数据库 + 全部图片视频，打成一个 zip。
-///     给"换机 / 长期归档"用，文件大（可能几百兆），由用户主动触发。
+///   · **全量备份**（`exportAll` / `exportAllTo`）：数据库 + 全部图片视频，
+///     打成一个 zip。给"换机 / 长期归档"用，文件大（可能几百兆）。
+///     一种由用户主动触发、存到用户选的位置；另一种是每周自动做一份、
+///     留在本机 `backups/`，因为快照不含媒体，硬盘坏了照样全没。
 ///   · **每日快照**（`snapshot`）：**只含数据库**，几兆，自动跑、自动轮转。
 ///     图片是文件、不会被"误删一条笔记"影响，真正容易丢的是数据库里的
 ///     内容本身。所以快照不重复存媒体，省空间也省时间。
@@ -29,7 +31,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
@@ -99,10 +101,20 @@ class BackupService {
 
   final AppDatabase db;
 
+  /// 包里的数据库条目名、清单条目名。恢复时按这两个名字认。
+  static const String databaseEntryName = 'yuanworld.db';
+  static const String manifestEntryName = 'backup.json';
+
   /// 快照目录：`<root>/snapshots/`。
   Directory get snapshotDir {
     final d = Directory(p.join(db.rootDir.path, 'snapshots'));
-    if (!d.existsSync()) d.createSync(recursive: true);
+    if (!d.existsSync()) {
+      // 建不出来（磁盘满、同名文件占位）别在这里炸 —— 让真正的写操作
+      // 去失败，那边有明确的错误信息，界面也能把它显示出来。
+      try {
+        d.createSync(recursive: true);
+      } catch (_) {}
+    }
     return d;
   }
 
@@ -128,11 +140,11 @@ class BackupService {
   int get _schemaVersion =>
       (db.db.select('PRAGMA user_version').first.columnAt(0) as int?) ?? 0;
 
-  /// 全量备份：数据库 + 全部媒体，打成一个 zip。
+  /// 全量备份：数据库 + 全部媒体，打成一个 zip，**返回整包字节**。
   ///
-  /// 返回 zip 字节（调用方自己决定存哪、怎么存），大文件也不会写进内存两次 ——
-  /// archive 的 `ZipEncoder` 需要完整字节，所以这里的内存占用约等于
-  /// 数据库大小 + 媒体大小，几十到几百兆，桌面端可以接受。
+  /// 数据库大小 + 媒体大小会同时躺在内存里，几十到几百兆。
+  /// 手动"另存为"还是走它 —— 系统的保存对话框本身就是收字节的。
+  /// 自动完整备份走 [exportAllTo]，那边是边压边写盘，不占内存。
   Uint8List exportAll() {
     final archive = Archive();
     final tmp = Directory.systemTemp.createTempSync('yw_backup_');
@@ -174,6 +186,96 @@ class BackupService {
       return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
     } finally {
       if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    }
+  }
+
+  /// 全量备份：**逐个文件写进目标 zip**，不在内存里攒整包。
+  ///
+  /// 内容与 [exportAll] 一致（数据库 + 全部媒体 + backup.json），区别在内存
+  /// 与响应：这里一边压一边往目标文件写，已压过的文件不会再占内存，
+  /// 峰值内存只跟**当前这一个文件**的大小有关；每处理一批还会让出事件循环，
+  /// 界面不至于从头冻到尾。
+  ///
+  /// [onProgress] 收到 0~1 的进度（按文件个数算，不看大小）。
+  /// 失败时会把写了一半的目标文件删掉，不留假备份。
+  Future<File> exportAllTo(
+    File target, {
+    void Function(double progress)? onProgress,
+  }) async {
+    // 数据库先导出一致副本：VACUUM INTO 必须在当前连接上跑
+    final tmpDir = Directory.systemTemp.createTempSync('yw_backup_');
+    try {
+      final dbFile = _exportDbTo(p.join(tmpDir.path, 'yuanworld.db'));
+      final media = <String, File>{}; // zip 内相对路径 → 磁盘文件
+      final images = Directory(p.join(db.rootDir.path, 'images'));
+      if (images.existsSync()) {
+        for (final f in images.listSync(recursive: true)) {
+          if (f is! File) continue;
+          // 目标文件万一落在 images 里，别把自己打进包里
+          if (p.equals(f.path, target.path)) continue;
+          // zip 内一律用正斜杠（解压方的标准做法）
+          final rel = p.posix.joinAll(
+            p.split(p.relative(f.path, from: db.rootDir.path)),
+          );
+          media[rel] = f;
+        }
+      }
+
+      final manifestJson = const JsonEncoder.withIndent('  ').convert(
+        BackupManifest(
+          createdAt: DateTime.now(),
+          schemaVersion: _schemaVersion,
+          noteCount: _count('notes'),
+          withMedia: media.isNotEmpty,
+        ).toJson(),
+      );
+
+      if (target.existsSync()) target.deleteSync();
+      target.parent.createSync(recursive: true);
+
+      final total = media.length + 2; // 数据库 + 清单
+      var done = 0;
+      void bump() {
+        done++;
+        onProgress?.call((done / total).clamp(0.0, 1.0));
+      }
+
+      final encoder = ZipFileEncoder()..create(target.path);
+      try {
+        // 用异步版 addFile：它压完会 close 掉文件句柄。同步版不关，
+        // 几百个媒体文件连着打包会攒下几百个没释放的句柄。
+        await encoder.addFile(dbFile, 'yuanworld.db');
+        bump();
+        var sinceYield = 0;
+        for (final entry in media.entries) {
+          await encoder.addFile(entry.value, entry.key);
+          bump();
+          // 让出事件循环：不然打包期间界面完全是一张静止画面
+          if (++sinceYield >= 8) {
+            sinceYield = 0;
+            await Future<void>.delayed(Duration.zero);
+          }
+        }
+        encoder.addArchiveFile(
+          ArchiveFile.string('backup.json', manifestJson),
+        );
+        bump();
+      } finally {
+        encoder.closeSync();
+      }
+      return target;
+    } catch (e) {
+      // 半截的 zip 比没有更糟：用户会以为备份好了
+      try {
+        if (target.existsSync()) target.deleteSync();
+      } catch (_) {}
+      rethrow;
+    } finally {
+      if (tmpDir.existsSync()) {
+        try {
+          tmpDir.deleteSync(recursive: true);
+        } catch (_) {}
+      }
     }
   }
 
@@ -230,6 +332,77 @@ class BackupService {
         // 删不掉就算了，不能让轮转把备份流程搞失败
       }
     }
+  }
+
+  // ── 自动完整备份 ────────────────────────────────────────────────────────
+
+  /// 自动完整备份（数据库 + 全部媒体）落在 `<数据目录>/backups/`。
+  ///
+  /// 跟每日快照（`snapshots/`，几兆、只有数据库）分开放：一个是"改坏了能
+  /// 立刻翻回去"，一个是"整台机器没了也能搬回来"，体积差两个数量级，
+  /// 混在一起既难轮转也难跟用户解释。
+  Directory get fullBackupDir {
+    final dir = Directory(p.join(db.rootDir.path, 'backups'));
+    if (!dir.existsSync()) {
+      try {
+        dir.createSync(recursive: true);
+      } catch (_) {}
+    }
+    return dir;
+  }
+
+  /// 现有的自动完整备份，**新的在前**。
+  List<File> fullBackups() {
+    if (!fullBackupDir.existsSync()) return const <File>[];
+    final files =
+        fullBackupDir
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.zip'))
+            .toList()
+          ..sort((a, b) => b.path.compareTo(a.path));
+    return files;
+  }
+
+  File? lastFullBackup() =>
+      fullBackups().isEmpty ? null : fullBackups().first;
+
+  /// 是否需要再做一次完整备份（默认一周一次）。
+  bool fullBackupDue({Duration every = const Duration(days: 7)}) {
+    final last = lastFullBackup();
+    if (last == null) return true;
+    return DateTime.now().difference(last.statSync().modified) >= every;
+  }
+
+  /// 做一次自动完整备份并按 [keep] 轮转，返回写好的 zip。
+  ///
+  /// 内部走 [exportAllTo]：边压边写盘，不会把几百兆媒体全塞进内存。
+  Future<File> createFullBackup({
+    int keep = 2,
+    void Function(double progress)? onProgress,
+  }) async {
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final stamp =
+        '${now.year}${two(now.month)}${two(now.day)}'
+        '-${two(now.hour)}${two(now.minute)}${two(now.second)}';
+    var name = 'full-$stamp.zip';
+    var n = 2;
+    while (File(p.join(fullBackupDir.path, name)).existsSync()) {
+      name = 'full-$stamp-$n.zip';
+      n++;
+    }
+    final file = File(p.join(fullBackupDir.path, name));
+    await exportAllTo(file, onProgress: onProgress);
+    final files = fullBackups();
+    for (var i = keep; i < files.length; i++) {
+      try {
+        files[i].deleteSync();
+      } catch (_) {
+        // 同上：轮转删不掉不算备份失败
+      }
+    }
+    return file;
   }
 
   // ── 恢复 ────────────────────────────────────────────────────────────────
