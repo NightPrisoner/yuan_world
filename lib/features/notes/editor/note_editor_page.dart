@@ -1151,6 +1151,22 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _toast('已插入指向《${picked.title}》的链接');
   }
 
+  /// 插入一对围栏代码块，光标落在中间那一行。
+  ///
+  /// `insertBlock` 只负责把整段塞进去并把光标放到**块尾**，用在代码块上
+  /// 就成了"插完还得自己往回按一行"。这里自己摆光标：
+  /// 插完的可选区域是 ` ``` + \n + 空行 + \n + ``` + \n`，
+  /// 光标要落在两块围栏之间的那一行开头。
+  void _insertCodeBlock(MarkdownEditingController controller) {
+    MarkdownEditing.insertBlock(controller, '```\n\n```');
+    final at = controller.selection.baseOffset;
+    if (at < 0) return;
+    // 从块尾往回数：末尾多出的那个 \n、收尾围栏的 ```、它们之间那个 \n
+    final inner = at - 1 - 3 - 1;
+    if (inner < 0 || inner > controller.text.length) return;
+    controller.selection = TextSelection.collapsed(offset: inner);
+  }
+
   Future<void> _chooseHeading() async {
     final next = await showAppMenu<int>(
       context,
@@ -1962,6 +1978,15 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                     icon: Icons.link_rounded,
                     tooltip: '插入链接',
                     onTap: _insertLinkFlow,
+                  ),
+                  _ToolButton(
+                    // 代码块是这里唯一"插入一对围栏"的按钮：
+                    // 和行内代码共用 code 图标会让人分不清，
+                    // 所以用 data_object（看起来像一段独立文本块）。
+                    icon: Icons.data_object_rounded,
+                    tooltip: '代码块',
+                    onTap: () =>
+                        _withBody(() => _insertCodeBlock(_activeBody)),
                   ),
                   _ToolButton(
                     icon: Icons.horizontal_rule_rounded,

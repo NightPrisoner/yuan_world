@@ -11,6 +11,8 @@
 ///   - 不追求完整 Markdown 语法，只覆盖写作时真正高频的几种。
 library;
 
+import '../../../core/utils/markdown_blocks.dart';
+
 /// 片段的语义类型。
 enum MdKind {
   /// 普通正文
@@ -58,14 +60,6 @@ class MdSegment {
 class MarkdownStyler {
   const MarkdownStyler._();
 
-  static final _divider = RegExp(r'^\s*(-{3,}|\*{3,}|_{3,})\s*$');
-  static final _imageLine = RegExp(r'^\s*!\[[^\]]*\]\([^)]*\)\s*$');
-  static final _todo = RegExp(r'^(\s*[-*+]\s+\[[ xX]\]\s*)(.*)$');
-  static final _heading = RegExp(r'^(\s*#{1,6}\s+)(.*)$');
-  static final _quote = RegExp(r'^(\s*>\s?)(.*)$');
-  static final _bullet = RegExp(r'^(\s*[-*+]\s+)(.*)$');
-  static final _ordered = RegExp(r'^(\s*\d+\.\s+)(.*)$');
-
   /// 行内标记：加粗、删除线、行内代码、斜体。
   /// 顺序很重要——`**` 必须排在 `*` 前面，否则加粗会被拆成两段斜体。
   static final _inline = RegExp(
@@ -76,73 +70,99 @@ class MarkdownStyler {
   static List<MdSegment> parse(String text) {
     final out = <MdSegment>[];
     final lines = text.split('\n');
+    MdFence? fence;
     for (var i = 0; i < lines.length; i++) {
       if (i > 0) out.add(const MdSegment('\n', MdKind.plain));
-      _parseLine(lines[i], out);
+      final line = lines[i];
+
+      // 围栏代码块：跨行，所以在行循环外面记状态。
+      // 开口/收尾的围栏符号整行藏起来（和标题的 `## ` 一样是 mark
+      // er），中间每行按代码样式渲染 —— 这样编辑时看到的
+      // 分段结构和阅读页完全一致。
+      if (fence != null) {
+        if (MdBlockSyntax.isFenceEnd(line, fence)) {
+          fence = null;
+          out.add(MdSegment(line, MdKind.marker));
+        } else {
+          out.add(MdSegment(line, MdKind.code));
+        }
+        continue;
+      }
+      final opening = MdBlockSyntax.fenceStart(line);
+      if (opening != null) {
+        fence = opening;
+        out.add(MdSegment(line, MdKind.marker));
+        continue;
+      }
+
+      _parseLine(line, out);
     }
     return out;
   }
 
+  /// 单行的块级语义。**判定一律走 [MdBlockSyntax]**，不要在这里另写正则。
   static void _parseLine(String line, List<MdSegment> out) {
     if (line.isEmpty) return;
 
     // 分隔线：整行都是符号
-    if (_divider.hasMatch(line)) {
+    if (MdBlockSyntax.isDivider(line)) {
       out.add(MdSegment(line, MdKind.divider));
       return;
     }
 
     // 整行图片：编辑框里渲染不出真图，单独给个语义让渲染层弱化它
-    if (_imageLine.hasMatch(line)) {
+    if (MdBlockSyntax.imageLine(line) != null) {
       out.add(MdSegment(line, MdKind.image));
       return;
     }
 
     // 待办：`- [ ] 事项` / `- [x] 已完成`
-    final todo = _todo.firstMatch(line);
+    final todo = MdBlockSyntax.todoLine(line);
     if (todo != null) {
-      final checked = todo.group(1)!.toLowerCase().contains('[x]');
-      out.add(MdSegment(todo.group(1)!, MdKind.marker));
-      _parseInline(todo.group(2)!, checked ? MdKind.done : MdKind.plain, out);
+      out.add(MdSegment(todo.prefix, MdKind.marker));
+      _parseInline(
+        todo.text,
+        (todo.checked ?? false) ? MdKind.done : MdKind.plain,
+        out,
+      );
       return;
     }
 
     // 标题
-    final heading = _heading.firstMatch(line);
+    final heading = MdBlockSyntax.headingLine(line);
     if (heading != null) {
-      out.add(MdSegment(heading.group(1)!, MdKind.marker));
-      final level = heading.group(1)!.trim().length;
-      final kind = switch (level) {
+      out.add(MdSegment(heading.prefix, MdKind.marker));
+      final kind = switch (heading.level) {
         1 => MdKind.h1,
         2 => MdKind.h2,
         3 => MdKind.h3,
         _ => MdKind.h4,
       };
-      _parseInline(heading.group(2)!, kind, out);
+      _parseInline(heading.text, kind, out);
       return;
     }
 
     // 引用
-    final quote = _quote.firstMatch(line);
+    final quote = MdBlockSyntax.quoteLine(line);
     if (quote != null) {
-      out.add(MdSegment(quote.group(1)!, MdKind.marker));
-      _parseInline(quote.group(2)!, MdKind.quote, out);
+      out.add(MdSegment(quote.prefix, MdKind.marker));
+      _parseInline(quote.text, MdKind.quote, out);
       return;
     }
 
     // 无序列表
-    final bullet = _bullet.firstMatch(line);
+    final bullet = MdBlockSyntax.bulletLine(line);
     if (bullet != null) {
-      out.add(MdSegment(bullet.group(1)!, MdKind.marker));
-      _parseInline(bullet.group(2)!, MdKind.plain, out);
+      out.add(MdSegment(bullet.prefix, MdKind.marker));
+      _parseInline(bullet.text, MdKind.plain, out);
       return;
     }
 
     // 有序列表
-    final ordered = _ordered.firstMatch(line);
+    final ordered = MdBlockSyntax.orderedLine(line);
     if (ordered != null) {
-      out.add(MdSegment(ordered.group(1)!, MdKind.marker));
-      _parseInline(ordered.group(2)!, MdKind.plain, out);
+      out.add(MdSegment(ordered.prefix, MdKind.marker));
+      _parseInline(ordered.text, MdKind.plain, out);
       return;
     }
 

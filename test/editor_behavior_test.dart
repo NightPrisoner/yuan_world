@@ -353,5 +353,40 @@ void main() {
       expect(tester.widget<TextField>(body).controller!.text, '**正文**');
       await tester.pumpWidget(const SizedBox.shrink());
     });
+
+    testWidgets('工具栏能插入代码块，光标落在两块围栏中间', (tester) async {
+      final body = await open(tester, text: '正文');
+      await tester.tap(body);
+      await tester.pump();
+      await tester.tap(find.byTooltip('代码块'));
+      await tester.pump();
+
+      final ctl = tester.widget<TextField>(body).controller!;
+      expect(ctl.text, '正文\n```\n\n```\n');
+      // 光标必须在两块围栏之间那一行的行首，而不是块尾
+      expect(ctl.selection.baseOffset, ctl.text.indexOf('\n\n') + 1);
+
+      // 直接打字就落在代码块里
+      await tester.enterText(body, '正文\n```\nprint(1);\n```\n');
+      await tester.pump(const Duration(milliseconds: 1300));
+      expect(state.repo.getNote(id)!.content, contains('```\nprint(1);\n```'));
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('代码块按钮插在正文中间时不会粘在上一行', (tester) async {
+      final body = await open(tester, text: '前面');
+      await tester.tap(body);
+      await tester.pump();
+      final ctl = tester.widget<TextField>(body).controller!;
+      ctl.selection = const TextSelection.collapsed(offset: 2);
+      await tester.pump();
+      await tester.tap(find.byTooltip('代码块'));
+      await tester.pump();
+
+      final text = tester.widget<TextField>(body).controller!.text;
+      // 前面得有换行隔开，不能变成「前面```」
+      expect(text, startsWith('前面\n```'));
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
   });
 }

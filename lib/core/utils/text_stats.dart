@@ -4,6 +4,8 @@
 /// 把每个 CJK 字符算作 1 个词，把连续的拉丁字母/数字串也算作 1 个词。
 library;
 
+import 'markdown_blocks.dart';
+
 /// 判断是否为 CJK 字符（中日韩统一表意文字及常见扩展）。
 bool isCjk(int codeUnit) {
   return (codeUnit >= 0x4E00 && codeUnit <= 0x9FFF) || // 基本区
@@ -213,18 +215,11 @@ enum ContentBlockType {
   divider,
 }
 
-/// 列表项的缩进 → 层级（0 起，最深 4 级）。
+/// 把正文（Markdown）拆成渲染用的块序列。
 ///
-/// 制表符按 2 个空格算；`~/ 2` 是"两个空格一级"这个约定，
-/// 和 Word/编辑器里按 Tab 缩进的观感一致。
-int _listLevel(String indent) {
-  var width = 0;
-  for (final r in indent.runes) {
-    width += r == 0x09 ? 2 : 1;
-  }
-  return (width ~/ 2).clamp(0, 4);
-}
-
+/// **块级识别统一走 [MdBlockSyntax]**，编辑器那边也用它 ——
+/// 以前两边各写一套正则，长歪之后出现了"编辑时是分隔线、读出来是普通
+/// 段落"这种灵异现象。现在规则只定义一次，两边只在**渲染**上有差别。
 List<ContentBlock> parseContent(String markdown) {
   final blocks = <ContentBlock>[];
   final lines = markdown.split('\n');
@@ -241,64 +236,82 @@ List<ContentBlock> parseContent(String markdown) {
     buffer.clear();
   }
 
-  for (final raw in lines) {
-    final line = raw.trimRight();
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i].trimRight();
 
     if (line.trim().isEmpty) {
       flush();
       continue;
     }
 
-    final img = RegExp(r'^!\[[^\]]*\]\(([^)]+)\)\s*$').firstMatch(line.trim());
+    final img = MdBlockSyntax.imageLine(line);
     if (img != null) {
       flush();
-      blocks.add(
-        ContentBlock(type: ContentBlockType.image, text: img.group(1)!),
-      );
+      blocks.add(ContentBlock(type: ContentBlockType.image, text: img));
       continue;
     }
 
-    final h = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(line);
+    final fence = MdBlockSyntax.fenceStart(line);
+    if (fence != null) {
+      flush();
+      // 围栏代码块是**多行**的：一直吃到收尾围栏为止。
+      // 以前每一行都单独成一个 code 块，围栏里的内容全被拆散、
+      // 第一行还只剩下语言标识 —— 阅读页里根本看不出是代码。
+      final body = <String>[];
+      for (i++; i < lines.length; i++) {
+        if (MdBlockSyntax.isFenceEnd(lines[i], fence)) break;
+        body.add(lines[i]);
+      }
+      // 没写收尾的围栏：就当到文末为止都是代码（和大多数渲染器一致）
+      final code = body.join('\n');
+      // 空围栏（还在输入中，或者只有一对 ```）不渲染成空灰块 ——
+      // 编辑器那边这时也只看到一行被藏起来的符号，两边保持一致。
+      if (code.trim().isEmpty) continue;
+      blocks.add(ContentBlock(type: ContentBlockType.code, text: code));
+      continue;
+    }
+
+    final h = MdBlockSyntax.headingLine(line);
     if (h != null) {
       flush();
       blocks.add(
         ContentBlock(
           type: ContentBlockType.heading,
-          text: h.group(2)!.trim(),
-          level: h.group(1)!.length,
+          text: h.text.trim(),
+          level: h.level,
         ),
       );
       continue;
     }
 
-    if (RegExp(r'^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$').hasMatch(line)) {
+    if (MdBlockSyntax.isDivider(line)) {
       flush();
       blocks.add(const ContentBlock(type: ContentBlockType.divider, text: ''));
       continue;
     }
 
-    final quote = RegExp(r'^\s{0,3}>\s?(.*)$').firstMatch(line);
+    final quote = MdBlockSyntax.quoteLine(line);
     if (quote != null) {
       flush();
       blocks.add(
         ContentBlock(
           type: ContentBlockType.quote,
-          text: quote.group(1)!.trim(),
+          text: quote.text.trim(),
         ),
       );
       continue;
     }
 
-    final todo = RegExp(r'^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$').firstMatch(line);
+    final todo = MdBlockSyntax.todoLine(line);
     if (todo != null) {
       flush();
       blocks.add(
         ContentBlock(
           type: ContentBlockType.bullet,
-          text: todo.group(3)!.trim(),
-          level: _listLevel(todo.group(1)!),
+          text: todo.text.trim(),
+          level: todo.level,
           isTodo: true,
-          checked: todo.group(2)!.toLowerCase() == 'x',
+          checked: todo.checked ?? false,
         ),
       );
       continue;
@@ -307,39 +320,28 @@ List<ContentBlock> parseContent(String markdown) {
     // 缩进决定列表的层级：2 个空格（或一个 Tab）算一级。
     // 以前正则只认 0~3 个空格，**4 个空格缩进的子项会掉进普通段落**，
     // 导出成 docx 时那一项就变成了没头没尾的一行文字。
-    final bullet = RegExp(r'^(\s*)[-*+]\s+(.*)$').firstMatch(line);
+    final bullet = MdBlockSyntax.bulletLine(line);
     if (bullet != null) {
       flush();
       blocks.add(
         ContentBlock(
           type: ContentBlockType.bullet,
-          text: bullet.group(2)!.trim(),
-          level: _listLevel(bullet.group(1)!),
+          text: bullet.text.trim(),
+          level: bullet.level,
         ),
       );
       continue;
     }
 
-    final ordered = RegExp(r'^(\s*)(\d+)\.\s+(.*)$').firstMatch(line);
+    final ordered = MdBlockSyntax.orderedLine(line);
     if (ordered != null) {
       flush();
       blocks.add(
         ContentBlock(
           type: ContentBlockType.ordered,
-          text: ordered.group(3)!.trim(),
-          level: _listLevel(ordered.group(1)!),
-          listNumber: int.tryParse(ordered.group(2)!),
-        ),
-      );
-      continue;
-    }
-
-    if (line.trimLeft().startsWith('```')) {
-      flush();
-      blocks.add(
-        ContentBlock(
-          type: ContentBlockType.code,
-          text: line.replaceAll('`', '').trim(),
+          text: ordered.text.trim(),
+          level: ordered.level,
+          listNumber: ordered.number,
         ),
       );
       continue;
