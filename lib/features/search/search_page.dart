@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
+import '../../core/motion/apple_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/models.dart';
 import '../notes/note_detail_page.dart';
@@ -205,18 +206,12 @@ class _SearchPageState extends State<SearchPage> {
           child: _SearchResultTile(
             note: note,
             query: _lastQuery,
+            // 和其他入口用同一条转场：右侧推入、返回时原路退回。
+            // 以前这里是裸 PageRouteBuilder + 纯淡入，从搜索结果进正文和
+            // 从列表、统计、设置里进正文的观感对不上。
             onTap: () => Navigator.of(context).push(
-              PageRouteBuilder<void>(
-                transitionDuration: AppMotion.fast,
-                reverseTransitionDuration: AppMotion.fast,
-                pageBuilder: (_, _, _) => NoteDetailPage(noteId: note.id),
-                transitionsBuilder: (ctx, a, _, child) =>
-                    AppMotion.reduceMotion(ctx)
-                    ? child
-                    : FadeTransition(
-                        opacity: a.drive(CurveTween(curve: AppMotion.enter)),
-                        child: child,
-                      ),
+              ApplePageRoute<void>(
+                pageBuilder: (_) => NoteDetailPage(noteId: note.id),
               ),
             ),
           ),
