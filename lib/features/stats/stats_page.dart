@@ -80,6 +80,21 @@ const List<_ModuleSpec> _kModules = <_ModuleSpec>[
   _ModuleSpec('storage', '存储与数据', '笔记、字数、图片视频与磁盘占用', Icons.storage_rounded),
 ];
 
+/// 概览卡片里可以单独开关的数据项。
+///
+/// 顺序即默认显示顺序，两两一行。id 会写进设置（`stats.overviewHidden`），
+/// 所以**不要随便改名**，否则老用户存下的配置会对不上。
+const List<_ModuleSpec> _kOverviewStats = <_ModuleSpec>[
+  _ModuleSpec('notes', '笔记', '库里的笔记总数', Icons.article_rounded),
+  _ModuleSpec('chars', '总字数', '所有笔记的字符总数', Icons.text_fields_rounded),
+  _ModuleSpec('images', '图片', '正文与封面引用到的图片', Icons.image_rounded),
+  _ModuleSpec('videos', '视频', '正文里插入的视频', Icons.videocam_rounded),
+  _ModuleSpec('collections', '文集', '文件夹数量', Icons.folder_rounded),
+  _ModuleSpec('tags', '标签', '标签数量', Icons.sell_rounded),
+  _ModuleSpec('favorites', '收藏', '收藏的笔记数', Icons.star_rounded),
+  _ModuleSpec('activeDays', '活跃天数', '有发布记录的天数', Icons.event_available_rounded),
+];
+
 /// 一次拖拽之后，新的完整模块顺序。
 ///
 /// 抽成纯函数是为了能直接测：拖拽手势在 widget test 里很难稳定复现，
@@ -128,6 +143,9 @@ class _StatsPageState extends State<StatsPage> {
   TrendStyle _trendStyle = TrendStyle.bar;
   ShareStyle _shareStyle = ShareStyle.donut;
   final Set<String> _hidden = <String>{};
+
+  /// 概览里被关掉的数据项（存 id）。默认全部显示。
+  final Set<String> _overviewHidden = <String>{};
 
   /// 自定义范围（仅当 [_range] == custom 时生效）。
   DateTime? _from;
@@ -254,6 +272,18 @@ class _StatsPageState extends State<StatsPage> {
           // 存坏了就当没配置过，不要因为一个设置项打不开页面
         }
       }
+      final overviewRaw = repo.getSetting('stats.overviewHidden');
+      if (overviewRaw != null && overviewRaw.isNotEmpty) {
+        try {
+          _overviewHidden
+            ..clear()
+            ..addAll(
+              (jsonDecode(overviewRaw) as List<dynamic>).map((e) => e.toString()),
+            );
+        } catch (_) {
+          // 同上
+        }
+      }
 
       _collectionIds = (repo.getSetting('stats.collectionIds') ?? '')
           .split(',')
@@ -288,6 +318,7 @@ class _StatsPageState extends State<StatsPage> {
     repo.setSetting('stats.trendStyle', _trendStyle.name);
     repo.setSetting('stats.shareStyle', _shareStyle.name);
     repo.setSetting('stats.hidden', jsonEncode(_hidden.toList()));
+    repo.setSetting('stats.overviewHidden', jsonEncode(_overviewHidden.toList()));
     repo.setSetting('stats.collectionIds', _collectionIds.join(','));
     repo.setSetting('stats.collectionId', _collectionId?.toString() ?? '');
     repo.setSetting('stats.from', _from?.toIso8601String() ?? '');
@@ -668,6 +699,9 @@ class _StatsPageState extends State<StatsPage> {
 
   bool _show(String id) => !_hidden.contains(id);
 
+  /// 概览里的某个数据项是否显示。只有明确关过才隐藏。
+  bool _showOverviewStat(String id) => !_overviewHidden.contains(id);
+
   // ── 构建 ────────────────────────────────────────────────────────────────
 
   @override
@@ -754,7 +788,12 @@ class _StatsPageState extends State<StatsPage> {
 
   /// 按 id 造出单个模块卡片。
   Widget _moduleWidget(String id, AppColors c) => switch (id) {
-    'overview' => _cached('overview', (c, _overview), () => _overviewCard(c)),
+    // 概览的缓存键要带上"显示了哪些项"，否则开关切完拿回来的还是旧卡片
+    'overview' => _cached('overview', (
+      c,
+      _overview,
+      (_overviewHidden.toList()..sort()).join(','),
+    ), () => _overviewCard(c)),
     'trend' => _cached('trend', (
       c,
       _trend,

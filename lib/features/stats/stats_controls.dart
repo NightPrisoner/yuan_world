@@ -275,6 +275,104 @@ extension _StatsControls on _StatsPageState {
     );
   }
 
+  /// 概览右上角的「显示哪些数据」。
+  ///
+  /// 和模块开关一样用对话框而不是下拉菜单：一次能改好几项，
+  /// 改完不用重新点开 —— 概览就那几个数字，来回开关很常见。
+  Future<void> _showOverviewSheet(AppColors c) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final inner = ctx.colors;
+
+          void sync() {
+            setLocal(() {});
+            _setState(() {});
+            _persist();
+          }
+
+          void toggle(String id, bool on) {
+            if (on) {
+              _overviewHidden.remove(id);
+            } else {
+              _overviewHidden.add(id);
+            }
+            sync();
+          }
+
+          final allOn = _kOverviewStats.every((s) => _showOverviewStat(s.id));
+
+          return Dialog(
+            backgroundColor: inner.secondaryBackground,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380, maxHeight: 560),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '概览里显示哪些数据',
+                      style: AppText.headline.copyWith(color: inner.label),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '关掉的不会消失，随时可以再打开',
+                      style: AppText.caption1.copyWith(
+                        color: inner.tertiaryLabel,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            for (final spec in _kOverviewStats)
+                              _ModuleToggle(
+                                key: ValueKey<String>('ov-toggle-${spec.id}'),
+                                spec: spec,
+                                on: _showOverviewStat(spec.id),
+                                onChanged: (v) => toggle(spec.id, v),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 20),
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: allOn
+                              ? null
+                              : () {
+                                  _overviewHidden.clear();
+                                  sync();
+                                },
+                          child: const Text('全部显示'),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('完成'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   int _stepIn(List<double> levels, double cur, int dir) =>
       (math.max(0, levels.indexOf(cur)) + dir).clamp(0, levels.length - 1);
 

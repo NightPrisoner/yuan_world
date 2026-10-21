@@ -46,19 +46,8 @@ extension _StatsCards on _StatsPageState {
       title: '存储与数据',
       child: Column(
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                // 磁盘上的东西没法按文件夹切分，所以这一张**永远是整库口径**。
-                // 以前这里也列"笔记/总字数"，那两行会跟着筛选变，
-                // 和下面的磁盘数字不是一回事 —— 索性去掉，概览里已经有了。
-                '全部存在本机，不上传任何服务器 · 以下为整库占用',
-                style: AppText.caption1.copyWith(color: c.tertiaryLabel),
-              ),
-            ),
-          ),
+          // 这张永远是整库口径（磁盘上的东西没法按文件夹切），
+          // 但不用再写一行小字解释 —— 下面四行的标签已经说明了。
           row('图片', '${media.images} 张'),
           row('视频', '${media.videos} 个'),
           row('媒体占用', _StatsPageState._fmtBytes(media.bytes)),
@@ -290,103 +279,116 @@ extension _StatsCards on _StatsPageState {
 
     final avg = o.noteCount == 0 ? 0 : o.totalChars ~/ o.noteCount;
 
+    // 数据项按 id 备好，显示哪些由用户在右上角挑。
+    //
+    // 「词数」不在这里：中文的词数靠空格切不出来，和字数的口径容易
+    // 被误当成同一件事，用户明确说去掉 —— 概览只留数得准的。
+    final tiles = <String, Widget>{
+      'notes': _Stat(
+        // key 是给测试用的：筛选一变，这个数字就得跟着变，
+        // 之前漏了 _overview 的重算，它一直挂着旧值
+        key: const Key('ov-notes'),
+        label: '笔记',
+        value: '${o.noteCount}',
+        unit: '篇',
+        color: c.tint,
+        icon: Icons.article_rounded,
+      ),
+      'chars': _Stat(
+        key: const Key('ov-chars'),
+        label: '总字数',
+        value: fmtNum(o.totalChars),
+        color: c.palette[4],
+        icon: Icons.text_fields_rounded,
+      ),
+      'images': _Stat(
+        key: const Key('ov-images'),
+        label: '图片',
+        value: fmtNum(o.imageCount),
+        color: c.palette[5],
+        icon: Icons.image_rounded,
+      ),
+      'videos': _Stat(
+        key: const Key('ov-videos'),
+        label: '视频',
+        value: fmtNum(o.videoCount),
+        color: c.palette[5],
+        icon: Icons.videocam_rounded,
+      ),
+      'collections': _Stat(
+        key: const Key('ov-collections'),
+        label: '文集',
+        value: '${o.collectionCount}',
+        unit: '个',
+        color: c.palette[0],
+        icon: Icons.folder_rounded,
+      ),
+      'tags': _Stat(
+        key: const Key('ov-tags'),
+        label: '标签',
+        value: '${o.tagCount}',
+        unit: '个',
+        color: c.palette[1],
+        icon: Icons.sell_rounded,
+      ),
+      'favorites': _Stat(
+        key: const Key('ov-favorites'),
+        label: '收藏',
+        value: '${o.favoriteCount}',
+        unit: '篇',
+        color: c.palette[7],
+        icon: Icons.star_rounded,
+      ),
+      'activeDays': _Stat(
+        key: const Key('ov-active-days'),
+        label: '活跃天数',
+        value: '${_streak?.activeDays ?? 0}',
+        unit: '天',
+        color: c.palette[3],
+        icon: Icons.event_available_rounded,
+      ),
+    };
+
+    final visible = <Widget>[
+      for (final spec in _kOverviewStats)
+        if (_showOverviewStat(spec.id)) tiles[spec.id]!,
+    ];
+
+    // 固定两列：关掉一项时，同行的另一项不会被拉成整行宽，
+    // 开关来回切的时候整张卡片不会忽胖忽瘦。
+    final rows = <Widget>[];
+    for (var i = 0; i < visible.length; i += 2) {
+      final pair = visible.sublist(i, math.min(i + 2, visible.length));
+      rows.add(
+        Row(
+          children: [
+            pair.first,
+            if (pair.length > 1) pair[1] else const Spacer(),
+          ],
+        ),
+      );
+      if (i + 2 < visible.length) rows.add(const SizedBox(height: 10));
+    }
+
     return _Card(
       title: '概览',
-      trailing: Text(
-        '平均每篇 ${fmtNum(avg)} 字',
-        style: AppText.caption1.copyWith(color: c.tertiaryLabel),
-      ),
-      child: Column(
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              _Stat(
-                // key 是给测试用的：筛选一变，这个数字就得跟着变，
-                // 之前漏了 _overview 的重算，它一直挂着旧值
-                key: const Key('ov-notes'),
-                label: '笔记',
-                value: '${o.noteCount}',
-                unit: '篇',
-                color: c.tint,
-                icon: Icons.article_rounded,
-              ),
-              _Stat(
-                key: const Key('ov-chars'),
-                label: '总字数',
-                value: fmtNum(o.totalChars),
-                color: c.palette[4],
-                icon: Icons.text_fields_rounded,
-              ),
-            ],
+          Text(
+            '平均每篇 ${fmtNum(avg)} 字',
+            style: AppText.caption1.copyWith(color: c.tertiaryLabel),
           ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _Stat(
-                label: '词数',
-                value: fmtNum(o.totalWords),
-                color: c.palette[2],
-                icon: Icons.abc_rounded,
-              ),
-              _Stat(
-                label: '图片',
-                value: fmtNum(o.imageCount),
-                color: c.palette[5],
-                icon: Icons.image_rounded,
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _Stat(
-                label: '文集',
-                value: '${o.collectionCount}',
-                unit: '个',
-                color: c.palette[0],
-                icon: Icons.folder_rounded,
-              ),
-              _Stat(
-                label: '标签',
-                value: '${o.tagCount}',
-                unit: '个',
-                color: c.palette[1],
-                icon: Icons.sell_rounded,
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _Stat(
-                label: '视频',
-                value: fmtNum(o.videoCount),
-                color: c.palette[5],
-                icon: Icons.videocam_rounded,
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _Stat(
-                label: '收藏',
-                value: '${o.favoriteCount}',
-                unit: '篇',
-                color: c.palette[7],
-                icon: Icons.star_rounded,
-              ),
-              _Stat(
-                label: '活跃天数',
-                value: '${_streak?.activeDays ?? 0}',
-                unit: '天',
-                color: c.palette[3],
-                icon: Icons.event_available_rounded,
-              ),
-            ],
+          _IconMenuButton(
+            icon: Icons.dashboard_customize_rounded,
+            tooltip: '概览里显示哪些数据',
+            onTap: () => _showOverviewSheet(c),
           ),
         ],
       ),
+      child: visible.isEmpty
+          ? _empty(c, '概览的数据项都被关掉了，点右上角按钮挑几个显示')
+          : Column(children: rows),
     );
   }
 
