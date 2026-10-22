@@ -163,8 +163,8 @@ void main() {
   });
 
   group('背景图不该被两层压暗', () {
-    test('浓度换算：0 时底色全留，拉满时只剩一点点', () {
-      expect(AppBackground.keepFor(0), closeTo(1.0, 0.0001));
+    test('浓度换算：0 时底色留到上限，拉满时只剩一点点', () {
+      expect(AppBackground.keepFor(0), closeTo(AppBackground.maxKeep, 0.0001));
       expect(AppBackground.keepFor(1),
           closeTo(AppBackground.minKeep, 0.0001));
       // 单调：浓度越大，底色留得越少（照片越清楚）
@@ -202,6 +202,23 @@ void main() {
       );
       // 内容还在，说明图片是垫在下面的
       expect(find.text('内容'), findsOneWidget);
+    });
+
+    test('浓度很低时算出来的 keep 超过 0.94，也不能把主题算崩', () {
+      // 以前 cardKeep 用 clamp(keep, 0.94)，keep 一过 0.94 就变成
+      // "下限比上限大"，double.clamp 直接抛 Invalid argument(s)，
+      // 而且每帧抛一次 —— 整个界面被 ErrorWidget 顶掉，表现为白屏。
+      for (final strength in <double>[0, 0.01, 0.1, 0.5, 0.99, 1]) {
+        final keep = AppBackground.keepFor(strength);
+        expect(() => AppTheme.translucent(AppTheme.light(), keep: keep),
+            returnsNormally,
+            reason: '浓度 $strength -> keep $keep 把主题算崩了');
+        expect(() => AppTheme.translucent(AppTheme.dark(), keep: keep),
+            returnsNormally);
+      }
+      // 入参本身越界也不许抛
+      expect(() => AppTheme.translucent(AppTheme.light(), keep: 2),
+          returnsNormally);
     });
   });
 

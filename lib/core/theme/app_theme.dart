@@ -417,13 +417,16 @@ class AppTheme {
   static ThemeData translucent(ThemeData base, {double keep = 0.66}) {
     final c = base.extension<AppColors>();
     if (c == null) return base;
-    // 卡片始终比页面底实一截，且不超过 0.94（留一点图透出来，否则
-    // 背景图看着像被卡片"贴"死了）
-    final cardKeep = (keep + (1 - keep) * 0.62).clamp(keep, 0.94);
+    // 先夹一次入参：调用方可能算出 0.9454 这种超过 0.94 的值，
+    // 下面那句 clamp(keep, 0.94) 就会变成"下限比上限大"——
+    // `double.clamp` 对这种情况直接抛 Invalid argument(s)，
+    // 而且是每帧抛一次，整个界面会被 ErrorWidget 顶掉（白屏）。
+    final pageKeep = keep.clamp(0.0, 0.94);
+    final cardKeep = (pageKeep + (1 - pageKeep) * 0.62).clamp(pageKeep, 0.94);
     Color fade(Color color, double k) => color.withValues(alpha: color.a * k);
     final next = c.copyWith(
-      background: fade(c.background, keep),
-      groupedBackground: fade(c.groupedBackground, keep),
+      background: fade(c.background, pageKeep),
+      groupedBackground: fade(c.groupedBackground, pageKeep),
       secondaryBackground: fade(c.secondaryBackground, cardKeep),
       tertiaryBackground: fade(c.tertiaryBackground, cardKeep),
     );

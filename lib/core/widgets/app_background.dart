@@ -38,9 +38,19 @@ class AppBackground extends StatelessWidget {
   /// 0.22 是下限 —— 再透下去，白色正文压在照片的亮处就看不见了。
   static const double minKeep = 0.22;
 
-  /// 浓度 0~1 对应页面底色保留 1~[minKeep]。
-  static double keepFor(double strength) =>
-      (1 - (1 - minKeep) * strength).clamp(minKeep, 1.0);
+  /// 上限 0.94 与 `AppTheme.translucent` 里那条上限是同一个数。
+  ///
+  /// 两边必须对齐：这里要是能算出 0.99，`translucent` 里那句
+  /// `clamp(keep, 0.94)` 就成了"下限比上限大"，`double.clamp` 直接抛
+  /// `Invalid argument(s)`，而且是每帧抛一次 —— 整个界面会被
+  /// ErrorWidget 顶掉，用户看到的就是白屏。
+  static const double maxKeep = 0.94;
+
+  /// 浓度 0~1 对应页面底色保留 [maxKeep]~[minKeep]。
+  static double keepFor(double strength) {
+    final s = strength.clamp(0.0, 1.0);
+    return maxKeep - (maxKeep - minKeep) * s;
+  }
 
   @override
   Widget build(BuildContext context) {
