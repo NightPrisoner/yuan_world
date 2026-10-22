@@ -242,8 +242,11 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
 
 /// 把整个数据目录搬到用户挑的位置。
 ///
-/// 会先关掉数据库连接再复制，中途崩了指针文件已经写好了，下次启动照样
-/// 能找到新位置。复制期间弹一个进度框，几百兆也不至于看起来像死机。
+/// 会先关掉数据库连接再搬运，中途崩了指针文件已经写好了，下次启动照样
+/// 能找到新位置。搬运期间弹一个进度框，几百兆也不至于看起来像死机。
+///
+/// **是"搬"不是"复制"**：搬到新位置后原位置的那几项会被删掉，数据只留
+/// 一份。两份并存过一次，结果用户自己也分不清哪个是正在用的。
 Future<void> _moveDataLocation(BuildContext context, AppState state) async {
   final messenger = ScaffoldMessenger.of(context);
   final picked = await FilePicker.getDirectoryPath(
@@ -251,14 +254,16 @@ Future<void> _moveDataLocation(BuildContext context, AppState state) async {
   );
   if (picked == null || picked.trim().isEmpty) return;
   if (!context.mounted) return;
+  final target = dataDirIn(picked.trim());
 
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('把数据搬到这里？'),
       content: Text(
-        '数据库、图片、视频、快照和备份都会复制到：\n$picked\n\n'
-        '原位置的文件不会删除，确认没问题后你可以自己清理。',
+        '数据库、图片、视频、快照和备份都会搬到：\n$target\n\n'
+        '搬到新位置后，原位置的那份会被删掉 —— 数据只留一份。\n'
+        '新位置里已有的同名数据会被这里的数据替换。',
       ),
       actions: <Widget>[
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -281,8 +286,8 @@ Future<void> _resetDataLocation(BuildContext context, AppState state) async {
     builder: (ctx) => AlertDialog(
       title: const Text('回到默认位置？'),
       content: Text(
-        '数据会复制回：\n$defaultRoot\n\n'
-        '当前自定义位置的文件不会删除。',
+        '数据会搬回：\n$defaultRoot\n\n'
+        '搬回去之后，当前自定义位置的那份会被删掉 —— 数据只留一份。',
       ),
       actions: <Widget>[
         TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
@@ -322,7 +327,7 @@ Future<void> _runDataMove(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('复制中… ${(value * 100).round()}%'),
+            Text('搬运中… ${(value * 100).round()}%'),
             const SizedBox(height: 12),
             LinearProgressIndicator(value: value == 0 ? null : value),
           ],
@@ -967,7 +972,7 @@ class SettingsPage extends StatelessWidget {
                         : '更改数据位置…',
                     subtitle: state.dataLocationIsCustom
                         ? '当前用的是自定义位置，可以再换到别的盘'
-                        : '搬到其它盘或网盘目录，原文件不会被删',
+                        : '搬到其它盘或网盘目录，原来的那份会随搬移删掉',
                     onTap: () => _moveDataLocation(context, state),
                   ),
                   if (state.dataLocationIsCustom) ...[
@@ -976,7 +981,7 @@ class SettingsPage extends StatelessWidget {
                       icon: Icons.restart_alt_rounded,
                       iconColor: c.palette[0],
                       label: '回到默认位置',
-                      subtitle: '搬回软件目录下的 data/，原位置的文件不会被删',
+                      subtitle: '搬回软件目录下的 data/，原来的那份会随搬移删掉',
                       onTap: () => _resetDataLocation(context, state),
                     ),
                   ],
@@ -1621,6 +1626,44 @@ class _ThemeRow extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _ThemeSeedPicker(state: state),
+          const SizedBox(height: 14),
+          ThemeBackgroundPicker(state: state),
+          if (state.themeSeed != null ||
+              state.themeBackgroundPath != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Pressable(
+                scale: 0.94,
+                onTap: () {
+                  state.resetTheme();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('已回到默认主题')),
+                  );
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: c.fill,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(Icons.restart_alt_rounded,
+                          size: 14, color: c.secondaryLabel),
+                      const SizedBox(width: 5),
+                      Text(
+                        '恢复默认主题',
+                        style: AppText.caption1.copyWith(color: c.secondaryLabel),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1631,6 +1674,9 @@ class _ThemeRow extends StatelessWidget {
 ///
 /// 只改强调色，不动背景/文字 —— 换个颜色就够了，让用户自由改背景
 /// 很容易调出一片看不清字的效果。
+///
+/// 想大改视觉的走下面 [ThemeBackgroundPicker]：那条路由用户自己显式
+/// 选图和调浓度，出事也是他自己调出来的。
 class _ThemeSeedPicker extends StatelessWidget {
   const _ThemeSeedPicker({required this.state});
   final AppState state;
@@ -1677,6 +1723,175 @@ class _ThemeSeedPicker extends StatelessWidget {
               onTap: () => _pickCustomSeed(context, state),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// 界面背景图：选一张本地图片铺在最底层，浓度和模糊都能调。
+///
+/// 做成一整块而不是几个行，是因为这三样（图、浓度、模糊）互相关联 ——
+/// 换了图基本都要顺手重调浓度，拆开摆到设置页各处会很难用。
+///
+/// **不提供"内置图片"**：内置图会让安装包变大，而且用户多半想用自己的
+/// 照片。代价是手机上得走文件选择器，桌面端就是普通打开文件对话框。
+class ThemeBackgroundPicker extends StatelessWidget {
+  const ThemeBackgroundPicker({super.key, required this.state});
+  final AppState state;
+
+  Future<void> _pick(BuildContext context) async {
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: '选一张图当界面背景',
+      type: FileType.custom,
+      allowedExtensions: <String>['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'],
+    );
+    if (picked.isEmpty) return;
+    final path = picked.first.path;
+    if (path == null || path.trim().isEmpty) return;
+    state.setThemeBackgroundPath(path);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final path = state.themeBackgroundPath;
+    final has = path != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                '界面背景图',
+                style: AppText.caption1.copyWith(color: c.secondaryLabel),
+              ),
+            ),
+            if (has)
+              Pressable(
+                scale: 0.94,
+                onTap: () => state.setThemeBackgroundPath(null),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text(
+                    '去掉',
+                    style: AppText.caption1.copyWith(color: c.destructive),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Pressable(
+          scale: 0.985,
+          onTap: () => _pick(context),
+          child: Container(
+            height: 64,
+            decoration: BoxDecoration(
+              color: c.fill,
+              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+              image: has
+                  ? DecorationImage(
+                      image: ResizeImage(FileImage(File(path)),
+                          width: 480, policy: ResizeImagePolicy.fit),
+                      fit: BoxFit.cover,
+                      // 缩略图压暗一点，好让中间那行字看得清
+                      colorFilter: const ColorFilter.mode(
+                        Color(0x66000000),
+                        BlendMode.darken,
+                      ),
+                    )
+                  : null,
+            ),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  has ? Icons.image_rounded : Icons.add_photo_alternate_rounded,
+                  size: 16,
+                  color: has ? Colors.white : c.secondaryLabel,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  has ? '换一张图' : '选一张图',
+                  style: AppText.footnote.copyWith(
+                    color: has ? Colors.white : c.secondaryLabel,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (has) ...[
+          const SizedBox(height: 12),
+          _SliderRow(
+            label: '浓度',
+            value: state.themeBackgroundOpacity,
+            display: '${(state.themeBackgroundOpacity * 100).round()}%',
+            onChanged: state.setThemeBackgroundOpacity,
+          ),
+          const SizedBox(height: 6),
+          _SliderRow(
+            label: '模糊',
+            value: state.themeBackgroundBlur / 40,
+            display: '${state.themeBackgroundBlur.round()}',
+            onChanged: (v) => state.setThemeBackgroundBlur(v * 40),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            // 说清楚代价，别让用户以为"背景图不花钱"
+            '图片只是铺在下面，笔记内容仍存在数据库里；浓度调高会压住正文，深色主题下建议不用。',
+            style: AppText.caption2.copyWith(color: c.tertiaryLabel),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// 一行「标签 + 滑杆 + 数值」。设置页里只有背景图在用，先就地放这儿。
+class _SliderRow extends StatelessWidget {
+  const _SliderRow({
+    required this.label,
+    required this.value,
+    required this.display,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final String display;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Row(
+      children: <Widget>[
+        SizedBox(
+          width: 34,
+          child: Text(label,
+              style: AppText.caption1.copyWith(color: c.secondaryLabel)),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+              overlayShape: SliderComponentShape.noOverlay,
+            ),
+            child: Slider(value: value.clamp(0.0, 1.0), onChanged: onChanged),
+          ),
+        ),
+        SizedBox(
+          width: 40,
+          child: Text(
+            display,
+            textAlign: TextAlign.right,
+            style: AppText.caption1.copyWith(color: c.secondaryLabel),
+          ),
         ),
       ],
     );

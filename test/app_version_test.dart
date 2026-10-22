@@ -31,6 +31,14 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    // 设置页现在是懒加载长列表，「关于」在最底下，2600 高也不一定够。
+    // 不滚到底的话版本行压根没被构建，find.text 会假红。
+    await tester.scrollUntilVisible(
+      find.text('版本'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
   }
 
   tearDown(AppInfo.resetForTesting);

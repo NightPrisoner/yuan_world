@@ -62,10 +62,20 @@ String? configuredAppRoot() {
   }
 }
 
-/// 解析应用数据根目录；不存在时创建。
+/// 用户选的位置如果是盘符根（`F:\`），数据不能直接摊在根目录里。
 ///
-/// 优先用用户指定的位置；那里打不开（外接盘没插、目录被删）就退回默认，
-/// **但不删指针** —— 用户下次把盘插回来，数据就回来了。
+/// 盘根上全是用户自己的东西，把 `images/`、`yuanworld.db` 摊在那儿既难找
+/// 也容易和别的软件撞名。统一收进一个子目录。
+String dataDirIn(String chosen) =>
+    isDriveRoot(chosen) ? p.join(chosen, '元世界数据') : chosen;
+
+/// 把散在 [from]（盘符根）上的数据项收进 [into]（子目录）。
+///
+/// 只在目标里还没有同名项时才搬，避免把用户后来又写出来的新数据盖掉。
+/// 失败一律吞掉：搬不动就按原来的路径用，绝不能因此启动不了。
+///
+/// 先写 `-wal`：库文件单独摆出去而日志没跟上，恢复时 SQLite 会把它当成
+/// 一个没提交过事务的旧库，最近写的内容就没了。
 Future<String> resolveAppRoot() async {
   if (Platform.isAndroid || Platform.isIOS) {
     return defaultAppRoot();
@@ -73,6 +83,9 @@ Future<String> resolveAppRoot() async {
 
   final custom = configuredAppRoot();
   if (custom != null) {
+    // 老版本允许把数据目录指到盘符根，数据就直接摊在 `F:\` 上。
+    // 这里**照旧**用它 —— 不能擅自改成子目录，那等于换了个空目录，
+    // 用户看到的是"我的笔记全没了"。新选位置时才收进子目录。
     final dir = Directory(custom);
     try {
       if (!dir.existsSync()) dir.createSync(recursive: true);
@@ -85,7 +98,6 @@ Future<String> resolveAppRoot() async {
       // 指定位置暂时不可用：退回默认，指针留着
     }
   }
-
   final root = await defaultAppRoot();
   await _migrateFromAppData(root);
   return root;
@@ -124,12 +136,57 @@ class MoveDataResult {
   final int bytes;
 }
 
-/// 把 [from] 目录下的数据整体搬到 [to]。
+/// 数据目录里"属于用户数据"的条目名。
+///
+/// 只搬这些 —— 以前这里是 `source.listSync()` 全搬，于是当用户把数据目录
+/// 指到 `F:\`（盘符根）之后，程序会把整个盘的 56 个条目、1.2TB 的相册
+/// 和番剧全当成"数据"往目标里拷，看起来就是「迁移卡死 / 迁不回去」。
+/// 数据目录可能是任何目录，里面放什么完全不可控，所以必须按名字挑。
+const List<String> kDataEntryNames = <String>[
+  'yuanworld.db',
+  'yuanworld.db-wal',
+  'yuanworld.db-shm',
+  'yuanworld.db.before-restore',
+  'images',
+  'snapshots',
+  'backups',
+  'logs',
+];
+
+/// 同 [kDataEntryNames]，但把 `-wal` 排在最前面 —— 真正搬运时用这个顺序。
+const List<String> kDataEntryNamesWalFirst = <String>[
+  'yuanworld.db-wal',
+  'yuanworld.db',
+  'yuanworld.db-shm',
+  'yuanworld.db.before-restore',
+  'images',
+  'snapshots',
+  'backups',
+  'logs',
+];
+
+/// [path] 是不是盘符根目录（`F:\`、`C:\` 这种）。
+bool isDriveRoot(String path) {
+  final norm = p.normalize(p.absolute(path));
+  return p.dirname(norm) == norm;
+}
+
+
+
+/// 把 [from] 目录下的数据搬到 [to]。
+///
+/// **语义是"搬"，不是"复制"**：搬完源位置的数据项就删掉，数据永远只有
+/// 一份。以前这里只复制不删除，于是 `F:\` 里的库和 `data\` 里的库同时存在
+/// 且内容不同（一个是 23:08、一个是 21:33），用户根本分不清哪个算数，
+/// 下次换位置又会把旧的盖到新的上面。
+///
+/// 目标位置原有的数据项会被**先清掉**：源是用户当前正在用的那份，它才是
+/// 准的；把两份混在一起会得到一堆没人认识的重复笔记和孤儿图片。
 ///
 /// **调用方必须先关掉数据库**（不然 SQLite 还开着文件，复制出来的是半截）。
-/// 搬完不删原目录 —— 出问题时用户还能自己翻回去找。
 ///
-/// 只搬数据，不搬程序：`app.so`、`flutter_assets` 这些属于安装目录本身。
+/// 只搬 [kDataEntryNames] 里列出的数据项，不搬程序（`app.so`、
+/// `flutter_assets` 属于安装目录本身），也不碰同目录下的其它文件。
 Future<MoveDataResult> migrateDataRoot(
   String from,
   String to, {
@@ -141,11 +198,37 @@ Future<MoveDataResult> migrateDataRoot(
   final source = Directory(from);
   final entries = <FileSystemEntity>[];
   if (source.existsSync()) {
-    for (final e in source.listSync()) {
+    for (final name in kDataEntryNamesWalFirst) {
+      final path = p.join(source.path, name);
+      final type = FileSystemEntity.typeSync(path);
+      if (type == FileSystemEntityType.notFound) continue;
       // 目标就在源里面（或反过来）时跳过自己，否则会无限复制
-      if (p.equals(e.path, target.path)) continue;
-      if (p.isWithin(e.path, target.path)) continue;
-      entries.add(e);
+      if (p.equals(path, target.path)) continue;
+      if (p.isWithin(path, target.path)) continue;
+      if (p.isWithin(target.path, path)) continue;
+      entries.add(type == FileSystemEntityType.directory
+          ? Directory(path)
+          : File(path));
+    }
+  }
+
+  // 目标里原有的同名数据项先清掉：不能让新数据落到旧文件旁边混着用。
+  // 只清数据项，目标目录里别的文件（用户自己放的东西）一律不动。
+  for (final e in entries) {
+    final name = p.basename(e.path);
+    final stale = p.join(target.path, name);
+    if (FileSystemEntity.typeSync(stale) == FileSystemEntityType.notFound) {
+      continue;
+    }
+    try {
+      if (FileSystemEntity.isDirectorySync(stale)) {
+        Directory(stale).deleteSync(recursive: true);
+      } else {
+        File(stale).deleteSync();
+      }
+    } catch (_) {
+      // 删不掉就让后面的 copy 去报错，这里不吞成"看起来成功了"
+      rethrow;
     }
   }
 
@@ -153,22 +236,56 @@ Future<MoveDataResult> migrateDataRoot(
   var files = 0;
   var bytes = 0;
   final total = entries.length;
-  for (final e in entries) {
-    final name = p.basename(e.path);
-    final dst = p.join(target.path, name);
-    if (e is Directory) {
-      final r = await _copyDir(e, Directory(dst));
-      files += r.files;
-      bytes += r.bytes;
-    } else if (e is File) {
-      final len = e.lengthSync();
-      await e.copy(dst);
-      files += 1;
-      bytes += len;
+  try {
+    for (final e in entries) {
+      final name = p.basename(e.path);
+      final dst = p.join(target.path, name);
+      if (e is Directory) {
+        final r = await _copyDir(e, Directory(dst));
+        files += r.files;
+        bytes += r.bytes;
+      } else if (e is File) {
+        final len = e.lengthSync();
+        await e.copy(dst);
+        files += 1;
+        bytes += len;
+      }
+      done += 1;
+      onProgress?.call(total == 0 ? 1 : done / total);
     }
-    done += 1;
-    onProgress?.call(total == 0 ? 1 : done / total);
+  } catch (_) {
+    // 拷到一半断了（磁盘满、U 盘拔了）：把目标里刚落下的半截清掉，
+    // **源一个字节都不动** —— 宁可这次搬不成，也不能让用户两头都是坏的。
+    for (final e in entries) {
+      final stale = p.join(target.path, p.basename(e.path));
+      try {
+        if (FileSystemEntity.isDirectorySync(stale)) {
+          Directory(stale).deleteSync(recursive: true);
+        } else if (FileSystemEntity.isFileSync(stale)) {
+          File(stale).deleteSync();
+        }
+      } catch (_) {
+        // 清理尽力而为
+      }
+    }
+    rethrow;
   }
+
+  // 数据已经完整落到新位置，把源位置的那几项删掉 —— 「搬」不是「复制」。
+  // 只删数据项，源目录本身和里面别的东西留着，用户不会一觉醒来发现
+  // `F:\` 被清空。删失败也只影响源目录里多留一份，不影响新位置可用。
+  for (final e in entries) {
+    try {
+      if (e is Directory) {
+        if (e.existsSync()) e.deleteSync(recursive: true);
+      } else if (e is File) {
+        if (e.existsSync()) e.deleteSync();
+      }
+    } catch (_) {
+      // 有文件被别的进程占着（比如正在看视频）：留着，下次再清
+    }
+  }
+
   onProgress?.call(1);
   return MoveDataResult(target: target.path, files: files, bytes: bytes);
 }

@@ -139,10 +139,13 @@ class AppColors extends ThemeExtension<AppColors> {
 
   /// 用自定义种子色派生出整套颜色。
   ///
-  /// 只换强调色（tint）与配色轮（palette）—— 背景、文字、分隔线保持
-  /// 系统那套黑/白/灰。理由：中性色是"看着舒服"的地基，让用户随手挑个
-  /// 粉紫去改背景，很容易得到一片读不清字的效果；换强调色已经足够让
-  /// 整个应用看起来是自己的。
+  /// 换的是强调色、配色轮，以及**几层底色的色相**：纯白/纯黑铺满全屏
+  /// 时，用户挑个绿色也只有按钮和小图标变色，看着"好像没变"。所以
+  /// 列表底、分组底、输入框这些大面积的浅色会往种子色那边偏一点。
+  ///
+  /// 幅度是刻意压很小的（4%~12%）：中性底是"读得下去"的地基，让用户
+  /// 挑的粉色直接刷满背景，长文会糊成一片。要更明显的视觉效果走
+  /// 「界面背景图」那条路，那条由用户显式调浓度。
   ///
   /// [seed] 为空时返回 [light] / [dark] 原样。
   static AppColors fromSeed({
@@ -169,8 +172,20 @@ class AppColors extends ThemeExtension<AppColors> {
         hsl.withHue((hsl.hue + deg) % 360).toColor(),
     ];
 
-    return base.copyWith(tint: accent, palette: rotated);
+    Color tinted(Color base, double amount) =>
+        Color.lerp(base, accent, amount)!;
+
+    return base.copyWith(
+      tint: accent,
+      palette: rotated,
+      // 深色下同样的混合比例，观感上更明显，所以给得比浅色少一点
+      groupedBackground: tinted(base.groupedBackground, base.isDark ? 0.10 : 0.07),
+      tertiaryBackground:
+          tinted(base.tertiaryBackground, base.isDark ? 0.12 : 0.06),
+      fill: tinted(base.fill, base.isDark ? 0.10 : 0.05),
+    );
   }
+
 
   @override
   AppColors copyWith({
@@ -359,6 +374,38 @@ class AppTheme {
   static ThemeData dark({Color? seed}) =>
       _build(AppColors.fromSeed(brightness: Brightness.dark, seed: seed),
           Brightness.dark);
+
+  /// 把几层背景按 [keep] 保留不透明度（1 = 原样不透明）。
+  ///
+  /// 只有用户给界面选了背景图时才用：图铺在最底层，各页底色必须让一点
+  /// 出来，否则图被实色挡得一点都看不见。
+  ///
+  /// **卡片比页面底更实**：页面底可以透到 0.5，读正文的卡片只透到
+  /// 0.8 左右 —— 字号 17 的黑字压在一张风景照的花纹上，眼睛会一直
+  /// 被拉走。分层给不同的 keep 就是这个原因。
+  ///
+  /// 属于 [AppTheme] 而不是 [AppColors]：它产出的是整套 `ThemeData`
+  /// （顺带要把 `scaffoldBackgroundColor` / `canvasColor` 一起改），
+  /// 放在颜色类里会让人以为只改颜色。
+  static ThemeData translucent(ThemeData base, {double keep = 0.66}) {
+    final c = base.extension<AppColors>();
+    if (c == null) return base;
+    // 卡片始终比页面底实一截，且不超过 0.94（留一点图透出来，否则
+    // 背景图看着像被卡片"贴"死了）
+    final cardKeep = (keep + (1 - keep) * 0.62).clamp(keep, 0.94);
+    Color fade(Color color, double k) => color.withValues(alpha: color.a * k);
+    final next = c.copyWith(
+      background: fade(c.background, keep),
+      groupedBackground: fade(c.groupedBackground, keep),
+      secondaryBackground: fade(c.secondaryBackground, cardKeep),
+      tertiaryBackground: fade(c.tertiaryBackground, cardKeep),
+    );
+    return base.copyWith(
+      scaffoldBackgroundColor: next.groupedBackground,
+      canvasColor: next.background,
+      extensions: <ThemeExtension<dynamic>>[next],
+    );
+  }
 
   static ThemeData _build(AppColors c, Brightness b) {
     final scheme = ColorScheme.fromSeed(

@@ -17,6 +17,7 @@ import 'core/diagnostics/crash_log.dart';
 import 'core/media/poster_maker.dart';
 import 'core/platform/window_mode.dart';
 import 'core/theme/app_theme.dart';
+import 'core/widgets/app_background.dart';
 import 'data/db/app_database.dart';
 import 'data/importer/import_service.dart';
 import 'data/repositories/note_repository.dart';
@@ -175,10 +176,15 @@ class YuanWorldApp extends StatelessWidget {
       darkTheme: AppTheme.dark(seed: state.themeSeed),
       // 字号缩放放在这里一处生效：不改 AppText 里的每个字号，
       // 也让第三方组件（对话框、滚轮、Toast）跟着一起缩放。
-      builder: (context, child) => MediaQuery.withClampedTextScaling(
-        minScaleFactor: state.textScale,
-        maxScaleFactor: state.textScale,
-        child: child ?? const SizedBox.shrink(),
+      //
+      // AppChrome 套在最外层：用户给界面选了背景图时，它把各页底色改成
+      // 半透明铺在图上；没选就直接透传，一分钱不花。
+      builder: (context, child) => AppChrome(
+        child: MediaQuery.withClampedTextScaling(
+          minScaleFactor: state.textScale,
+          maxScaleFactor: state.textScale,
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       home: const _Bootstrap(),
     );

@@ -126,10 +126,12 @@ class AppState extends ChangeNotifier {
   /// 把整个数据目录搬到 [targetPath]（null / 空 = 回到默认位置）。
   ///
   /// 顺序很讲究：
-  ///   1. 先 checkpoint 让 -wal 合并进主库，再把库和 media 拷过去；
+  ///   1. 先 checkpoint 让 -wal 合并进主库，再把库和 media 搬过去；
   ///   2. 指针文件先写好，再换连接 —— 这样中途崩了下次启动也找得到新位置；
   ///   3. 就地把 AppDatabase 的 rootDir 换掉并重开，不重建对象。
-  /// 没有删原目录：搬完之后用户自己决定删不删，我们不做不可逆的事。
+  ///
+  /// **搬到新位置之后源位置的数据就删掉了**（见 [migrateDataRoot]）：
+  /// 数据只有一份，用户不会在两处看到内容不同的同一个库。
   Future<MoveDataResult> moveDataLocation(
     String? targetPath, {
     void Function(double progress)? onProgress,
@@ -137,7 +139,7 @@ class AppState extends ChangeNotifier {
     final from = db.rootDir.path;
     final target = (targetPath == null || targetPath.trim().isEmpty)
         ? await defaultAppRoot()
-        : targetPath.trim();
+        : dataDirIn(targetPath.trim());
     if (p.equals(p.normalize(from), p.normalize(target))) {
       // 已经在目标位置：只保证指针状态正确
       if (targetPath == null || targetPath.trim().isEmpty) {
@@ -149,6 +151,10 @@ class AppState extends ChangeNotifier {
     // 别把数据搬进自己里面（选目标时手滑点了当前目录的子目录）
     if (p.isWithin(p.normalize(from), p.normalize(target))) {
       throw StateError('不能把数据目录搬到它自己的子目录里');
+    }
+    // 反过来也不行：源是目标的子目录时，拷完再删会把自己删掉
+    if (p.isWithin(p.normalize(target), p.normalize(from))) {
+      throw StateError('不能把数据目录搬到它自己的上层目录里');
     }
 
     db.checkpoint();
@@ -727,6 +733,55 @@ class AppState extends ChangeNotifier {
     } else {
       repo.setSetting('theme.seed', '${seed.toARGB32()}');
     }
+    notifyListeners();
+  }
+
+  /// 一键回到出厂主题：去掉强调色与自定义背景。
+  ///
+  /// 只清这三项，不动明暗模式 —— 用户调成深色是他要的，不该跟着一起被重置。
+  void resetTheme() {
+    repo.setSetting('theme.seed', '');
+    repo.setSetting('theme.bgPath', '');
+    repo.setSetting('theme.bgOpacity', '');
+    repo.setSetting('theme.bgBlur', '');
+    notifyListeners();
+  }
+
+  /// 界面背景图（本地绝对路径）；null = 纯色背景。
+  String? get themeBackgroundPath {
+    final raw = repo.getSetting('theme.bgPath') ?? '';
+    if (raw.isEmpty) return null;
+    // 图被用户删了就当没设过，否则每帧都在 File 上失败一次
+    if (!File(raw).existsSync()) return null;
+    return raw;
+  }
+
+  void setThemeBackgroundPath(String? path) {
+    repo.setSetting('theme.bgPath', (path ?? '').trim());
+    notifyListeners();
+  }
+
+  /// 背景图的浓度：0 = 完全看不见，1 = 原图不透明。
+  ///
+  /// 默认给 0.5 —— 满浓度铺在文字底下基本没法读，而太淡又看不出有图。
+  double get themeBackgroundOpacity {
+    final raw = double.tryParse(repo.getSetting('theme.bgOpacity') ?? '');
+    return (raw ?? 0.5).clamp(0.0, 1.0);
+  }
+
+  void setThemeBackgroundOpacity(double v) {
+    repo.setSetting('theme.bgOpacity', v.clamp(0.0, 1.0).toStringAsFixed(2));
+    notifyListeners();
+  }
+
+  /// 背景图的模糊半径（逻辑像素）：调大一点，图就不跟正文抢注意力。
+  double get themeBackgroundBlur {
+    final raw = double.tryParse(repo.getSetting('theme.bgBlur') ?? '');
+    return (raw ?? 0.0).clamp(0.0, 40.0);
+  }
+
+  void setThemeBackgroundBlur(double v) {
+    repo.setSetting('theme.bgBlur', v.clamp(0.0, 40.0).toStringAsFixed(1));
     notifyListeners();
   }
 

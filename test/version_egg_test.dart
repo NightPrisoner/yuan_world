@@ -57,6 +57,14 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    // 设置页变长之后「关于」默认在视口外，不滚到底版本行就没被构建，
+    // ensureVisible/find.text 都会假红。
+    await tester.scrollUntilVisible(
+      find.text('版本'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
   }
 
   /// 点一下版本号那一行。

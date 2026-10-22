@@ -19,7 +19,12 @@ class AppInfo {
 
   static String _version = '';
 
-  /// 形如 `1.0.1+2`（有 build 号时带 `+`）。读不到时返回 [unknownVersion]。
+  /// 形如 `1.0.0`。读不到时返回 [unknownVersion]。
+  ///
+  /// **只显示三段式版本号，不拼 build 号**：`1.0.0+1` 里 `+` 右边是
+  /// Android 的 versionCode，它只用来让系统判断"这个包比装的新"，
+  /// 每发一次版就得加一。把它显示在「关于」里，看起来像另一个版本号，
+  /// 用户会以为应用有两个版本。它属于构建细节，不该出现在界面上。
   static String get version => _version.isEmpty ? unknownVersion : _version;
 
   /// 是否已经读到真实版本号。
@@ -32,8 +37,9 @@ class AppInfo {
   static Future<void> load() async {
     try {
       final info = await PackageInfo.fromPlatform();
-      final build = info.buildNumber;
-      _version = build.isEmpty ? info.version : '${info.version}+$build';
+      // buildNumber 是 versionCode，只给系统做"覆盖安装"判断用，
+      // 界面上不显示 —— 见 [version] 的说明。
+      _version = info.version.trim();
     } catch (_) {
       _version = '';
     }
