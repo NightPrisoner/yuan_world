@@ -21,6 +21,7 @@ import '../importer/import_page.dart';
 import '../privacy/privacy_page.dart';
 import '../tags/manage_tags_page.dart';
 import '../trash/trash_page.dart';
+import 'diagnostics_sheet.dart';
 import 'field_manager_page.dart';
 
 /// 快照目录（还没建就建出来，用户点"打开"时才不会是空路径）。
@@ -700,6 +701,22 @@ class SettingsPage extends StatelessWidget {
                   height: 1.6,
                 ),
               ),
+            ),
+
+            // ── 帮助与诊断 ─────────────────────────────────────────────
+            // 开源出去的软件，用户反馈"崩了/怪怪的"时，光有一句描述没法查。
+            // 这里让用户一键复制一段能直接贴进 issue 的诊断信息。
+            _SectionHeader('帮助与诊断'),
+            _Group(
+              children: [
+                _ActionRow(
+                  icon: Icons.bug_report_rounded,
+                  iconColor: c.palette[3],
+                  label: '导出诊断信息…',
+                  subtitle: '版本、系统、库大小和最近的错误记录，复制后贴到反馈里',
+                  onTap: () => showDiagnosticsSheet(context),
+                ),
+              ],
             ),
 
             // ── 关于 ───────────────────────────────────────────────────

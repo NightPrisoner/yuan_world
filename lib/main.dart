@@ -13,6 +13,7 @@ import 'app_state.dart';
 import 'core/app_info.dart';
 import 'core/app_localization.dart';
 import 'core/app_paths.dart';
+import 'core/diagnostics/crash_log.dart';
 import 'core/media/poster_maker.dart';
 import 'core/platform/window_mode.dart';
 import 'core/theme/app_theme.dart';
@@ -37,6 +38,9 @@ Future<void> main() async {
   }
 
   final db = AppDatabase.openAt(await resolveAppRoot());
+  // 崩溃日志：接管 Flutter 框架错误与引擎侧异步错误，写进 data/logs/。
+  // 必须在 runApp 之前装好，否则启动阶段的崩溃一条也抓不到。
+  CrashLog.install(db.rootDir);
   final repo = NoteRepository(db);
   final importer = ImportService(db, repo);
   final state = AppState(db, repo, importer);
