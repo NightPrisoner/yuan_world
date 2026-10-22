@@ -105,6 +105,11 @@ class _RefreshRingState extends State<_RefreshRing>
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    // 转圈是"还在忙"的唯一提示，减弱动态效果时也不能真的停 —— 停住就
+    // 变成一个静止的弧，看着像卡死。这里保留 rotation，只把速度放慢一档。
+    final spin = AppMotion.reduceMotion(context)
+        ? _spin.value * 0.35
+        : _spin.value;
     return SizedBox(
       width: 26,
       height: 26,
@@ -113,7 +118,7 @@ class _RefreshRingState extends State<_RefreshRing>
         builder: (context, _) => CustomPaint(
           painter: _RingPainter(
             progress: widget.progress,
-            spin: _spin.value,
+            spin: spin,
             color: c.tint,
             track: c.fill,
             spinning: widget.spinning,

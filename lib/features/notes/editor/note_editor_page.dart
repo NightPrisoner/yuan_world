@@ -1647,10 +1647,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       0.0,
       _scroll.position.maxScrollExtent,
     );
+    // 时长与曲线都用动效体系里那一套：这里是"点目录跳过去"的定位滚动，
+    // 属于常规过渡，跟全应用步调一致（也才会跟着「减弱动态效果」变成瞬移）。
     await _scroll.animateTo(
       target,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
+      duration: AppMotion.respecting(context, AppMotion.normal),
+      curve: AppMotion.enter,
     );
   }
 
@@ -1684,7 +1686,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         ? ('编辑中…', c.tertiaryLabel, false)
         : ('已自动保存', c.tertiaryLabel, false);
     final text = AnimatedSwitcher(
-      duration: AppMotion.fast,
+      duration: AppMotion.respecting(context, AppMotion.fast),
       child: Text(
         label,
         key: ValueKey<String>(label),

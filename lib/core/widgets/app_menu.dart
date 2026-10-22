@@ -8,12 +8,10 @@
 ///     下拉菜单在窄屏上还容易被裁掉。
 library;
 
-import 'dart:io';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../motion/app_motion.dart';
+import '../platform/window_mode.dart';
 import '../theme/app_theme.dart';
 
 /// 菜单的定位信息。
@@ -71,8 +69,11 @@ bool prefersAnchoredMenu(BuildContext context) {
 ///
 /// 桌面和手机在交互上要分两套：菜单弹出位置、拖拽的起手方式都不一样。
 /// 手机用长按起拖（直接拖会跟滚动打架），桌面用直接拖。
-bool isDesktopPlatform() =>
-    !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+///
+/// 判定只有一份真实实现（[isDesktopWindow]，在 `core/platform/window_mode.dart`），
+/// 这里留一个同义名给调用方用 —— 以前两处各写了一遍同样的表达式，
+/// 后来加平台时必然漏改一处。
+bool isDesktopPlatform() => isDesktopWindow;
 
 /// 上一次弹出菜单的位置。
 ///

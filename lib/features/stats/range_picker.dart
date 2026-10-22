@@ -196,7 +196,7 @@ class _RangePickerDialogState extends State<_RangePickerDialog> {
           }),
           scale: 0.98,
           child: AnimatedContainer(
-            duration: AppMotion.fast,
+            duration: AppMotion.respecting(context, AppMotion.fast),
             padding: const EdgeInsets.symmetric(vertical: 7),
             decoration: BoxDecoration(
               color: on ? c.tint.withValues(alpha: 0.14) : null,

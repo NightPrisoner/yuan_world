@@ -95,7 +95,7 @@ class HourlyChart extends StatelessWidget {
               ),
           ],
         ),
-        duration: AppMotion.normal,
+        duration: AppMotion.respecting(context, AppMotion.normal),
       ),
     );
   }
@@ -140,7 +140,7 @@ class WeekdayChart extends StatelessWidget {
                         begin: 0,
                         end: maxV == 0 ? 0 : days[i] / maxV,
                       ),
-                      duration: AppMotion.normal,
+                      duration: AppMotion.respecting(context, AppMotion.normal),
                       curve: AppMotion.enter,
                       builder: (context, v, _) => LinearProgressIndicator(
                         value: v,
@@ -312,7 +312,7 @@ class LengthHistogram extends StatelessWidget {
               ),
           ],
         ),
-        duration: AppMotion.normal,
+        duration: AppMotion.respecting(context, AppMotion.normal),
       ),
     );
   }

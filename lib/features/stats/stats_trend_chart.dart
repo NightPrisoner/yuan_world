@@ -339,7 +339,7 @@ class TrendChart extends StatelessWidget {
               ),
           ],
         ),
-        duration: AppMotion.normal,
+        duration: AppMotion.respecting(context, AppMotion.normal),
       );
 
       if (!_multi) return chart;
@@ -449,7 +449,7 @@ class TrendChart extends StatelessWidget {
                     ),
                 ],
               ),
-              duration: AppMotion.normal,
+              duration: AppMotion.respecting(context, AppMotion.normal),
             ),
           ),
           const SizedBox(height: 10),
@@ -540,7 +540,7 @@ class TrendChart extends StatelessWidget {
           ),
         ],
       ),
-      duration: AppMotion.normal,
+      duration: AppMotion.respecting(context, AppMotion.normal),
     );
   }
 

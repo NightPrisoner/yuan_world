@@ -43,7 +43,7 @@ class ShareChart extends StatelessWidget {
                           begin: 0,
                           end: maxV == 0 ? 0 : it.value / maxV,
                         ),
-                        duration: AppMotion.normal,
+                        duration: AppMotion.respecting(context, AppMotion.normal),
                         curve: AppMotion.enter,
                         builder: (context, v, _) => LinearProgressIndicator(
                           value: v,

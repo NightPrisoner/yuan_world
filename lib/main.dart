@@ -13,6 +13,7 @@ import 'app_state.dart';
 import 'core/app_localization.dart';
 import 'core/app_paths.dart';
 import 'core/media/poster_maker.dart';
+import 'core/platform/window_mode.dart';
 import 'core/theme/app_theme.dart';
 import 'data/db/app_database.dart';
 import 'data/importer/import_service.dart';
@@ -25,7 +26,7 @@ Future<void> main() async {
   // media_kit 必须在用任何播放器之前初始化，否则一开视频就崩
   MediaKit.ensureInitialized();
 
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  if (isDesktopWindow) {
     await _setupDesktopWindow();
   }
 

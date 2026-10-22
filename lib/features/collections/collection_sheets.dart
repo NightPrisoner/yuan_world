@@ -413,7 +413,7 @@ class _CollectionEditorState extends State<_CollectionEditor> {
                             )
                         : null,
                     child: AnimatedOpacity(
-                      duration: AppMotion.fast,
+                      duration: AppMotion.respecting(context, AppMotion.fast),
                       opacity: canSave ? 1 : 0.4,
                       child: Container(
                         height: 44,
@@ -459,7 +459,7 @@ class _ColorDot extends StatelessWidget {
       onTap: onTap,
       scale: 0.88,
       child: AnimatedContainer(
-        duration: AppMotion.fast,
+        duration: AppMotion.respecting(context, AppMotion.fast),
         curve: AppMotion.enter,
         width: 32,
         height: 32,

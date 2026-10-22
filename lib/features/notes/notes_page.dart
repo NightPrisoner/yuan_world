@@ -772,7 +772,7 @@ class _NotesPageState extends State<NotesPage> {
           top: 10,
           child: IgnorePointer(
             child: AnimatedContainer(
-              duration: AppMotion.fast,
+              duration: AppMotion.respecting(context, AppMotion.fast),
               width: 22,
               height: 22,
               decoration: BoxDecoration(
@@ -1023,7 +1023,7 @@ class _Pill extends StatelessWidget {
       onLongPress: onLongPress,
       scale: 0.95,
       child: AnimatedContainer(
-        duration: AppMotion.fast,
+        duration: AppMotion.respecting(context, AppMotion.fast),
         curve: AppMotion.enter,
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
         decoration: BoxDecoration(

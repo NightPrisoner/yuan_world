@@ -237,7 +237,7 @@ class _ChoiceRow<T> extends StatelessWidget {
                 scale: 0.94,
                 haptic: false,
                 child: AnimatedContainer(
-                  duration: AppMotion.fast,
+                  duration: AppMotion.respecting(context, AppMotion.fast),
                   curve: AppMotion.enter,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
@@ -902,7 +902,7 @@ class _VersionRowState extends State<_VersionRow> {
       onTap: _tap,
       child: AnimatedScale(
         scale: _scale,
-        duration: AppMotion.instant,
+        duration: AppMotion.respecting(context, AppMotion.instant),
         child: Row(
           children: [
             Text('版本', style: AppText.body.copyWith(color: c.label)),
@@ -1167,7 +1167,7 @@ class _ThemeRow extends StatelessWidget {
                   child: GestureDetector(
                     onTap: () => state.setThemeMode(mode),
                     child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
+                      duration: AppMotion.respecting(context, AppMotion.fast),
                       padding: const EdgeInsets.symmetric(vertical: 9),
                       decoration: BoxDecoration(
                         color: state.themeMode == mode ? c.tint : c.fill,

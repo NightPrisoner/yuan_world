@@ -350,11 +350,16 @@ class _ImportPageState extends State<ImportPage> {
                 color: _dragging ? c.tint : c.tertiaryLabel,
               ),
               const SizedBox(width: 6),
-              Text(
-                _dragging ? '松开即可导入' : '也可以直接把文件或文件夹拖到页面任意位置',
-                style: AppText.footnote.copyWith(
-                  color: _dragging ? c.tint : c.tertiaryLabel,
-                  fontWeight: _dragging ? FontWeight.w600 : null,
+              // 窄屏（320 逻辑像素）下这句提示会顶出 1px，必须允许它折行：
+              // 图标是定宽的，文字拿 Flexible 才能被压进剩余宽度。
+              Flexible(
+                child: Text(
+                  _dragging ? '松开即可导入' : '也可以直接把文件或文件夹拖到页面任意位置',
+                  textAlign: TextAlign.center,
+                  style: AppText.footnote.copyWith(
+                    color: _dragging ? c.tint : c.tertiaryLabel,
+                    fontWeight: _dragging ? FontWeight.w600 : null,
+                  ),
                 ),
               ),
             ],
@@ -528,7 +533,7 @@ class _ImportPageState extends State<ImportPage> {
             borderRadius: BorderRadius.circular(4),
             child: TweenAnimationBuilder<double>(
               tween: Tween<double>(begin: 0, end: ratio),
-              duration: AppMotion.fast,
+              duration: AppMotion.respecting(context, AppMotion.fast),
               curve: AppMotion.enter,
               builder: (context, v, _) => LinearProgressIndicator(
                 value: v,

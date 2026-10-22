@@ -166,7 +166,7 @@ class _PaneResizerState extends State<_PaneResizer> {
           width: 8,
           child: Align(
             child: AnimatedContainer(
-              duration: AppMotion.instant,
+              duration: AppMotion.respecting(context, AppMotion.instant),
               width: active ? 2 : 0.5,
               height: double.infinity,
               color: active ? c.tint : c.separator,
@@ -342,7 +342,7 @@ class _DropZoneState extends State<_DropZone> {
         return Stack(
           children: [
             AnimatedContainer(
-              duration: AppMotion.instant,
+              duration: AppMotion.respecting(context, AppMotion.instant),
               // **不要在这里加 margin**。
               //
               // _NavRow 自己已经有 vertical: 1 的 margin。这里再来一份的话，
@@ -595,7 +595,7 @@ class _NavRowState extends State<_NavRow> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: AnimatedContainer(
-          duration: AppMotion.fast,
+          duration: AppMotion.respecting(context, AppMotion.fast),
           curve: AppMotion.enter,
           margin: const EdgeInsets.symmetric(vertical: 1),
           padding: EdgeInsets.only(
@@ -619,7 +619,7 @@ class _NavRowState extends State<_NavRow> {
           // 这里只动颜色不动几何 —— 文字跟着缩放会重新栅格化。
           child: TweenAnimationBuilder<double>(
             tween: Tween<double>(end: widget.selected ? 1 : 0),
-            duration: AppMotion.fast,
+            duration: AppMotion.respecting(context, AppMotion.fast),
             curve: AppMotion.enter,
             builder: (context, t, child) => Row(
               children: [
@@ -638,7 +638,7 @@ class _NavRowState extends State<_NavRow> {
                 // 就放在这里（选中后轻轻弹到 1，走 pop 曲线）
                 AnimatedScale(
                   scale: widget.selected ? 1 : 0.9,
-                  duration: AppMotion.fast,
+                  duration: AppMotion.respecting(context, AppMotion.fast),
                   curve: AppMotion.pop,
                   child: RotationTransition(
                     turns: widget.iconTurns ?? const AlwaysStoppedAnimation(0),
@@ -851,7 +851,7 @@ class _NoteGridCardState extends State<_NoteGridCard> {
           onSecondaryTap: (pos) => widget.onActions(AppMenuAnchor.at(pos)),
           scale: 0.98,
           child: AnimatedContainer(
-            duration: AppMotion.fast,
+            duration: AppMotion.respecting(context, AppMotion.fast),
             curve: AppMotion.enter,
             decoration: BoxDecoration(
               color: c.secondaryBackground,
@@ -907,7 +907,7 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                           // 像镜头轻轻推近，是"活气"最省力的一招
                           child: AnimatedScale(
                             scale: _hover ? 1.04 : 1.0,
-                            duration: AppMotion.normal,
+                            duration: AppMotion.respecting(context, AppMotion.normal),
                             curve: AppMotion.enter,
                             child: LocalImage(
                               path: p.join(

@@ -14,12 +14,11 @@
 ///    —— 交互反馈 120~200ms，页面转场 350~400ms，超过 500ms 就会觉得拖沓。
 library;
 
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 
+import '../platform/window_mode.dart';
 import '../theme/app_theme.dart';
 
 class AppMotion {
@@ -190,9 +189,11 @@ class HoverLift extends StatefulWidget {
 class _HoverLiftState extends State<HoverLift> {
   bool _hover = false;
 
-  /// 桌面端才做悬停动效（用 dart:io 判断，这个应用不出 Web 端）。
-  static final bool _hasMouse =
-      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  /// 桌面端才做悬停动效。
+  ///
+  /// 触屏上"悬停"没有意义（手指一按就是按下），所以这条判断同时承担了
+  /// 一处双端区分：桌面端有 HoverLift 的轻微上浮，手机端完全不参与。
+  static final bool _hasMouse = isDesktopWindow;
 
   bool get _active => widget.enabled && _hasMouse;
 

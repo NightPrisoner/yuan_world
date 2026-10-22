@@ -137,11 +137,15 @@ class _FieldLineState extends State<FieldLine> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      line,
-                      style: AppText.footnote.copyWith(
-                        color: c.secondaryLabel,
-                        height: 1.6,
+                    // 必须能折行：参数值跟着字号缩放走，窄屏 + 大字号时
+                    // 一整行晒不下就会撑出屏幕（RenderFlex overflow）。
+                    Flexible(
+                      child: Text(
+                        line,
+                        style: AppText.footnote.copyWith(
+                          color: c.secondaryLabel,
+                          height: 1.6,
+                        ),
                       ),
                     ),
                     if (widget.editable) ...[

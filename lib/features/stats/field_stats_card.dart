@@ -123,7 +123,7 @@ class _FieldStatsCardState extends State<FieldStatsCard> {
                   onTap: () => _select(def.id),
                   scale: 0.95,
                   child: AnimatedContainer(
-                    duration: AppMotion.fast,
+                    duration: AppMotion.respecting(context, AppMotion.fast),
                     curve: AppMotion.enter,
                     margin: const EdgeInsets.only(right: 7),
                     padding: const EdgeInsets.symmetric(

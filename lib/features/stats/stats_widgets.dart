@@ -258,7 +258,7 @@ class _RankRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(3),
                     child: TweenAnimationBuilder<double>(
                       tween: Tween<double>(begin: 0, end: ratio),
-                      duration: AppMotion.normal,
+                      duration: AppMotion.respecting(context, AppMotion.normal),
                       curve: AppMotion.enter,
                       builder: (context, v, _) => LinearProgressIndicator(
                         value: v,
@@ -592,7 +592,7 @@ class _FilterButtonState extends State<_FilterButton> {
         onTap: widget.onTap,
         scale: 0.97,
         child: AnimatedContainer(
-          duration: AppMotion.fast,
+          duration: AppMotion.respecting(context, AppMotion.fast),
           padding: const EdgeInsets.fromLTRB(11, 6, 8, 6),
           decoration: BoxDecoration(
             color: _hover
@@ -671,7 +671,7 @@ class _Segmented<T> extends StatelessWidget {
               scale: 0.95,
               haptic: false,
               child: AnimatedContainer(
-                duration: AppMotion.fast,
+                duration: AppMotion.respecting(context, AppMotion.fast),
                 curve: AppMotion.enter,
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                 decoration: BoxDecoration(

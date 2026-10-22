@@ -205,7 +205,7 @@ extension _StatsCards on _StatsPageState {
                             begin: 0,
                             end: maxNotes == 0 ? 0 : it.notes / maxNotes,
                           ),
-                          duration: AppMotion.normal,
+                          duration: AppMotion.respecting(context, AppMotion.normal),
                           curve: AppMotion.enter,
                           builder: (context, v, _) => LinearProgressIndicator(
                             value: v,
@@ -753,7 +753,7 @@ extension _StatsCards on _StatsPageState {
                 borderRadius: BorderRadius.circular(4),
                 child: TweenAnimationBuilder<double>(
                   tween: Tween<double>(begin: 0, end: s.density),
-                  duration: AppMotion.sheet,
+                  duration: AppMotion.respecting(context, AppMotion.sheet),
                   curve: AppMotion.enter,
                   builder: (context, v, _) => LinearProgressIndicator(
                     value: v,

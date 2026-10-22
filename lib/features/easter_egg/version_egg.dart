@@ -144,7 +144,7 @@ class _VersionEggPageState extends State<VersionEggPage> {
                     behavior: HitTestBehavior.opaque,
                     child: Center(
                       child: AnimatedSwitcher(
-                        duration: AppMotion.normal,
+                        duration: AppMotion.respecting(context, AppMotion.normal),
                         child: Image.asset(
                           asset,
                           // key 带上资源名：换了图 AnimatedSwitcher 才知道要做过渡
