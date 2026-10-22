@@ -26,11 +26,20 @@ class AppBackground extends StatelessWidget {
     super.key,
     required this.path,
     required this.blur,
+    this.scale = 1.0,
+    this.focus = const Offset(0.5, 0.5),
     required this.child,
   });
 
   final String? path;
   final double blur;
+
+  /// 放大倍数，1 = 铺满（等比裁切），越大越往里看。
+  final double scale;
+
+  /// 对焦点，0~1 归一化坐标。放大时以这里为中心。
+  final Offset focus;
+
   final Widget child;
 
   /// 浓度到页面底色保留量的换算：用户把浓度拉满时，底色只剩这么多。
@@ -68,10 +77,23 @@ class AppBackground extends StatelessWidget {
         policy: ResizeImagePolicy.fit,
       ),
       fit: BoxFit.cover,
+      // 放大时用对焦点对齐：Alignment(x*2-1, y*2-1) 把归一化坐标映射到
+      // Alignment 的 -1~1 区间，缩放的锚点就落在用户指定的位置。
+      alignment: Alignment(focus.dx * 2 - 1, focus.dy * 2 - 1),
       // 图挂了就什么都不画，露出下面的纯色底
       errorBuilder: (_, _, _) => const SizedBox.shrink(),
       gaplessPlayback: true,
     );
+
+    if (scale > 1.001) {
+      // 放大要配合对焦点：Transform.scale 默认以中心为锚，那用户点了图的
+      // 右下角也会被拉回中间。这里把锚点跟着 focus 走。
+      image = Transform.scale(
+        scale: scale,
+        alignment: Alignment(focus.dx * 2 - 1, focus.dy * 2 - 1),
+        child: image,
+      );
+    }
 
     if (blur > 0.5) {
       // 模糊时把图放大一点点，否则边缘会被 blur 啃出一圈透明
@@ -104,9 +126,16 @@ class AppChrome extends StatelessWidget {
   Widget build(BuildContext context) {
     // 用 select 而不是 watch：AppState 在刷新笔记列表时会频繁 notify，
     // 这里只关心"背景图变没变"，跟着一起重建整棵树就白瞎了。
-    final settings = context.select<AppState, (String?, double, double)>(
-      (s) => (s.themeBackgroundPath, s.themeBackgroundOpacity, s.themeBackgroundBlur),
-    );
+    final settings = context
+        .select<AppState, (String?, double, double, double, Offset)>(
+          (s) => (
+            s.themeBackgroundPath,
+            s.themeBackgroundOpacity,
+            s.themeBackgroundBlur,
+            s.themeBackgroundScale,
+            s.themeBackgroundFocus,
+          ),
+        );
     final path = settings.$1;
     // 浓度拉到 0 就是"不要这张图"，连半透明底也一起收掉
     if (path == null || settings.$2 <= 0.001) return child;
@@ -123,6 +152,8 @@ class AppChrome extends StatelessWidget {
       child: AppBackground(
         path: path,
         blur: settings.$3,
+        scale: settings.$4,
+        focus: settings.$5,
         child: child,
       ),
     );

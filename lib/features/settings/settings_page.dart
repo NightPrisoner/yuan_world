@@ -1787,53 +1787,85 @@ class ThemeBackgroundPicker extends StatelessWidget {
         Pressable(
           scale: 0.985,
           onTap: () => _pick(context),
-          child: Container(
-            height: 64,
-            decoration: BoxDecoration(
-              color: c.fill,
-              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-              image: has
-                  ? DecorationImage(
-                      image: ResizeImage(FileImage(File(path)),
-                          width: 480, policy: ResizeImagePolicy.fit),
-                      fit: BoxFit.cover,
-                      // 缩略图忠实反映实际观感：真正压住照片的是页面底色，
-                      // 浓度越高压得越少。以前这里固定 0x66000000，预览
-                      // 永远比界面暗一截，等于给用户看了个假效果。
-                      colorFilter: ColorFilter.mode(
-                        c.groupedBackground.withValues(
-                          alpha:
-                              AppBackground.keepFor(state.themeBackgroundOpacity),
-                        ),
-                        BlendMode.srcOver,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+            child: SizedBox(
+              height: 72,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  ColoredBox(color: c.fill),
+                  if (has)
+                    // 预览按真实的大小/位置画，用户拖完滑杆就能看到效果，
+                    // 不用切出去看整页。缩放锚点与界面用的是同一套
+                    // Alignment 映射，所以所见即所得。
+                    Transform.scale(
+                      scale: state.themeBackgroundScale,
+                      alignment: Alignment(
+                        state.themeBackgroundFocus.dx * 2 - 1,
+                        state.themeBackgroundFocus.dy * 2 - 1,
                       ),
-                    )
-                  : null,
-            ),
-            alignment: Alignment.center,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Icon(
-                  has ? Icons.image_rounded : Icons.add_photo_alternate_rounded,
-                  size: 16,
-                  // 用 label 而不是写死白色：遮罩是主题底色，浅色主题下
-                  // 底子是亮的，白字会直接糊掉。
-                  color: has ? c.label : c.secondaryLabel,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  has ? '换一张图' : '选一张图',
-                  style: AppText.footnote.copyWith(
-                    color: has ? c.label : c.secondaryLabel,
+                      child: Image(
+                        image: ResizeImage(
+                          FileImage(File(path)),
+                          width: 480,
+                          policy: ResizeImagePolicy.fit,
+                        ),
+                        fit: BoxFit.cover,
+                        alignment: Alignment(
+                          state.themeBackgroundFocus.dx * 2 - 1,
+                          state.themeBackgroundFocus.dy * 2 - 1,
+                        ),
+                      ),
+                    ),
+                  if (has)
+                    // 缩略图忠实反映实际观感：真正压住照片的是页面底色，
+                    // 浓度越高压得越少。以前这里固定 0x66000000，预览
+                    // 永远比界面暗一截，等于给用户看了个假效果。
+                    ColoredBox(
+                      color: c.groupedBackground.withValues(
+                        alpha: AppBackground.keepFor(
+                          state.themeBackgroundOpacity,
+                        ),
+                      ),
+                    ),
+                  Center(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Icon(
+                          has
+                              ? Icons.image_rounded
+                              : Icons.add_photo_alternate_rounded,
+                          size: 16,
+                          // 用 label 而不是写死白色：遮罩是主题底色，浅色
+                          // 主题下底子是亮的，白字会直接糊掉。
+                          color: has ? c.label : c.secondaryLabel,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          has ? '换一张图' : '选一张图',
+                          style: AppText.footnote.copyWith(
+                            color: has ? c.label : c.secondaryLabel,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
         if (has) ...[
           const SizedBox(height: 12),
+          _SliderRow(
+            label: '大小',
+            value: (state.themeBackgroundScale - 1) / 3,
+            display: '${state.themeBackgroundScale.toStringAsFixed(1)}×',
+            onChanged: (v) => state.setThemeBackgroundScale(1 + v * 3),
+          ),
+          const SizedBox(height: 6),
           _SliderRow(
             label: '浓度',
             value: state.themeBackgroundOpacity,
@@ -1847,6 +1879,8 @@ class ThemeBackgroundPicker extends StatelessWidget {
             display: '${state.themeBackgroundBlur.round()}',
             onChanged: (v) => state.setThemeBackgroundBlur(v * 40),
           ),
+          const SizedBox(height: 8),
+          _FocusPad(state: state),
           const SizedBox(height: 6),
           Text(
             // 说清楚代价，别让用户以为"背景图不花钱"
@@ -1856,6 +1890,79 @@ class ThemeBackgroundPicker extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// 一个可拖动的小方块：拖到哪，背景图就以哪为中心放大。
+///
+/// 为什么不是两个滑杆（横向/纵向）—— 用户脑子里的模型是「我要看这张图的
+/// 右下角」，那是二维的，用两个一维滑杆表达等于让人自己脑内合成坐标。
+class _FocusPad extends StatelessWidget {
+  const _FocusPad({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final focus = state.themeBackgroundFocus;
+
+    void moveTo(Offset local, Size size) {
+      if (size.width <= 0 || size.height <= 0) return;
+      state.setThemeBackgroundFocus(
+        Offset(
+          (local.dx / size.width).clamp(0.0, 1.0),
+          (local.dy / size.height).clamp(0.0, 1.0),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, box) {
+        const height = 44.0;
+        final width = box.maxWidth;
+        final size = Size(width, height);
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (d) => moveTo(d.localPosition, size),
+          onPanUpdate: (d) => moveTo(d.localPosition, size),
+          child: Container(
+            height: height,
+            decoration: BoxDecoration(
+              color: c.fill,
+              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+            ),
+            child: Stack(
+              children: <Widget>[
+                Center(
+                  child: Text(
+                    '拖动，让图对准你想要的那一块',
+                    style: AppText.caption2.copyWith(color: c.tertiaryLabel),
+                  ),
+                ),
+                Positioned(
+                  // 十字标记要能被拖到四条边上，所以把圆心夹在控件之内，
+                  // 而不是让它拖到一半就被裁掉。
+                  left: (focus.dx * width - 11).clamp(0.0, width - 22),
+                  top: (focus.dy * height - 11).clamp(0.0, height - 22),
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: c.tint.withValues(alpha: 0.22),
+                        border: Border.all(color: c.tint, width: 1.5),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

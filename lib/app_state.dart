@@ -752,12 +752,14 @@ class AppState extends ChangeNotifier {
 
   /// 一键回到出厂主题：去掉强调色与自定义背景。
   ///
-  /// 只清这三项，不动明暗模式 —— 用户调成深色是他要的，不该跟着一起被重置。
+  /// 只清这几项，不动明暗模式 —— 用户调成深色是他要的，不该跟着一起被重置。
   void resetTheme() {
     repo.setSetting('theme.seed', '');
     repo.setSetting('theme.bgPath', '');
     repo.setSetting('theme.bgOpacity', '');
     repo.setSetting('theme.bgBlur', '');
+    repo.setSetting('theme.bgScale', '');
+    repo.setSetting('theme.bgFocus', '');
     notifyListeners();
   }
 
@@ -796,6 +798,44 @@ class AppState extends ChangeNotifier {
 
   void setThemeBackgroundBlur(double v) {
     repo.setSetting('theme.bgBlur', v.clamp(0.0, 40.0).toStringAsFixed(1));
+    notifyListeners();
+  }
+
+  /// 背景图的缩放：1 = 铺满（等比裁切），大于 1 是放大后取其中一块。
+  ///
+  /// 下限 1 而不是更小 —— 小于 1 会露出底色，看起来像图没铺满，用户
+  /// 真正想要的是「把画面里那一块放大看」，那就只有 >= 1。
+  double get themeBackgroundScale {
+    final raw = double.tryParse(repo.getSetting('theme.bgScale') ?? '');
+    return (raw ?? 1.0).clamp(1.0, 4.0);
+  }
+
+  void setThemeBackgroundScale(double v) {
+    repo.setSetting('theme.bgScale', v.clamp(1.0, 4.0).toStringAsFixed(2));
+    notifyListeners();
+  }
+
+  /// 背景图的对焦点：0~1 归一化坐标，(0.5, 0.5) 是正中。
+  ///
+  /// 存归一化值而不是像素偏移：窗口一拉大、手机上横竖屏一换，像素偏移
+  /// 立刻失去意义，而「我要看图的右下角」这个意图不变。
+  Offset get themeBackgroundFocus {
+    final raw = repo.getSetting('theme.bgFocus') ?? '';
+    final parts = raw.split(',');
+    if (parts.length == 2) {
+      final x = double.tryParse(parts[0]);
+      final y = double.tryParse(parts[1]);
+      if (x != null && y != null) {
+        return Offset(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+      }
+    }
+    return const Offset(0.5, 0.5);
+  }
+
+  void setThemeBackgroundFocus(Offset v) {
+    final x = v.dx.clamp(0.0, 1.0).toStringAsFixed(3);
+    final y = v.dy.clamp(0.0, 1.0).toStringAsFixed(3);
+    repo.setSetting('theme.bgFocus', '$x,$y');
     notifyListeners();
   }
 

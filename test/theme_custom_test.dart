@@ -222,6 +222,95 @@ void main() {
     });
   });
 
+  group('背景图的大小与位置', () {
+    test('默认铺满、居中', () {
+      expect(state.themeBackgroundScale, 1.0);
+      expect(state.themeBackgroundFocus, const Offset(0.5, 0.5));
+    });
+
+    test('缩放夹在 1~4 —— 小于 1 会露底色，那不是在"调大小"', () {
+      state.setThemeBackgroundScale(9);
+      expect(state.themeBackgroundScale, 4.0);
+      state.setThemeBackgroundScale(0.2);
+      expect(state.themeBackgroundScale, 1.0);
+    });
+
+    test('对焦点夹在 0~1，重开还是同一个位置', () async {
+      state.setThemeBackgroundFocus(const Offset(1.4, -0.3));
+      expect(state.themeBackgroundFocus.dx, 1.0);
+      expect(state.themeBackgroundFocus.dy, 0.0);
+
+      state.setThemeBackgroundFocus(const Offset(0.25, 0.75));
+      state.setThemeBackgroundScale(2.5);
+      final again = AppState(db, repo, ImportService(db, repo));
+      await again.init();
+      expect(again.themeBackgroundFocus.dx, closeTo(0.25, 0.001));
+      expect(again.themeBackgroundFocus.dy, closeTo(0.75, 0.001));
+      expect(again.themeBackgroundScale, closeTo(2.5, 0.001));
+      again.dispose();
+    });
+
+    test('存的坏值不会炸，回落成铺满居中', () async {
+      repo.setSetting('theme.bgScale', 'abc');
+      repo.setSetting('theme.bgFocus', '0.3');
+      expect(state.themeBackgroundScale, 1.0);
+      expect(state.themeBackgroundFocus, const Offset(0.5, 0.5));
+    });
+
+    test('一键回默认也把大小和位置一起清掉', () {
+      state.setThemeBackgroundScale(3);
+      state.setThemeBackgroundFocus(const Offset(0.1, 0.9));
+      state.resetTheme();
+      expect(state.themeBackgroundScale, 1.0);
+      expect(state.themeBackgroundFocus, const Offset(0.5, 0.5));
+    });
+
+    testWidgets('放大时图片按对焦点对齐，不是傻傻地往中间缩',
+        (WidgetTester tester) async {
+      final file = File(p.join(root.path, 'bg3.png'))
+        ..writeAsBytesSync(<int>[1, 2, 3, 4]);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: AppBackground(
+            path: file.path,
+            blur: 0,
+            scale: 2,
+            focus: const Offset(0.8, 0.2),
+            child: const SizedBox.expand(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final image = tester.widget<Image>(find.byType(Image));
+      // Alignment 的 -1~1 与 0~1 的归一化坐标是线性对应
+      final imgAlign = image.alignment as Alignment;
+      expect(imgAlign.x, closeTo(0.6, 0.001));
+      expect(imgAlign.y, closeTo(-0.6, 0.001));
+
+      // 外面那层缩放也必须用同一个锚点，否则「点了右下角却被拉回中间」
+      final scale = tester.widget<Transform>(
+        find
+            .ancestor(
+              of: find.byType(Image),
+              matching: find.byType(Transform),
+            )
+            .first,
+      );
+      final scaleAlign = scale.alignment! as Alignment;
+      expect(scaleAlign.x, closeTo(0.6, 0.001));
+      expect(scaleAlign.y, closeTo(-0.6, 0.001));
+      expect(
+        find.ancestor(
+          of: find.byType(Image),
+          matching: find.byType(Opacity),
+        ),
+        findsNothing,
+      );
+    });
+  });
+
   group('一键回默认', () {
     test('强调色、背景图、浓度、模糊一起清掉', () {
       final img = File(p.join(root.path, 'bg.png'))
