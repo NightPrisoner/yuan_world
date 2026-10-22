@@ -17,7 +17,9 @@ import 'package:provider/provider.dart';
 import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/app_menu.dart';
 import '../../data/models.dart';
+import '../../data/repositories/note_repository.dart';
 
 class TrashPage extends StatefulWidget {
   const TrashPage({super.key, this.embedded = false});
@@ -243,11 +245,20 @@ class _TrashPageState extends State<TrashPage> {
               children: [
                 Text('回收站', style: AppText.title2.copyWith(color: c.label)),
                 const SizedBox(height: 3),
-                Text(
-                  total == 0
-                      ? '空'
-                      : '$total 项 · ${days > 0 ? '超过 $days 天自动清理' : '不自动清理'}',
-                  style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                GestureDetector(
+                  // 天数写在这一行里，点它就能改 —— 单独放一个"设置"入口
+                  // 反而让人找不到。0 天 = 永不自动清理。
+                  onTap: () => _pickRetentionDays(context, state),
+                  child: Text(
+                    total == 0
+                        ? '空'
+                        : '$total 项 · ${days > 0 ? '超过 $days 天自动清理' : '不自动清理'}',
+                    style: AppText.caption1.copyWith(
+                      color: c.tertiaryLabel,
+                      decoration: TextDecoration.underline,
+                      decorationColor: c.quaternaryLabel,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -266,6 +277,36 @@ class _TrashPageState extends State<TrashPage> {
         ],
       ),
     );
+  }
+
+  /// 选自动清理天数。0 = 永不清理。
+  Future<void> _pickRetentionDays(BuildContext context, AppState state) async {
+    const options = <int>[0, 7, 14, 30, 60, 90, 180];
+    final current = state.trashRetentionDays;
+    final picked = await showAppMenu<int>(
+      context,
+      header: '回收站保留多久',
+      anchor: AppMenuAnchor(context: context),
+      items: <AppMenuItem<int>>[
+        for (final d in options)
+          AppMenuItem(
+            value: d,
+            label: d == 0 ? '一直不删，手动清理' : '$d 天',
+            icon: d == current
+                ? Icons.check_circle_rounded
+                : Icons.circle_outlined,
+            color: d == current ? context.colors.tint : null,
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    state.setTrashRetentionDays(picked);
+    // 改成更短的保留期，当场就把超期的清掉 —— 否则用户以为立刻生效，
+    // 结果要等下次启动才清。改为 0（永不清理）时什么也不做。
+    if (picked > 0) {
+      state.repo.purgeTrashOlderThan(picked);
+      state.refreshTrash();
+    }
   }
 
   Widget _pill(AppColors c, String label, Color color, VoidCallback onTap) =>

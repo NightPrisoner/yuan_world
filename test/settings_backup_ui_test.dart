@@ -52,8 +52,8 @@ void main() {
 
   testWidgets('两个自动备份开关都在，默认都开着', (tester) async {
     await pumpSettings(tester);
-    expect(find.text('每天自动快照'), findsOneWidget);
-    expect(find.text('每周自动完整备份'), findsOneWidget);
+    expect(find.text('自动快照'), findsOneWidget);
+    expect(find.text('自动完整备份'), findsOneWidget);
     expect(state.backupAutoSnapshot, isTrue);
     expect(state.backupAutoFull, isTrue);
   });
@@ -92,7 +92,7 @@ void main() {
     await tester.tap(
       find.descendant(
         of: find.ancestor(
-          of: find.text('每周自动完整备份'),
+          of: find.text('自动完整备份'),
           matching: find.byType(Row),
         ),
         matching: find.byType(Switch),

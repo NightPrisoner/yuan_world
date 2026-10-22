@@ -20,6 +20,7 @@ import 'package:provider/provider.dart';
 import '../../app_state.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/repositories/note_repository.dart';
+import 'privacy_transition.dart';
 
 const String kPrivacyPasswordKey = 'privacy.password_hash';
 const String kPrivacyQuestionKey = 'privacy.question';
@@ -128,12 +129,18 @@ bool hasSecurityQuestion(AppState state) =>
 Future<bool> enterPrivacySpace(BuildContext context) async {
   final state = context.read<AppState>();
   if (!hasPrivacyPassword(state)) {
+    // 换数据那一帧用一把锁盖住：否则列表、标题、文集会在同一帧里全变，
+    // 看起来像界面抽了一下。
+    final done = showPrivacyTransition(context, entering: true);
     state.enterPrivacyMode();
+    await done;
     return true;
   }
   final ok = await verifyPassword(context);
-  if (!ok) return false;
+  if (!ok || !context.mounted) return false;
+  final done = showPrivacyTransition(context, entering: true);
   state.enterPrivacyMode();
+  await done;
   return true;
 }
 

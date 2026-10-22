@@ -10,7 +10,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
+import 'core/app_paths.dart';
 import 'data/backup/backup_service.dart';
 import 'data/db/app_database.dart';
 import 'data/importer/import_service.dart';
@@ -75,7 +77,7 @@ class AppState extends ChangeNotifier {
   DateTime? get lastMirrorErrorAt => _readTime('backup.lastMirrorErrorAt');
   String? get lastMirrorError => repo.getSetting('backup.lastMirrorError');
 
-  /// 自动快照的节奏与保留份数 —— 常量提出来，测试不用等一天。
+  /// 自动快照的节奏与保留份数 —— 默认值，可以在设置里改。
   static const Duration autoSnapshotEvery = Duration(hours: 24);
 
   /// 自动完整备份的节奏（一周一次）。几百兆，不能天天来。
@@ -84,8 +86,86 @@ class AppState extends ChangeNotifier {
   /// 运行期间多久回头看一次有没有到期。
   static const Duration autoBackupCheckEvery = Duration(minutes: 30);
 
+  /// 自动快照间隔（小时）。0 = 关掉日常快照，只能手动做。
+  ///
+  /// 之所以做成"几小时一次"而不是"每天几点"，是因为很多人不是每天都开机 ——
+  /// 定死一个时刻，错过那天就整周没备份。
+  int get snapshotEveryHours {
+    final raw = int.tryParse(repo.getSetting('backup.snapshotEveryH') ?? '');
+    if (raw == null) return autoSnapshotEvery.inHours;
+    return raw.clamp(0, 24 * 30);
+  }
+
+  void setSnapshotEveryHours(int hours) {
+    repo.setSetting('backup.snapshotEveryH', '${hours.clamp(0, 24 * 30)}');
+    notifyListeners();
+  }
+
+  /// 自动完整备份间隔（天）。
+  int get fullBackupEveryDays {
+    final raw = int.tryParse(repo.getSetting('backup.fullEveryD') ?? '');
+    if (raw == null) return autoFullEvery.inDays;
+    return raw.clamp(1, 365);
+  }
+
+  void setFullBackupEveryDays(int days) {
+    repo.setSetting('backup.fullEveryD', '${days.clamp(1, 365)}');
+    notifyListeners();
+  }
+
+  Duration get _snapshotEvery => Duration(hours: snapshotEveryHours);
+
+  Duration get _fullEvery => Duration(days: fullBackupEveryDays);
+
   DateTime? _readTime(String key) =>
       DateTime.tryParse(repo.getSetting(key) ?? '');
+
+  /// 当前数据目录是不是用户改过的（不是默认位置）。
+  bool get dataLocationIsCustom => configuredAppRoot() != null;
+
+  /// 把整个数据目录搬到 [targetPath]（null / 空 = 回到默认位置）。
+  ///
+  /// 顺序很讲究：
+  ///   1. 先 checkpoint 让 -wal 合并进主库，再把库和 media 拷过去；
+  ///   2. 指针文件先写好，再换连接 —— 这样中途崩了下次启动也找得到新位置；
+  ///   3. 就地把 AppDatabase 的 rootDir 换掉并重开，不重建对象。
+  /// 没有删原目录：搬完之后用户自己决定删不删，我们不做不可逆的事。
+  Future<MoveDataResult> moveDataLocation(
+    String? targetPath, {
+    void Function(double progress)? onProgress,
+  }) async {
+    final from = db.rootDir.path;
+    final target = (targetPath == null || targetPath.trim().isEmpty)
+        ? await defaultAppRoot()
+        : targetPath.trim();
+    if (p.equals(p.normalize(from), p.normalize(target))) {
+      // 已经在目标位置：只保证指针状态正确
+      if (targetPath == null || targetPath.trim().isEmpty) {
+        await forgetAppRoot();
+      }
+      return MoveDataResult(target: from, files: 0, bytes: 0);
+    }
+
+    // 别把数据搬进自己里面（选目标时手滑点了当前目录的子目录）
+    if (p.isWithin(p.normalize(from), p.normalize(target))) {
+      throw StateError('不能把数据目录搬到它自己的子目录里');
+    }
+
+    db.checkpoint();
+    final result = await migrateDataRoot(from, target, onProgress: onProgress);
+
+    if (targetPath == null || targetPath.trim().isEmpty) {
+      await forgetAppRoot();
+    } else {
+      await rememberAppRoot(target);
+    }
+
+    db.relocateTo(Directory(target));
+    // 换库后各种缓存都要重来：列表、文集、概览、待办、回收站
+    await init();
+    notifyListeners();
+    return result;
+  }
 
   DateTime? get lastSnapshotAt => _readTime('backup.lastSnapshotAt');
   DateTime? get lastSnapshotErrorAt => _readTime('backup.lastSnapshotErrorAt');
@@ -148,9 +228,11 @@ class AppState extends ChangeNotifier {
 
   void _runSnapshotIfDue() {
     if (!backupAutoSnapshot) return;
+    // 间隔设成 0 = 用户不想要自动快照，只手动做
+    if (snapshotEveryHours <= 0) return;
     try {
       final keep = backupKeep;
-      if (!backup.snapshotDue(keep: keep, every: autoSnapshotEvery)) return;
+      if (!backup.snapshotDue(keep: keep, every: _snapshotEvery)) return;
       final file = backup.snapshot(keep: keep);
       repo.setSetting(
         'backup.lastSnapshotAt',
@@ -166,7 +248,7 @@ class AppState extends ChangeNotifier {
   Future<void> _runFullBackupIfDue() async {
     if (!backupAutoFull) return;
     try {
-      if (!backup.fullBackupDue(every: autoFullEvery)) return;
+      if (!backup.fullBackupDue(every: _fullEvery)) return;
       final file = await backup.createFullBackup(keep: backupFullKeep);
       repo.setSetting(
         'backup.lastFullAt',
@@ -627,6 +709,24 @@ class AppState extends ChangeNotifier {
   void setThemeMode(ThemeMode m) {
     _themeMode = m;
     repo.setSetting('themeMode', m.name);
+    notifyListeners();
+  }
+
+  /// 自定义主题色（强调色种子的 ARGB）；null = 用系统蓝。
+  ///
+  /// 只存种子色，不存整套调色板 —— 明暗两套主题都由它现推出来，
+  /// 以后改派生规则时所有用户自动跟着更新。
+  Color? get themeSeed {
+    final raw = int.tryParse(repo.getSetting('theme.seed') ?? '');
+    return raw == null ? null : Color(raw);
+  }
+
+  void setThemeSeed(Color? seed) {
+    if (seed == null) {
+      repo.setSetting('theme.seed', '');
+    } else {
+      repo.setSetting('theme.seed', '${seed.toARGB32()}');
+    }
     notifyListeners();
   }
 

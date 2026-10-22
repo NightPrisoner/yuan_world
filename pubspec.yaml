@@ -20,8 +20,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 设置页「关于」里显示的版本不再手写，运行时由 package_info_plus 读这里
 # 生成的 versionName / build，所以改版本只改这一行。
 # 格式 `<name>+<build>`：Android 的 versionName / versionCode、Windows 的
-# 文件版本都从它派生；build 号必须跟着涨，否则安卓不认覆盖安装。
-version: 1.0.1+2
+# 文件版本都从它派生。发布前改这里就行：未发布期间一直是 1.0.0。
+version: 1.0.0+1
 
 environment:
   sdk: ^3.13.3

@@ -45,6 +45,7 @@ import '../notes/editor/note_editor_page.dart';
 import '../notes/note_detail_page.dart';
 import '../notes/widgets/note_actions.dart';
 import '../notes/widgets/note_card.dart' show formatRelative;
+import '../privacy/privacy_transition.dart';
 import '../settings/settings_page.dart';
 import '../stats/stats_page.dart';
 import '../tags/manage_tags_page.dart';

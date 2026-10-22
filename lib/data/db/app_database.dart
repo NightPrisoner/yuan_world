@@ -24,7 +24,10 @@ class AppDatabase {
   Database _db;
   Database get db => _db;
 
-  final Directory rootDir;
+  /// 数据根目录。**不是 final**：设置里可以把整个数据目录搬到别的盘，
+  /// 搬完要就地换掉，而不是重建 AppDatabase —— repo、importer、AppState
+  /// 里都存着这个对象的引用，换对象等于所有缓存全部失效。
+  Directory rootDir;
 
   /// 数据库文件路径。
   String get dbPath => p.join(rootDir.path, 'yuanworld.db');
@@ -102,6 +105,28 @@ class AppDatabase {
   ///
   /// 替换完必须调 [reopen]，否则后面所有查询都会打在已关闭的连接上。
   void closeForRestore() => close();
+
+  /// 把数据目录换到 [next]（文件已经拷过去了），重新打开连接。
+  ///
+  /// 换目录比换文件多一层坑：`-wal` / `-shm` 是跟着连接走的，
+  /// 关库之后残留的 wal 会被下一次打开当成"未合并的改动"重放，
+  /// 所以我们关库前先 checkpoint，保证主库文件是完整的。
+  void relocateTo(Directory next) {
+    checkpoint();
+    close();
+    rootDir = next;
+    if (!next.existsSync()) next.createSync(recursive: true);
+    reopen();
+  }
+
+  /// 把 WAL 里还没合并的改动写回主库，让文件可以安全复制。
+  void checkpoint() {
+    try {
+      _db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (_) {
+      // 只读连接、库刚关掉之类的情况，尽力而为
+    }
+  }
 
   /// 重新打开（恢复完调用）。会重新跑一遍迁移/自愈 ——
   /// 恢复进来的可能是**更旧的**库，得让它升级到当前 schema。

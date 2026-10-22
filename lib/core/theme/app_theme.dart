@@ -137,6 +137,41 @@ class AppColors extends ThemeExtension<AppColors> {
     ],
   );
 
+  /// 用自定义种子色派生出整套颜色。
+  ///
+  /// 只换强调色（tint）与配色轮（palette）—— 背景、文字、分隔线保持
+  /// 系统那套黑/白/灰。理由：中性色是"看着舒服"的地基，让用户随手挑个
+  /// 粉紫去改背景，很容易得到一片读不清字的效果；换强调色已经足够让
+  /// 整个应用看起来是自己的。
+  ///
+  /// [seed] 为空时返回 [light] / [dark] 原样。
+  static AppColors fromSeed({
+    required Brightness brightness,
+    Color? seed,
+  }) {
+    final base = brightness == Brightness.dark ? dark : light;
+    if (seed == null) return base;
+
+    // 用 HCT（Material 3 的 ColorScheme.fromSeed 背后那套）算出来的
+    // 强调色比直接把用户选的色丢上去更稳：选中/未选中、深底/浅底都还能
+    // 拉开对比。这里只取它的 primary，其余颜色仍用我们自己的。
+    final scheme = ColorScheme.fromSeed(
+      seedColor: seed,
+      brightness: brightness,
+    );
+    final accent = scheme.primary;
+
+    // 配色轮：以强调色为首，后面几个按色相旋转，保证彼此拉得开。
+    final hsl = HSLColor.fromColor(accent);
+    final rotated = <Color>[
+      accent,
+      for (final deg in <double>[130, 35, -35, 265, 220, 180, 60, 300, 320])
+        hsl.withHue((hsl.hue + deg) % 360).toColor(),
+    ];
+
+    return base.copyWith(tint: accent, palette: rotated);
+  }
+
   @override
   AppColors copyWith({
     Brightness? brightness,
@@ -317,8 +352,13 @@ class AppMetrics {
 class AppTheme {
   const AppTheme._();
 
-  static ThemeData light() => _build(AppColors.light, Brightness.light);
-  static ThemeData dark() => _build(AppColors.dark, Brightness.dark);
+  static ThemeData light({Color? seed}) =>
+      _build(AppColors.fromSeed(brightness: Brightness.light, seed: seed),
+          Brightness.light);
+
+  static ThemeData dark({Color? seed}) =>
+      _build(AppColors.fromSeed(brightness: Brightness.dark, seed: seed),
+          Brightness.dark);
 
   static ThemeData _build(AppColors c, Brightness b) {
     final scheme = ColorScheme.fromSeed(

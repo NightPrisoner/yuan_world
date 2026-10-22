@@ -73,7 +73,7 @@ extension _WsNav on _DesktopWorkspaceState {
               ),
             ),
             Pressable(
-              onTap: state.exitPrivacyMode,
+              onTap: () => leavePrivacySpace(context),
               scale: 0.94,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

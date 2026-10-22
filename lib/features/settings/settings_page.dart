@@ -1,6 +1,7 @@
 /// 设置页。iOS 分组列表风格。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -11,8 +12,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../app_state.dart';
 import '../../core/app_info.dart';
+import '../../core/app_paths.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/motion/apple_page_route.dart';
+import '../../core/platform/window_mode.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
 import '../collections/manage_collections_page.dart';
@@ -163,31 +166,194 @@ Future<void> _pickMirrorDir(BuildContext context, AppState state) async {
   );
 }
 
-/// 立刻导出一份全量备份到用户选的位置。
+/// 立刻做一次完整备份：打包到本机 backups 目录，配了异地目录就顺手复制一份。
+///
+/// 以前这里和"另外存一份到别的地方"是两条路：一条弹保存框让你挑一个 zip 放哪，
+/// 一条每周自动往镜像目录丢一份 —— 用户看着就是"两个功能重了"，而且手动那条
+/// 走的是内存里拼整包的老路，几百兆会卡住界面、也没有任何进度。
+/// 现在统一成一条：走流式的 `createFullBackupNow`，中途弹进度，结尾说清楚
+/// 存到了哪、有没有复制到异地。
 Future<void> _backupNow(BuildContext context, AppState state) async {
   final messenger = ScaffoldMessenger.of(context);
+  final progress = ValueNotifier<double>(0);
+  var dialogClosed = false;
+
+  void closeDialog() {
+    if (dialogClosed) return;
+    dialogClosed = true;
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+  }
+
+  // 打包在后台跑，先把进度框挂上去
+  unawaited(showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      title: const Text('正在备份'),
+      content: ValueListenableBuilder<double>(
+        valueListenable: progress,
+        builder: (_, value, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('数据库 + 全部图片视频打包中… ${(value * 100).round()}%'),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(value: value == 0 ? null : value),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: closeDialog,
+          child: const Text('后台继续'),
+        ),
+      ],
+    ),
+  ));
+
   try {
-    final bytes = state.backup.exportAll();
-    final stamp = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    final name = '元世界备份-${stamp.year}${two(stamp.month)}${two(stamp.day)}'
-        '-${two(stamp.hour)}${two(stamp.minute)}.zip';
-    final target = await FilePicker.saveFile(
-      dialogTitle: '保存备份',
-      fileName: name,
-      bytes: bytes,
-      type: FileType.custom,
-      allowedExtensions: <String>['zip'],
+    final file = await state.createFullBackupNow(
+      onProgress: (v) => progress.value = v,
     );
-    if (target == null) return;
+    progress.value = 1;
+    closeDialog();
+    final mirrored = state.backupMirrorEnabled && state.lastMirrorError == null;
     messenger.showSnackBar(
       SnackBar(
-        content: Text('已备份到 ${target.toFilePath()}（${_mb(bytes.length)}）'),
-        duration: const Duration(seconds: 5),
+        content: Text(
+          '已备份到 ${file.path}（${_mb(file.lengthSync())}）'
+          '${mirrored ? '\n另存了一份到 ${state.backupMirrorDir}' : ''}',
+        ),
+        duration: const Duration(seconds: 6),
       ),
     );
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('备份失败：$e')));
+    closeDialog();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('备份失败：$e'),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  } finally {
+    progress.dispose();
+  }
+}
+
+/// 把整个数据目录搬到用户挑的位置。
+///
+/// 会先关掉数据库连接再复制，中途崩了指针文件已经写好了，下次启动照样
+/// 能找到新位置。复制期间弹一个进度框，几百兆也不至于看起来像死机。
+Future<void> _moveDataLocation(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final picked = await FilePicker.getDirectoryPath(
+    dialogTitle: '选择数据存放位置',
+  );
+  if (picked == null || picked.trim().isEmpty) return;
+  if (!context.mounted) return;
+
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('把数据搬到这里？'),
+      content: Text(
+        '数据库、图片、视频、快照和备份都会复制到：\n$picked\n\n'
+        '原位置的文件不会删除，确认没问题后你可以自己清理。',
+      ),
+      actions: <Widget>[
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('搬过去')),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+
+  await _runDataMove(context, state, picked, messenger, '数据已搬到');
+}
+
+/// 回到默认位置（软件目录旁边的 data/）。
+Future<void> _resetDataLocation(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final defaultRoot = await defaultAppRoot();
+  if (!context.mounted) return;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('回到默认位置？'),
+      content: Text(
+        '数据会复制回：\n$defaultRoot\n\n'
+        '当前自定义位置的文件不会删除。',
+      ),
+      actions: <Widget>[
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('搬回去')),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+
+  await _runDataMove(context, state, null, messenger, '已回到默认位置');
+}
+
+/// 真正干活的：进度框 + 调 AppState + 结果提示。
+Future<void> _runDataMove(
+  BuildContext context,
+  AppState state,
+  String? target,
+  ScaffoldMessengerState messenger,
+  String doneLabel,
+) async {
+  final progress = ValueNotifier<double>(0);
+  var dialogClosed = false;
+  void closeDialog() {
+    if (dialogClosed) return;
+    dialogClosed = true;
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+  }
+
+  unawaited(showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      title: const Text('正在搬数据'),
+      content: ValueListenableBuilder<double>(
+        valueListenable: progress,
+        builder: (_, value, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('复制中… ${(value * 100).round()}%'),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(value: value == 0 ? null : value),
+          ],
+        ),
+      ),
+    ),
+  ));
+
+  try {
+    final result = await state.moveDataLocation(
+      target,
+      onProgress: (v) => progress.value = v,
+    );
+    progress.value = 1;
+    closeDialog();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          '$doneLabel ${result.target}'
+          '${result.files > 0 ? '（${result.files} 个文件，${_mb(result.bytes)}）' : ''}',
+        ),
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  } catch (e) {
+    closeDialog();
+    messenger.showSnackBar(
+      SnackBar(content: Text('搬移失败：$e'), duration: const Duration(seconds: 6)),
+    );
+  } finally {
+    progress.dispose();
   }
 }
 
@@ -319,6 +485,120 @@ class _ChoiceRow<T> extends StatelessWidget {
 ///
 /// 之前用步进器加 2–10 的夹取，用户想铺 12 列都没门。
 /// 既然是他自己的屏幕、自己的眼睛，就把决定权整个交出去。
+/// 一个"填数字的间隔"行：标签 + 副标题 + 输入框 + 单位。
+///
+/// 复用于快照间隔（小时）和完整备份间隔（天）—— 两处长得一模一样，
+/// 只是单位和取值范围不同。
+class _IntervalRow extends StatefulWidget {
+  const _IntervalRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.unit,
+    required this.zeroHint,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String subtitle;
+  final int value;
+  final String unit;
+
+  /// 填 0 时副标题换成这句（快照的"关闭"语义需要说清楚）
+  final String zeroHint;
+  final ValueChanged<int> onChanged;
+
+  @override
+  State<_IntervalRow> createState() => _IntervalRowState();
+}
+
+class _IntervalRowState extends State<_IntervalRow> {
+  late final TextEditingController _input =
+      TextEditingController(text: '${widget.value}');
+
+  @override
+  void didUpdateWidget(_IntervalRow old) {
+    super.didUpdateWidget(old);
+    if (widget.value != old.value && _input.text != '${widget.value}') {
+      _input.text = '${widget.value}';
+    }
+  }
+
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  void _commit(String raw) {
+    final v = int.tryParse(raw.trim());
+    if (v == null) {
+      _input.text = '${widget.value}';
+      return;
+    }
+    widget.onChanged(v);
+    _input.text = '${widget.value}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return _RowShell(
+      icon: widget.icon,
+      iconColor: widget.iconColor,
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(widget.label, style: AppText.callout.copyWith(color: c.label)),
+                const SizedBox(height: 1),
+                Text(
+                  widget.value <= 0 ? widget.zeroHint : widget.subtitle,
+                  style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 62,
+            child: TextField(
+              controller: _input,
+              textAlign: TextAlign.center,
+              keyboardType: TextInputType.number,
+              onSubmitted: _commit,
+              onTapOutside: (_) => _commit(_input.text),
+              style: AppText.callout.copyWith(
+                color: c.label,
+                fontWeight: FontWeight.w600,
+              ),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: true,
+                fillColor: c.fill,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
+                suffixText: widget.unit,
+                suffixStyle: AppText.caption1.copyWith(color: c.tertiaryLabel),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 瀑布流列数：**直接填数字，没有上限**。
 class _ColumnCountRow extends StatefulWidget {
   const _ColumnCountRow({
     required this.icon,
@@ -675,17 +955,33 @@ class SettingsPage extends StatelessWidget {
                   label: '图片与视频',
                   path: state.db.imageRoot.path,
                 ),
+                // 手机上数据必须待在应用私有目录里，系统才不清理，
+                // 所以只在桌面端给这两个入口。
+                if (isDesktopWindow) ...[
+                  _RowDivider(),
+                  _ActionRow(
+                    icon: Icons.drive_file_move_rounded,
+                    iconColor: c.palette[4],
+                    label: state.dataLocationIsCustom
+                        ? '换一个位置…'
+                        : '更改数据位置…',
+                    subtitle: state.dataLocationIsCustom
+                        ? '当前用的是自定义位置，可以再换到别的盘'
+                        : '搬到其它盘或网盘目录，原文件不会被删',
+                    onTap: () => _moveDataLocation(context, state),
+                  ),
+                  if (state.dataLocationIsCustom) ...[
+                    _RowDivider(),
+                    _ActionRow(
+                      icon: Icons.restart_alt_rounded,
+                      iconColor: c.palette[0],
+                      label: '回到默认位置',
+                      subtitle: '搬回软件目录下的 data/，原位置的文件不会被删',
+                      onTap: () => _resetDataLocation(context, state),
+                    ),
+                  ],
+                ],
               ],
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
-              child: Text(
-                '全部数据都在本机，不上传任何服务器。备份时直接复制上面两个目录即可。',
-                style: AppText.caption1.copyWith(
-                  color: c.tertiaryLabel,
-                  height: 1.6,
-                ),
-              ),
             ),
 
             // ── 备份与恢复 ─────────────────────────────────────────────
@@ -695,26 +991,54 @@ class SettingsPage extends StatelessWidget {
                 _SwitchRow(
                   icon: Icons.history_rounded,
                   iconColor: c.palette[5],
-                  label: '每天自动快照',
+                  label: '自动快照',
                   subtitle: '只含数据库（几兆），图片视频不重复备份；保留最近 7 份',
                   value: state.backupAutoSnapshot,
                   onChanged: (v) => state.setBackupAutoSnapshot(v),
                 ),
+                if (state.backupAutoSnapshot) ...[
+                  _RowDivider(),
+                  _IntervalRow(
+                    icon: Icons.schedule_rounded,
+                    iconColor: c.palette[5],
+                    label: '多久拍一次',
+                    subtitle: '按小时算，默认 24 小时',
+                    value: state.snapshotEveryHours,
+                    unit: '小时',
+                    zeroHint: '现在是 0：不再自动拍，只能手动',
+                    onChanged: (v) => state.setSnapshotEveryHours(v),
+                  ),
+                ],
                 _RowDivider(),
                 _SwitchRow(
                   icon: Icons.inventory_2_rounded,
                   iconColor: c.palette[1],
-                  label: '每周自动完整备份',
+                  label: '自动完整备份',
                   subtitle: '数据库 + 全部图片视频，存在本机 backups 目录；保留最近 2 份',
                   value: state.backupAutoFull,
                   onChanged: (v) => state.setBackupAutoFull(v),
                 ),
+                if (state.backupAutoFull) ...[
+                  _RowDivider(),
+                  _IntervalRow(
+                    icon: Icons.schedule_rounded,
+                    iconColor: c.palette[1],
+                    label: '多久备份一次',
+                    subtitle: '按天算，默认 7 天',
+                    value: state.fullBackupEveryDays,
+                    unit: '天',
+                    zeroHint: '至少 1 天',
+                    onChanged: (v) => state.setFullBackupEveryDays(v),
+                  ),
+                ],
                 _RowDivider(),
                 _ActionRow(
                   icon: Icons.archive_rounded,
                   iconColor: c.palette[2],
-                  label: '立即完整备份…',
-                  subtitle: '数据库 + 全部图片视频，打成一个压缩包给你保存',
+                  label: '立即完整备份一次',
+                  subtitle: state.backupMirrorEnabled
+                      ? '打包存在本机 backups 目录，并复制一份到异地目录'
+                      : '打包存在本机 backups 目录；想多一层保障可以再配个异地目录',
                   onTap: () => _backupNow(context, state),
                 ),
                 _RowDivider(),
@@ -730,8 +1054,8 @@ class SettingsPage extends StatelessWidget {
                   icon: Icons.cloud_upload_rounded,
                   iconColor: c.palette[4],
                   label: state.backupMirrorEnabled
-                      ? '异地备份目录：${state.backupMirrorDir}'
-                      : '另外存一份到别的地方…',
+                      ? '异地目录：${state.backupMirrorDir}'
+                      : '配一个异地目录…',
                   subtitle: state.backupMirrorEnabled
                       ? '每次完整备份都会再复制一份到这里（外接盘、网盘同步目录）'
                       : '本机的备份和数据库在同一块盘上，换个盘或网盘目录更稳妥',
@@ -766,7 +1090,6 @@ class SettingsPage extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
               child: Text(
-                '全部数据都在本机，不上传任何服务器。\n'
                 '${_snapshotHint(state)}\n'
                 '${_fullBackupHint(state)}'
                 '${_mirrorHint(state)}',
@@ -1296,8 +1619,231 @@ class _ThemeRow extends StatelessWidget {
               ],
             ],
           ),
+          const SizedBox(height: 12),
+          _ThemeSeedPicker(state: state),
         ],
       ),
     );
   }
+}
+
+/// 强调色选择：一排色块 + 一个"自定义"入口。
+///
+/// 只改强调色，不动背景/文字 —— 换个颜色就够了，让用户自由改背景
+/// 很容易调出一片看不清字的效果。
+class _ThemeSeedPicker extends StatelessWidget {
+  const _ThemeSeedPicker({required this.state});
+  final AppState state;
+
+  /// 预设的一组种子色。和 AppColors 自带那套 palette 同源，
+  /// 保证挑出来的颜色在深色底上也够亮。
+  static const List<Color> presets = <Color>[
+    Color(0xFF007AFF), // 系统蓝
+    Color(0xFF34C759), // 绿
+    Color(0xFFFF9500), // 橙
+    Color(0xFFFF2D55), // 玫红
+    Color(0xFFAF52DE), // 紫
+    Color(0xFF5856D6), // 靛蓝
+    Color(0xFF00C7BE), // 青
+    Color(0xFFFF6482), // 粉
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final current = state.themeSeed;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '强调色',
+          style: AppText.caption1.copyWith(color: c.secondaryLabel),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 9,
+          runSpacing: 9,
+          children: [
+            for (final color in presets)
+              _SeedDot(
+                color: color,
+                selected: current?.toARGB32() == color.toARGB32(),
+                onTap: () => state.setThemeSeed(color),
+              ),
+            _CustomSeedDot(
+              selected: current != null &&
+                  !presets.any((p) => p.toARGB32() == current.toARGB32()),
+              current: current,
+              onTap: () => _pickCustomSeed(context, state),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _SeedDot extends StatelessWidget {
+  const _SeedDot({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Pressable(
+      onTap: onTap,
+      scale: 0.9,
+      child: Tooltip(
+        message: selected ? '当前强调色' : '用这个颜色',
+        child: AnimatedContainer(
+          duration: AppMotion.respecting(context, AppMotion.fast),
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            // 选中态用一圈描边而不是勾：勾在浅色块上糊成一团
+            border: Border.all(
+              color: selected ? c.label : Colors.transparent,
+              width: 2.5,
+            ),
+          ),
+          child: selected
+              ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
+              : null,
+        ),
+      ),
+    );
+  }
+}
+
+class _CustomSeedDot extends StatelessWidget {
+  const _CustomSeedDot({
+    required this.selected,
+    required this.current,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final Color? current;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Pressable(
+      onTap: onTap,
+      scale: 0.9,
+      child: Tooltip(
+        message: '从色板里挑',
+        child: Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: selected && current != null ? current : c.fill,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: selected ? c.label : Colors.transparent,
+              width: 2.5,
+            ),
+          ),
+          child: Icon(
+            Icons.colorize_rounded,
+            size: 15,
+            color: selected && current != null ? Colors.white : c.secondaryLabel,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 从 Material 色板里挑一个种子色。用系统自带的 picker 对话框 ——
+/// 自己画 HSV 转盘要写一堆代码，还不一定有它好用。
+Future<void> _pickCustomSeed(BuildContext context, AppState state) async {
+  var picked = state.themeSeed ?? _ThemeSeedPicker.presets.first;
+  final result = await showDialog<Color>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) {
+        final c = ctx.colors;
+        return AlertDialog(
+          title: const Text('挑一个强调色'),
+          content: SizedBox(
+            width: 320,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: picked,
+                    borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+                  ),
+                  child: const Center(
+                    child: Icon(Icons.check_rounded,
+                        color: Colors.white, size: 26),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: [
+                    for (final hue in <double>[
+                      0, 20, 40, 60, 90, 120, 150, 170, 190, 210, 230, 250,
+                      270, 290, 310, 330,
+                    ])
+                      for (final light in <double>[0.38, 0.5, 0.62])
+                        GestureDetector(
+                          onTap: () => setLocal(() {
+                            picked = HSLColor.fromAHSL(1, hue, 0.72, light)
+                                .toColor();
+                          }),
+                          child: Container(
+                            width: 26,
+                            height: 26,
+                            decoration: BoxDecoration(
+                              color: HSLColor.fromAHSL(1, hue, 0.72, light)
+                                  .toColor(),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: picked.toARGB32() ==
+                                        HSLColor.fromAHSL(1, hue, 0.72, light)
+                                            .toColor()
+                                            .toARGB32()
+                                    ? c.label
+                                    : Colors.transparent,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                        ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, picked),
+              child: const Text('用这个'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+  if (result != null) state.setThemeSeed(result);
 }

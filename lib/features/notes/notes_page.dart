@@ -25,6 +25,7 @@ import '../../data/repositories/note_repository.dart';
 import '../collections/collection_sheets.dart';
 import '../collections/manage_collections_page.dart';
 import '../importer/import_page.dart';
+import '../privacy/privacy_transition.dart';
 import 'editor/note_editor_page.dart';
 import '../search/search_page.dart';
 import 'note_detail_page.dart';
@@ -458,7 +459,7 @@ class _NotesPageState extends State<NotesPage> {
           icon: Icons.lock_open_rounded,
           selected: true,
           accent: c.palette[6],
-          onTap: state.exitPrivacyMode,
+          onTap: () => leavePrivacySpace(context),
         ),
       _Pill(
         label: '全部',
@@ -693,7 +694,7 @@ class _NotesPageState extends State<NotesPage> {
     return Pressable(
       onTap: () {
         if (exitPrivacy) {
-          state.exitPrivacyMode();
+          leavePrivacySpace(context);
         } else {
           state.selectAll();
         }

@@ -171,8 +171,8 @@ class YuanWorldApp extends StatelessWidget {
       // 只有带 --dart-define=YW_PERF=true 的构建才有，见 kShowPerfOverlay
       showPerformanceOverlay: kShowPerfOverlay,
       themeMode: state.themeMode,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
+      theme: AppTheme.light(seed: state.themeSeed),
+      darkTheme: AppTheme.dark(seed: state.themeSeed),
       // 字号缩放放在这里一处生效：不改 AppText 里的每个字号，
       // 也让第三方组件（对话框、滚轮、Toast）跟着一起缩放。
       builder: (context, child) => MediaQuery.withClampedTextScaling(
