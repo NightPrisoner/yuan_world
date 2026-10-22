@@ -11,6 +11,7 @@ import '../../core/utils/text_stats.dart';
 import '../../core/utils/wiki_links.dart';
 import '../db/app_database.dart';
 import '../db/query_scope.dart';
+import '../media/media_counts.dart';
 import '../models.dart';
 
 /// 排序**字段**。与方向分开，对应 Windows 资源管理器那种

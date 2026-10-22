@@ -14,6 +14,7 @@ import 'dart:isolate';
 import 'package:path/path.dart' as p;
 
 import '../db/app_database.dart';
+import '../media/media_counts.dart';
 import '../media/media_importer.dart';
 import '../repositories/note_repository.dart';
 import '../../core/utils/text_stats.dart';
@@ -243,12 +244,13 @@ class ImportService {
           excerpt: makeExcerpt(content),
           charCount: countChars(content),
           wordCount: countWords(content),
+          // image_count 只数**图片**，而且要和统计页现算的口径一致
+          // （只认独占一行的图片语法）。以前这里写的是"落盘文件数"，
+          // 视频也算进去、行内图也算进去，于是导入的笔记图片数偏高，
+          // 跟详情页/统计页对不上。
+          imageCount: countNoteMedia(content).images,
           coverImage: cover,
           touch: false,
-        );
-        db.db.execute(
-          'UPDATE notes SET image_count = ? WHERE id = ?',
-          [idx, noteId],
         );
 
         // 全部成功，才计入汇总：中途失败时不能让"图片 N 张"/"表格 N 个"

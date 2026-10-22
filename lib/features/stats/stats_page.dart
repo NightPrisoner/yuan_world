@@ -425,6 +425,13 @@ class _StatsPageState extends State<StatsPage> {
   void _reload() {
     final stats = _stats;
     if (stats == null) return;
+    // 这一轮算完就代表"已是最新"，账本得一起更新。
+    // 不更新的话：换筛选 → _reload 重算 → build 里拿 state.dataRevision
+    // 跟过期的 _lastRevision 比 → 判定"数据变了" → 下一帧又整页 _load 一遍。
+    // 白算一整轮，参数卡片还会跟着再重查一次。
+    final state = context.read<AppState>();
+    _lastRevision = state.dataRevision;
+    _lastPrivacy = state.privacyMode;
     final q = _query;
     _trendSeriesCache = null;
     _cumulativeSeriesCache = null;

@@ -72,6 +72,33 @@ extension NoteAggregates on NoteRepository {
     return fixed;
   }
 
+  /// 一次性校正：把 `image_count` 拉回与正文一致。
+  ///
+  /// 这个列历史上被三种口径写过：
+  ///   · 导入时写"落盘了几个文件"（视频也算、行内图也算）
+  ///   · 编辑器保存时写`mediaCountOf`（同样把视频算进图片）
+  ///   · 统计页/详情页现算的是"独占一行的图片有几个"
+  ///
+  /// 于是同一篇笔记在列表角标、详情页、统计概览上可能是三个数。
+  /// 这里按**最终口径**（[countNoteMedia] 的 images）统一一遍。
+  ///
+  /// 只跑一次（调用方用设置里的标记控制），存量数据修完就不再扫全表。
+  /// 返回修正的篇数。
+  int backfillImageCounts() {
+    final rows = _d.select('SELECT id, content, image_count FROM notes');
+    var fixed = 0;
+    for (final r in rows) {
+      final real = countNoteMedia((r['content'] as String?) ?? '').images;
+      if (real == (r['image_count'] as int? ?? 0)) continue;
+      _d.execute(
+        'UPDATE notes SET image_count = ? WHERE id = ?',
+        <Object?>[real, r['id']],
+      );
+      fixed++;
+    }
+    return fixed;
+  }
+
   Overview overview({bool hiddenOnly = false}) {
     // 普通空间排除隐藏项；隐私空间反过来，只看隐藏项。
     //

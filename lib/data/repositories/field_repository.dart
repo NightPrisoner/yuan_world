@@ -264,10 +264,15 @@ class FieldRepository {
 
     // 自动值：对没手写过的笔记现算
     if (def.isAuto) {
+      // 「没手写过」要按**非空**的手动值算。以前子查询没管空串，
+      // 于是库里留着一行空的手动值（历史数据、或直接调 setValue 写空）
+      // 时，那篇笔记既不算手动值（下面 trim 后跳过）也不算自动值
+      // （被 NOT IN 排除）—— 整篇从分布里凭空消失。
       final notes = _d.select(
         'SELECT n.id, n.created_at, n.updated_at FROM notes n '
         'WHERE $scope '
-        'AND n.id NOT IN (SELECT note_id FROM note_fields WHERE field_id = ?)',
+        "AND n.id NOT IN (SELECT note_id FROM note_fields "
+        "WHERE field_id = ? AND TRIM(value) <> '')",
         <Object?>[fieldId],
       );
       for (final r in notes) {

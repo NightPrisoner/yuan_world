@@ -108,6 +108,39 @@ class StatsQuery {
   );
 
   static const StatsQuery empty = StatsQuery();
+
+  // **必须能按值比较**。
+  //
+  // 统计页每次重建都会现造一个 StatsQuery 传给卡片，而 `FieldStatsCard`
+  // 的判断是 `oldWidget.query != widget.query` —— 没有 `==` 时这个条件
+  // 恒为真，于是每次父级重画都让参数卡片重跑一遍跨表 JOIN。
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! StatsQuery) return false;
+    if (other.from != from ||
+        other.to != to ||
+        other.collectionId != collectionId ||
+        other.includeDescendants != includeDescendants ||
+        other.hiddenOnly != hiddenOnly) {
+      return false;
+    }
+    if (other.collectionIds.length != collectionIds.length) return false;
+    for (var i = 0; i < collectionIds.length; i++) {
+      if (other.collectionIds[i] != collectionIds[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    from,
+    to,
+    collectionId,
+    includeDescendants,
+    hiddenOnly,
+    Object.hashAll(collectionIds),
+  );
 }
 
 class TrendPoint {

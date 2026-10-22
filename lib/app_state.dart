@@ -270,6 +270,14 @@ class AppState extends ChangeNotifier {
       repo.setSetting('sortkey.pinyinBackfilled', '1');
     }
 
+    // 图片数这个列以前是三套口径混着写的（导入写落盘文件数、编辑器写
+    // 含视频的媒体数、统计页现算的是纯图片数），同一篇能在三个地方
+    // 显示三个不同的数字。统一按最终口径回填一次。
+    if (repo.getSetting('imagecount.backfilled') != '1') {
+      repo.backfillImageCounts();
+      repo.setSetting('imagecount.backfilled', '1');
+    }
+
     // 回收站的自动清理：过期内容在启动时清掉。
     // 只在启动跑一次，不在运行中定时跑 —— 用户正用着的时候
     // 东西突然消失会很吓人。
@@ -684,12 +692,16 @@ class AppState extends ChangeNotifier {
 
   Future<void> togglePin(Note n) async {
     repo.setPinned(n.id, !n.isPinned);
-    refreshListOnly();
+    // 置顶不算"内容变了"，但**统计页的排序/活跃度也跟着它走**，
+    // 而且需求上"点了星标，收藏数要立刻变"。这里统一报一次数据变更。
+    refreshListOnly(dataChanged: true);
   }
 
   Future<void> toggleFavorite(Note n) async {
     repo.setFavorite(n.id, !n.isFavorite);
-    refreshListOnly();
+    // 同上：收藏数在概览卡片里，不涨 revision 的话统计页不会重算 ——
+    // 用户点了星标回到统计页，收藏数还是老数字。
+    refreshListOnly(dataChanged: true);
     // **必须带上 hiddenOnly**：漏了的话，在隐私空间里收藏一篇，
     // 侧栏的计数会当场换成普通空间的数字 —— 隐私空间的意义就是
     // 外面看不到里面的痕迹，数字也算痕迹。

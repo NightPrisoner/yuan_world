@@ -31,6 +31,7 @@ import '../../../core/utils/text_stats.dart';
 import '../../../core/utils/toc.dart';
 import '../../../core/widgets/app_menu.dart';
 import '../../../core/widgets/local_image.dart';
+import '../../../data/media/media_counts.dart';
 import '../../../data/media/media_importer.dart';
 import 'body_segments.dart';
 import 'markdown_controller.dart';
@@ -497,8 +498,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         excerpt: makeExcerpt(text),
         charCount: countChars(text),
         wordCount: countWords(text),
-        // 图片/视频数也要重算，否则插了图那个数字还是旧的
-        imageCount: mediaCountOf(text),
+        // 图片数也要重算，否则插了图那个数字还是旧的。
+        //
+        // 只算**图片**：以前这里是 mediaCountOf，把视频也计进
+        // image_count，于是侧栏汇总的图片数比统计页多出视频那部分 ——
+        // 同一个指标在两处对不上。视频另有自己的「N 视频」。
+        imageCount: countNoteMedia(text).images,
       );
       // 落库成功：草稿这个"未确认现场"就可以删了
       try {

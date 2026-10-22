@@ -83,6 +83,11 @@ extension NoteMutations on NoteRepository {
       args.add(v);
     }
 
+    // 写正文时可能被"改标题级联"改写（见下），所以正文/摘要先在这两个变量上过一手。
+    String? nextContent = content;
+    String? nextExcerpt = excerpt;
+    var linkRewritten = false;
+
     if (title != null) {
       // **改标题要把指向旧标题的双链一起改掉**（用户明确要求"改名不能让链接断"）。
       //
@@ -98,11 +103,37 @@ extension NoteMutations on NoteRepository {
       // 排序键跟着标题走，否则改了标题排序还是旧的
       set('sort_key', windowsSortKey(title));
       if (oldTitle != null && oldTitle.trim() != title.trim()) {
-        _cascadeLinkRename(oldTitle, title);
+        if (content != null) {
+          // 调用方同时要写正文：正文里指向自己的那条 `[[旧标题]]` 也得改成
+          // 新标题，然后自己交给下面那句 `set('content')`。
+          //
+          // 以前是先级联（把包括自己在内的行都改好）、紧接着又被传进来的
+          // 旧正文覆盖回去 —— 自引用双链就这么断了。
+          nextContent = rewriteWikiLinks(content, from: oldTitle, to: title);
+          if (excerpt != null) {
+            nextExcerpt = rewriteWikiLinks(
+              excerpt,
+              from: oldTitle,
+              to: title,
+            );
+          }
+          linkRewritten = nextContent != content;
+          _cascadeLinkRename(oldTitle, title, skipId: id);
+        } else {
+          _cascadeLinkRename(oldTitle, title);
+        }
       }
     }
-    if (content != null) set('content', content);
-    if (excerpt != null) set('excerpt', excerpt);
+    if (nextContent != null) set('content', nextContent);
+    if (nextExcerpt != null) set('excerpt', nextExcerpt);
+    // 正文被级联改写（改标题连带到自己）时，字数统计必须跟着走 ——
+    // 否则改一次标题就制造一次永久偏差：概览总字数、长文排行、
+    // 篇幅分布、趋势里的字数全都会偏。
+    if (linkRewritten && nextContent != null) {
+      charCount ??= countChars(nextContent);
+      wordCount ??= countWords(nextContent);
+      imageCount ??= countNoteMedia(nextContent).images;
+    }
     if (clearCollection) {
       sets.add('collection_id = NULL');
     } else if (collectionId != null) {
@@ -115,7 +146,7 @@ extension NoteMutations on NoteRepository {
     if (imageCount != null) set('image_count', imageCount);
     if (coverImage != null) {
       set('cover_image', coverImage);
-    } else if (content != null) {
+    } else if (nextContent != null) {
       // 没显式给头图时用正文第一张图兜底 —— 但**只在还没设过头图时**，
       // 否则用户手动选的头图会被每次自动保存覆盖掉。
       final cur = _d.select(
@@ -127,7 +158,7 @@ extension NoteMutations on NoteRepository {
       // 以前只看 isEmpty，于是点了"不设置头图"之后只要再编辑一下正文
       // （触发一次自动保存），头图就自己回来了 —— 用户会觉得这开关坏了。
       if (existing != kCoverNone && (existing == null || existing.isEmpty)) {
-        final first = firstImageOf(content);
+        final first = firstImageOf(nextContent);
         if (first != null) set('cover_image', first);
       }
     }
@@ -211,19 +242,34 @@ extension NoteMutations on NoteRepository {
   /// 摘要（excerpt）里也可能带着链接文字，所以一并重写。
   /// **不改 `updated_at`**：这不是用户对那篇笔记的编辑，把"最后编辑"
   /// 时间搅乱了，按时间排序的列表会莫名其妙地跳。
-  void _cascadeLinkRename(String oldTitle, String newTitle) {
+  ///
+  /// 但**字数必须跟着重算**：链接改长改短，正文字数就变了。以前只写
+  /// `content`/`excerpt`，于是改一次标题就在别的笔记上留下一处永久偏差。
+  ///
+  /// [skipId] 用于"调用方自己马上要写正文"的情况（见 [updateNote]）：
+  /// 那一行由调用方连同正文一起写，这里别抢。
+  void _cascadeLinkRename(String oldTitle, String newTitle, {int? skipId}) {
     final rows = _d.select(
       'SELECT id, content FROM notes WHERE content LIKE ?',
       <Object?>['%[[${oldTitle.trim()}%'],
     );
     for (final r in rows) {
       final id = r['id'] as int;
+      if (id == skipId) continue;
       final content = (r['content'] as String?) ?? '';
       final next = rewriteWikiLinks(content, from: oldTitle, to: newTitle);
       if (next == content) continue;
       _d.execute(
-        'UPDATE notes SET content = ?, excerpt = ? WHERE id = ?',
-        <Object?>[next, makeExcerpt(next), id],
+        'UPDATE notes SET content = ?, excerpt = ?, char_count = ?, '
+        'word_count = ?, image_count = ? WHERE id = ?',
+        <Object?>[
+          next,
+          makeExcerpt(next),
+          countChars(next),
+          countWords(next),
+          countNoteMedia(next).images,
+          id,
+        ],
       );
     }
   }
