@@ -158,7 +158,19 @@ class AppState extends ChangeNotifier {
     }
 
     db.checkpoint();
-    final result = await migrateDataRoot(from, target, onProgress: onProgress);
+    // **必须先关库再搬。** 数据库开着的时候 yuanworld.db / -wal / -shm
+    // 是被当前进程锁着的，Windows 上删不掉；以前直接搬，文件拷过去了、
+    // 删源那一步静默失败，于是用户看到「F 盘里还留着一个 yuanworld.db」，
+    // 也就是两份数据并存 —— 和「数据只有一份」的约定直接矛盾。
+    db.closeForRestore();
+    MoveDataResult result;
+    try {
+      result = await migrateDataRoot(from, target, onProgress: onProgress);
+    } catch (_) {
+      // 没搬成：把原来的库重新打开，用户还能继续用，源文件一个字节没动
+      db.reopen();
+      rethrow;
+    }
 
     if (targetPath == null || targetPath.trim().isEmpty) {
       await forgetAppRoot();
@@ -166,6 +178,8 @@ class AppState extends ChangeNotifier {
       await rememberAppRoot(target);
     }
 
+    // relocateTo 内部会 checkpoint + close + reopen；此时连接已经关掉了，
+    // close 是幂等的，checkpoint 会静默跳过。
     db.relocateTo(Directory(target));
     // 换库后各种缓存都要重来：列表、文集、概览、待办、回收站
     await init();

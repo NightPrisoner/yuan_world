@@ -16,27 +16,36 @@ import '../theme/app_theme.dart';
 ///   而且窗口拉伸时不会每次都重新解码。
 /// * **先模糊再铺**：模糊半径给到 0 时直接跳过 `ImageFiltered` —— 全屏
 ///   高斯模糊是这个 widget 最贵的一步，能省则省。
-/// * **浓度走 Opacity 而不是 `Color.withOpacity`**：用户调的是"整张图多浓"，
-///   不是"叠一层多黑的膜"，`Opacity` 才是对的语义；代价是一次 saveLayer。
+/// * **这里不碰透明度。** 以前这里是 `Opacity(opacity: 用户调的浓度, 图片)`，
+///   同时外面那层半透明主题也在遮 —— 两层叠起来只剩 0.5 × 0.38 ≈ 19% 的
+///   光透出来，用户看到的就是"怎么调都像隔了层纱"。浓度现在完全交给
+///   页面底色的不透明度去表达（见 [AppChrome]），图片本身该多亮就多亮。
 /// * 图片读不出来（被删、权限没了）时静默退化成纯色底，绝不在这里抛。
 class AppBackground extends StatelessWidget {
   const AppBackground({
     super.key,
     required this.path,
-    required this.opacity,
     required this.blur,
     required this.child,
   });
 
   final String? path;
-  final double opacity;
   final double blur;
   final Widget child;
+
+  /// 浓度到页面底色保留量的换算：用户把浓度拉满时，底色只剩这么多。
+  ///
+  /// 0.22 是下限 —— 再透下去，白色正文压在照片的亮处就看不见了。
+  static const double minKeep = 0.22;
+
+  /// 浓度 0~1 对应页面底色保留 1~[minKeep]。
+  static double keepFor(double strength) =>
+      (1 - (1 - minKeep) * strength).clamp(minKeep, 1.0);
 
   @override
   Widget build(BuildContext context) {
     final file = path == null ? null : File(path!);
-    if (file == null || !file.existsSync() || opacity <= 0.001) {
+    if (file == null || !file.existsSync()) {
       return child;
     }
 
@@ -65,9 +74,7 @@ class AppBackground extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        Positioned.fill(
-          child: IgnorePointer(child: Opacity(opacity: opacity, child: image)),
-        ),
+        Positioned.fill(child: IgnorePointer(child: image)),
         child,
       ],
     );
@@ -91,17 +98,20 @@ class AppChrome extends StatelessWidget {
       (s) => (s.themeBackgroundPath, s.themeBackgroundOpacity, s.themeBackgroundBlur),
     );
     final path = settings.$1;
-    if (path == null) return child;
+    // 浓度拉到 0 就是"不要这张图"，连半透明底也一起收掉
+    if (path == null || settings.$2 <= 0.001) return child;
 
     final c = Theme.of(context).extension<AppColors>();
     final dark = c?.isDark ?? false;
 
+    // 浓度只在这一层体现：浓度越高，页面底色留得越少，图越清楚。
+    // 深色主题下底色是纯黑，同样的 keep 会显得更闷，所以让它多透一点。
+    final keep = AppBackground.keepFor(settings.$2) * (dark ? 0.82 : 1.0);
+
     return Theme(
-      // 半透明底只给 0.62：再透下去，白色正文压在照片上会花
-      data: AppTheme.translucent(Theme.of(context), keep: dark ? 0.72 : 0.62),
+      data: AppTheme.translucent(Theme.of(context), keep: keep),
       child: AppBackground(
         path: path,
-        opacity: settings.$2,
         blur: settings.$3,
         child: child,
       ),

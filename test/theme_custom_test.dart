@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:yuan_world/app_state.dart';
 import 'package:yuan_world/core/app_info.dart';
 import 'package:yuan_world/core/theme/app_theme.dart';
+import 'package:yuan_world/core/widgets/app_background.dart';
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
@@ -158,6 +159,49 @@ void main() {
       // 文字不变
       expect(b.label.toARGB32(), a.label.toARGB32());
       expect(b.tint.toARGB32(), a.tint.toARGB32());
+    });
+  });
+
+  group('背景图不该被两层压暗', () {
+    test('浓度换算：0 时底色全留，拉满时只剩一点点', () {
+      expect(AppBackground.keepFor(0), closeTo(1.0, 0.0001));
+      expect(AppBackground.keepFor(1),
+          closeTo(AppBackground.minKeep, 0.0001));
+      // 单调：浓度越大，底色留得越少（照片越清楚）
+      var last = 2.0;
+      for (var i = 0; i <= 10; i++) {
+        final keep = AppBackground.keepFor(i / 10);
+        expect(keep, lessThanOrEqualTo(last));
+        last = keep;
+      }
+    });
+
+    testWidgets('图片本身不再套 Opacity —— 只由页面底色控制浓淡',
+        (WidgetTester tester) async {
+      final file = File(p.join(root.path, 'bg2.png'))
+        ..writeAsBytesSync(<int>[1, 2, 3, 4]);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: AppBackground(
+            path: file.path,
+            blur: 0,
+            child: const Text('内容'),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // 找到图片，它的祖先里不允许再出现 Opacity：
+      // 以前这里套了一层，外面主题又压一层，两层相乘照片只剩 19% 的光。
+      final image = find.byType(Image);
+      expect(image, findsOneWidget);
+      expect(
+        find.ancestor(of: image, matching: find.byType(Opacity)),
+        findsNothing,
+      );
+      // 内容还在，说明图片是垫在下面的
+      expect(find.text('内容'), findsOneWidget);
     });
   });
 

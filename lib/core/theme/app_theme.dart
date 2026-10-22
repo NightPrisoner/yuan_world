@@ -172,18 +172,45 @@ class AppColors extends ThemeExtension<AppColors> {
         hsl.withHue((hsl.hue + deg) % 360).toColor(),
     ];
 
-    Color tinted(Color base, double amount) =>
-        Color.lerp(base, accent, amount)!;
-
     return base.copyWith(
       tint: accent,
       palette: rotated,
-      // 深色下同样的混合比例，观感上更明显，所以给得比浅色少一点
-      groupedBackground: tinted(base.groupedBackground, base.isDark ? 0.10 : 0.07),
+      groupedBackground: _tintSurface(base.groupedBackground, hsl, base.isDark),
       tertiaryBackground:
-          tinted(base.tertiaryBackground, base.isDark ? 0.12 : 0.06),
-      fill: tinted(base.fill, base.isDark ? 0.10 : 0.05),
+          _tintSurface(base.tertiaryBackground, hsl, base.isDark),
+      fill: _tintSurface(base.fill, hsl, base.isDark),
     );
+  }
+
+  /// 把一块底色往 [accent] 的**色相**推，但亮度不许掉。
+  ///
+  /// 以前这里是 `Color.lerp(base, accent, 0.07)` —— 直接往强调色里混。
+  /// 混出来的是"更暗的那个颜色"：浅色主题里 `#F2F2F7` 往深蓝靠就变成灰，
+  /// 用户挑个紫/红，整个界面跟着暗一档，观感是"换了个色但变脏了"。
+  ///
+  /// 这里换到 HSL 空间只动色相和饱和度，**亮度原样保留**：
+  /// 浅色底还是那么亮，只是色相偏过去了一点点，能看出"换色了"却不发暗。
+  ///
+  /// 深色主题的底色是纯黑（亮度 0），纯黑在任何色相下都还是黑，永远看不出
+  /// 变化；所以深色下给一个极小的下限亮度，让底色带一点点色相。
+  static Color _tintSurface(Color base, HSLColor accent, bool isDark) {
+    final b = HSLColor.fromColor(base);
+    final amount = isDark ? 0.34 : 0.30;
+    // 色相沿圆周取近的一侧，别为了 350°→10° 绕一整圈把中间颜色全扫一遍
+    var delta = (accent.hue - b.hue) % 360;
+    if (delta > 180) delta -= 360;
+    final hue = (b.hue + delta * amount) % 360;
+    final sat = (b.saturation + (accent.saturation - b.saturation) * amount)
+        .clamp(0.0, 1.0);
+    final light = isDark
+        ? (b.lightness > 0.055 ? b.lightness : 0.055)
+        : b.lightness;
+    return b
+        .withHue(hue)
+        .withSaturation(sat)
+        .withLightness(light)
+        .toColor()
+        .withValues(alpha: base.a);
   }
 
 

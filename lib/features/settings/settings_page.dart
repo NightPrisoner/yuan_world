@@ -18,6 +18,7 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/platform/window_mode.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/app_background.dart';
 import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
@@ -1796,10 +1797,15 @@ class ThemeBackgroundPicker extends StatelessWidget {
                       image: ResizeImage(FileImage(File(path)),
                           width: 480, policy: ResizeImagePolicy.fit),
                       fit: BoxFit.cover,
-                      // 缩略图压暗一点，好让中间那行字看得清
-                      colorFilter: const ColorFilter.mode(
-                        Color(0x66000000),
-                        BlendMode.darken,
+                      // 缩略图忠实反映实际观感：真正压住照片的是页面底色，
+                      // 浓度越高压得越少。以前这里固定 0x66000000，预览
+                      // 永远比界面暗一截，等于给用户看了个假效果。
+                      colorFilter: ColorFilter.mode(
+                        c.groupedBackground.withValues(
+                          alpha:
+                              AppBackground.keepFor(state.themeBackgroundOpacity),
+                        ),
+                        BlendMode.srcOver,
                       ),
                     )
                   : null,
@@ -1811,13 +1817,15 @@ class ThemeBackgroundPicker extends StatelessWidget {
                 Icon(
                   has ? Icons.image_rounded : Icons.add_photo_alternate_rounded,
                   size: 16,
-                  color: has ? Colors.white : c.secondaryLabel,
+                  // 用 label 而不是写死白色：遮罩是主题底色，浅色主题下
+                  // 底子是亮的，白字会直接糊掉。
+                  color: has ? c.label : c.secondaryLabel,
                 ),
                 const SizedBox(width: 6),
                 Text(
                   has ? '换一张图' : '选一张图',
                   style: AppText.footnote.copyWith(
-                    color: has ? Colors.white : c.secondaryLabel,
+                    color: has ? c.label : c.secondaryLabel,
                   ),
                 ),
               ],
@@ -1842,7 +1850,8 @@ class ThemeBackgroundPicker extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             // 说清楚代价，别让用户以为"背景图不花钱"
-            '图片只是铺在下面，笔记内容仍存在数据库里；浓度调高会压住正文，深色主题下建议不用。',
+            '图片铺在所有页面底下，浓度调高会让照片更清楚、底色更淡。'
+            '深色主题下照片会显得闷，建议配合浅色主题用。',
             style: AppText.caption2.copyWith(color: c.tertiaryLabel),
           ),
         ],
