@@ -10,6 +10,7 @@ import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'core/app_info.dart';
 import 'core/app_localization.dart';
 import 'core/app_paths.dart';
 import 'core/media/poster_maker.dart';
@@ -25,6 +26,11 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // media_kit 必须在用任何播放器之前初始化，否则一开视频就崩
   MediaKit.ensureInitialized();
+
+  // 版本号从平台包里读（来源是 pubspec 的 version:）。刻意放在最前面，
+  // 因为它只是一次本地平台通道调用、很快就回来；失败也只是设置页显示
+  // 一个破折号，绝不挡住启动。
+  await AppInfo.load();
 
   if (isDesktopWindow) {
     await _setupDesktopWindow();

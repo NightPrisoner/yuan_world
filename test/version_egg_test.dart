@@ -12,6 +12,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:yuan_world/app_state.dart';
+import 'package:yuan_world/core/app_info.dart';
 import 'package:yuan_world/core/theme/app_theme.dart';
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
@@ -24,6 +25,9 @@ void main() {
   late AppState state;
 
   setUp(() async {
+    // 版本号由 AppInfo 提供（唯一来源是 pubspec 的 version:）。测试里不读
+    // 平台包，直接注入一个固定值，免得断言跟着真版本号变。
+    AppInfo.setVersionForTesting('9.9.9+99');
     db = AppDatabase.inMemory();
     final repo = NoteRepository(db);
     state = AppState(db, repo, ImportService(db, repo));
@@ -57,9 +61,9 @@ void main() {
 
   /// 点一下版本号那一行。
   Future<void> tapVersion(WidgetTester tester) async {
-    await tester.ensureVisible(find.text('1.0.0'));
+    await tester.ensureVisible(find.text(AppInfo.version));
     await tester.pump();
-    await tester.tap(find.text('1.0.0'), warnIfMissed: true);
+    await tester.tap(find.text(AppInfo.version), warnIfMissed: true);
     // 行本身有个 90ms 的按压缩回动画，让它跑完再点下一次
     await tester.pump(const Duration(milliseconds: 150));
   }

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:yuan_world/app_state.dart';
+import 'package:yuan_world/core/app_info.dart';
 import 'package:yuan_world/core/theme/app_theme.dart';
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/importer/import_service.dart';
@@ -22,6 +23,7 @@ void main() {
   late AppState state;
 
   setUp(() async {
+    AppInfo.setVersionForTesting('9.9.9+99');
     db = AppDatabase.inMemory();
     final repo = NoteRepository(db);
     state = AppState(db, repo, ImportService(db, repo));
@@ -75,7 +77,7 @@ void main() {
     await pumpSettings(tester);
 
     final makerRight = tester.getRect(find.text(kMakerValue)).right;
-    for (final other in <String>['SQLite · FTS5', 'Flutter 3.47', '1.0.0']) {
+    for (final other in <String>['SQLite · FTS5', 'Flutter 3.47', AppInfo.version]) {
       final right = tester.getRect(find.text(other)).right;
       expect(
         makerRight,

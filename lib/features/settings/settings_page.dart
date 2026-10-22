@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app_state.dart';
+import '../../core/app_info.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/motion/apple_page_route.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
@@ -705,7 +706,7 @@ class SettingsPage extends StatelessWidget {
             _SectionHeader('关于'),
             _Group(
               children: [
-                _VersionRow(version: '1.0.0'),
+                const _VersionRow(),
                 _RowDivider(),
                 // 快捷键一览：桌面端有一堆 Ctrl+ 组合，不写出来没人猜得到。
                 // 内容直接读 core/shortcuts 的定义，不在这里手抄一份。
@@ -871,8 +872,7 @@ class _RowShell extends StatelessWidget {
 ///
 /// 计数不落盘：换一次页面就重新数。彩蛋不该被"上次点了两下"提前触发。
 class _VersionRow extends StatefulWidget {
-  const _VersionRow({required this.version});
-  final String version;
+  const _VersionRow();
 
   @override
   State<_VersionRow> createState() => _VersionRowState();
@@ -908,7 +908,9 @@ class _VersionRowState extends State<_VersionRow> {
             Text('版本', style: AppText.body.copyWith(color: c.label)),
             const Spacer(),
             Text(
-              widget.version,
+              // 不手写：版本号只在 pubspec 的 version: 里定义一份，
+              // 运行时由 AppInfo 从平台包里读出来。
+              AppInfo.version,
               style: AppText.body.copyWith(color: c.secondaryLabel),
             ),
           ],
