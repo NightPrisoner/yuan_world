@@ -155,14 +155,17 @@ class AppColors extends ThemeExtension<AppColors> {
     final base = brightness == Brightness.dark ? dark : light;
     if (seed == null) return base;
 
-    // 用 HCT（Material 3 的 ColorScheme.fromSeed 背后那套）算出来的
-    // 强调色比直接把用户选的色丢上去更稳：选中/未选中、深底/浅底都还能
-    // 拉开对比。这里只取它的 primary，其余颜色仍用我们自己的。
-    final scheme = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: brightness,
-    );
-    final accent = scheme.primary;
+    // **直接用用户挑的那个颜色**，不交给 ColorScheme.fromSeed。
+    //
+    // 以前这里取 `ColorScheme.fromSeed(seed).primary`，它是 HCT（Material 3
+    // 那套）算出来的「可访问性版本」：为了保证白底上的对比度达标，会把
+    // 颜色压暗、降饱和。结果用户点的是鲜亮蓝 #007AFF，界面上出现的是
+    // 灰暗蓝 #445E91；点鲜亮绿 #34C759 变成暗绿 #38693C —— 用户的原话
+    // 就是「实际应用的颜色偏暗偏灰，不一致」。
+    //
+    // 这里只做一件事：如果种子色和底色的明度贴太近（会看不清），就往
+    // 远处推一点。色相和饱和度原样保留 —— 那才是「我挑的就是这个色」。
+    final accent = _readableAccent(seed, isDark: brightness == Brightness.dark);
 
     // 配色轮：以强调色为首，后面几个按色相旋转，保证彼此拉得开。
     final hsl = HSLColor.fromColor(accent);
@@ -175,44 +178,47 @@ class AppColors extends ThemeExtension<AppColors> {
     return base.copyWith(
       tint: accent,
       palette: rotated,
-      groupedBackground: _tintSurface(base.groupedBackground, hsl, base.isDark),
+      groupedBackground:
+          _tintSurface(base.groupedBackground, accent, base.isDark),
       tertiaryBackground:
-          _tintSurface(base.tertiaryBackground, hsl, base.isDark),
-      fill: _tintSurface(base.fill, hsl, base.isDark),
+          _tintSurface(base.tertiaryBackground, accent, base.isDark),
+      fill: _tintSurface(base.fill, accent, base.isDark),
     );
   }
 
-  /// 把一块底色往 [accent] 的**色相**推，但亮度不许掉。
+  /// 把一块中性底色「染上一点点强调色」。
   ///
-  /// 以前这里是 `Color.lerp(base, accent, 0.07)` —— 直接往强调色里混。
-  /// 混出来的是"更暗的那个颜色"：浅色主题里 `#F2F2F7` 往深蓝靠就变成灰，
-  /// 用户挑个紫/红，整个界面跟着暗一档，观感是"换了个色但变脏了"。
+  /// 用 [Color.alphaBlend] 而不是 HSL 色相插值：中性底色的色相在蓝紫那一带
+  /// （#F2F2F7 约 240°），鲜亮橙色的色相在 32°，两者在色轮上的短路径要穿过
+  /// 品红 —— 插值出来的底色是淡紫，配橙色主题明显不对。alphaBlend 是「在底
+  /// 上盖一层 5% 的强调色」，色相自然朝强调色偏，且明度基本不动。
   ///
-  /// 这里换到 HSL 空间只动色相和饱和度，**亮度原样保留**：
-  /// 浅色底还是那么亮，只是色相偏过去了一点点，能看出"换色了"却不发暗。
-  ///
-  /// 深色主题的底色是纯黑（亮度 0），纯黑在任何色相下都还是黑，永远看不出
-  /// 变化；所以深色下给一个极小的下限亮度，让底色带一点点色相。
-  static Color _tintSurface(Color base, HSLColor accent, bool isDark) {
-    final b = HSLColor.fromColor(base);
-    final amount = isDark ? 0.34 : 0.30;
-    // 色相沿圆周取近的一侧，别为了 350°→10° 绕一整圈把中间颜色全扫一遍
-    var delta = (accent.hue - b.hue) % 360;
-    if (delta > 180) delta -= 360;
-    final hue = (b.hue + delta * amount) % 360;
-    final sat = (b.saturation + (accent.saturation - b.saturation) * amount)
-        .clamp(0.0, 1.0);
-    final light = isDark
-        ? (b.lightness > 0.055 ? b.lightness : 0.055)
-        : b.lightness;
-    return b
-        .withHue(hue)
-        .withSaturation(sat)
-        .withLightness(light)
-        .toColor()
-        .withValues(alpha: base.a);
+  /// 明度必须不动：上一轮用户反馈「换了强调色整个界面偏暗」就是底色被压了
+  /// 一档。这里保留 [base] 的 alpha（`fill` 本身就是半透明的）。
+  static Color _tintSurface(Color base, Color accent, bool isDark) {
+    final amount = isDark ? 0.09 : 0.05;
+    final mixed = Color.alphaBlend(
+      accent.withValues(alpha: amount),
+      base.withValues(alpha: 1),
+    );
+    return mixed.withValues(alpha: base.a);
   }
 
+  /// 只修「看不清」，不修「不好看」。
+  ///
+  /// 浅色主题下底色接近纯白，种子色如果本身很亮（柠檬黄、浅粉），叠上去
+  /// 会糊成一片，这时把它压暗；深色主题反过来。正常亮度区间内的颜色
+  /// **一个像素都不动**，用户挑什么就是什么。
+  static Color _readableAccent(Color seed, {required bool isDark}) {
+    final hsl = HSLColor.fromColor(seed);
+    // 浅底要够深、深底要够浅；这两个阈值是按"图形元素最低 3:1 对比度"
+    // 反推的，不追求 WCAG AA 的 4.5（那是正文文字的标准，强调色不需要）。
+    final lo = isDark ? 0.52 : 0.0;
+    final hi = isDark ? 1.0 : 0.62;
+    if (hsl.lightness >= lo && hsl.lightness <= hi) return seed;
+    final target = hsl.lightness < lo ? lo : hi;
+    return hsl.withLightness(target).toColor();
+  }
 
   @override
   AppColors copyWith({
