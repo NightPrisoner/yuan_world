@@ -405,6 +405,61 @@ class BackupService {
     return file;
   }
 
+  /// 把一份完整备份**另存到别处**（外接盘、网盘同步目录…）。
+  ///
+  /// 这是为了解决「备份和数据库在同一块硬盘上」这个死角：本机的
+  /// `snapshots/` 和 `backups/` 都在 `data/` 底下，那块盘一坏，数据库和
+  /// 备份一起没。真正要防的是「文件在别处」。
+  ///
+  /// 落到 `<mirror>/yuanworld-backups/` 子目录里，不污染用户选的目录
+  /// （很多人会直接选网盘的根目录）。镜像目录里也按 [keep] 轮转，
+  /// 只删自己放进去的 `full-*.zip`，别的东西一概不碰。
+  ///
+  /// 失败会抛异常 —— 调用方负责记下原因，**但不能因此认为本机备份失败**：
+  /// 本机那份已经写好了。
+  Future<File> mirrorFullBackup(
+    File source,
+    Directory mirror, {
+    int keep = 2,
+  }) async {
+    if (!source.existsSync()) {
+      throw StateError('要复制到异地的备份文件不存在：${source.path}');
+    }
+    final target = Directory(p.join(mirror.path, 'yuanworld-backups'));
+    target.createSync(recursive: true);
+
+    final dest = File(p.join(target.path, p.basename(source.path)));
+    // 同名先删：copy 在文件已存在时会抛，而"上一次同一秒写过一份"是很
+    // 现实的场景（用户连点两次立即备份）
+    if (dest.existsSync()) dest.deleteSync();
+    final copied = await source.copy(dest.path);
+
+    // 轮转：只认自己放进去的 full-*.zip，按文件名倒序（时间戳天然有序）
+    final files = target.listSync().whereType<File>().where((f) {
+      final name = p.basename(f.path);
+      return name.startsWith('full-') && name.endsWith('.zip');
+    }).toList()..sort((a, b) => b.path.compareTo(a.path));
+    for (var i = keep; i < files.length; i++) {
+      try {
+        files[i].deleteSync();
+      } catch (_) {
+        // 网盘目录里有时有占位文件删不掉，不该让备份流程失败
+      }
+    }
+    return copied;
+  }
+
+  /// 现有的异地完整备份，**新的在前**。
+  List<File> mirroredFullBackups(Directory mirror) {
+    final target = Directory(p.join(mirror.path, 'yuanworld-backups'));
+    if (!target.existsSync()) return const <File>[];
+    final files = target.listSync().whereType<File>().where((f) {
+      final name = p.basename(f.path);
+      return name.startsWith('full-') && name.endsWith('.zip');
+    }).toList()..sort((a, b) => b.path.compareTo(a.path));
+    return files;
+  }
+
   // ── 恢复 ────────────────────────────────────────────────────────────────
 
   /// 从备份恢复。**会覆盖当前数据**，调用方必须先跟用户确认。

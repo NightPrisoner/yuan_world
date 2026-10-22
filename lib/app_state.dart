@@ -58,6 +58,23 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 异地的完整备份目录（外接盘、网盘同步目录…），空字符串表示没设。
+  ///
+  /// 本机的 `data/backups/` 和数据库在同一块盘上 —— 盘一坏，库和备份一起
+  /// 没。设了这个目录之后，每次做完整备份会**额外**往那儿放一份。
+  String get backupMirrorDir => repo.getSetting('backup.mirrorDir') ?? '';
+
+  bool get backupMirrorEnabled => backupMirrorDir.trim().isNotEmpty;
+
+  void setBackupMirrorDir(String path) {
+    repo.setSetting('backup.mirrorDir', path.trim());
+    notifyListeners();
+  }
+
+  DateTime? get lastMirrorAt => _readTime('backup.lastMirrorAt');
+  DateTime? get lastMirrorErrorAt => _readTime('backup.lastMirrorErrorAt');
+  String? get lastMirrorError => repo.getSetting('backup.lastMirrorError');
+
   /// 自动快照的节奏与保留份数 —— 常量提出来，测试不用等一天。
   static const Duration autoSnapshotEvery = Duration(hours: 24);
 
@@ -157,8 +174,27 @@ class AppState extends ChangeNotifier {
       );
       repo.setSetting('backup.lastFullError', '');
       repo.setSetting('backup.lastFullErrorAt', '');
+      // 本机那份已经好了；往异地再放一份，失败只记在异地那一栏
+      await _mirrorFullBackup(file);
     } catch (e) {
       _recordError('backup.lastFullError', 'backup.lastFullErrorAt', e);
+    }
+  }
+
+  /// 把刚做好的完整备份再复制一份到用户指定的异地目录。
+  ///
+  /// 失败**不影响本机备份的记账** —— 本机那份是实实在在写好了的，
+  /// 把"异地复制失败"记到 `backup.lastFullError` 里会让用户以为整个备份
+  /// 都没成，反而更糊涂。所以单独一栏。
+  Future<void> _mirrorFullBackup(File file) async {
+    final dir = backupMirrorDir.trim();
+    if (dir.isEmpty) return;
+    try {
+      await backup.mirrorFullBackup(file, Directory(dir), keep: backupFullKeep);
+      repo.setSetting('backup.lastMirrorAt', DateTime.now().toIso8601String());
+      repo.setSetting('backup.lastMirrorError', '');
+    } catch (e) {
+      _recordError('backup.lastMirrorError', 'backup.lastMirrorErrorAt', e);
     }
   }
 
@@ -187,6 +223,7 @@ class AppState extends ChangeNotifier {
     );
     repo.setSetting('backup.lastFullError', '');
     repo.setSetting('backup.lastFullErrorAt', '');
+    await _mirrorFullBackup(file);
     notifyListeners();
     return file;
   }

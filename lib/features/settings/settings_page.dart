@@ -74,6 +74,21 @@ String _fullBackupHint(AppState state) {
       '占 ${mb.toStringAsFixed(0)} MB。';
 }
 
+/// 异地备份的实情：复制到哪儿了、上次成没成。
+String _mirrorHint(AppState state) {
+  final dir = state.backupMirrorDir.trim();
+  if (dir.isEmpty) return '';
+  final err = state.lastMirrorError;
+  if (err != null && err.isNotEmpty) {
+    final at = state.lastMirrorErrorAt;
+    final when = at == null ? '' : '（${_stamp(at)}）';
+    return '\n上次复制到别的地方没成功$when：$err';
+  }
+  final last = state.lastMirrorAt;
+  if (last == null) return '\n还没有往「$dir」复制过，下次完整备份时会一起放一份。';
+  return '\n最近一次复制到「$dir」：${_stamp(last)}。';
+}
+
 /// 点一下就有动作的设置行（备份、恢复这类）。
 class _ActionRow extends StatelessWidget {
   const _ActionRow({
@@ -110,6 +125,42 @@ class _ActionRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 让用户挑一个"备份也要放一份"的目录。
+///
+/// 不用 `saveFile`（那是存单个文件），这里要的是目录 —— 很多人会直接选
+/// 网盘的同步目录，之后每次完整备份都会自动复制一份进去。
+Future<void> _pickMirrorDir(BuildContext context, AppState state) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final picked = await FilePicker.getDirectoryPath(
+    dialogTitle: '选择另外存一份备份的目录',
+  );
+  if (picked == null || picked.trim().isEmpty) return;
+  final dir = Directory(picked);
+  try {
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    // 先探一下能不能写。选到只读的盘或没权限的目录时，让用户当场知道，
+    // 而不是等一周后看到一句"上次备份没成功"。
+    final probe = File('${dir.path}${Platform.pathSeparator}.yw-write-test');
+    probe.writeAsStringSync('ok');
+    probe.deleteSync();
+  } catch (e) {
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('这个目录写不进去：$e'),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+    return;
+  }
+  state.setBackupMirrorDir(dir.path);
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text('以后每次完整备份都会再放一份到 ${dir.path}'),
+      duration: const Duration(seconds: 4),
+    ),
+  );
 }
 
 /// 立刻导出一份全量备份到用户选的位置。
@@ -675,6 +726,28 @@ class SettingsPage extends StatelessWidget {
                   onTap: () => _restoreFromBackup(context, state),
                 ),
                 _RowDivider(),
+                _ActionRow(
+                  icon: Icons.cloud_upload_rounded,
+                  iconColor: c.palette[4],
+                  label: state.backupMirrorEnabled
+                      ? '异地备份目录：${state.backupMirrorDir}'
+                      : '另外存一份到别的地方…',
+                  subtitle: state.backupMirrorEnabled
+                      ? '每次完整备份都会再复制一份到这里（外接盘、网盘同步目录）'
+                      : '本机的备份和数据库在同一块盘上，换个盘或网盘目录更稳妥',
+                  onTap: () => _pickMirrorDir(context, state),
+                ),
+                if (state.backupMirrorEnabled) ...[
+                  _RowDivider(),
+                  _ActionRow(
+                    icon: Icons.close_rounded,
+                    iconColor: c.tertiaryLabel,
+                    label: '不再另存到别的地方',
+                    subtitle: '已经复制过去的文件不会被删掉',
+                    onTap: () => state.setBackupMirrorDir(''),
+                  ),
+                ],
+                _RowDivider(),
                 _PathRow(
                   icon: Icons.folder_special_rounded,
                   iconColor: c.palette[3],
@@ -695,7 +768,8 @@ class SettingsPage extends StatelessWidget {
               child: Text(
                 '全部数据都在本机，不上传任何服务器。\n'
                 '${_snapshotHint(state)}\n'
-                '${_fullBackupHint(state)}',
+                '${_fullBackupHint(state)}'
+                '${_mirrorHint(state)}',
                 style: AppText.caption1.copyWith(
                   color: c.tertiaryLabel,
                   height: 1.6,
