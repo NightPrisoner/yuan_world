@@ -1,17 +1,143 @@
-# yuan_world
+# 元世界
 
-元世界 - 本地笔记与知识可视化
+本地优先的笔记与知识可视化应用。Windows 与 Android 同一份代码：Windows 上是三栏桌面布局，Android 上是底部标签的手机布局。
 
-## Getting Started
+**数据全部存在你自己的机器上，不联网、不上传、不登录。**
 
-This project is a starting point for a Flutter application.
+---
 
-A few resources to get you started if this is your first Flutter project:
+## 它是什么
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+一套能装下长期写作的本地笔记库，加一层把自己写的东西看清楚的可视化。
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+**写作**
+
+- Markdown 编辑，编辑态与阅读态共用同一套块级语法（标题 / 引用 / 列表 / 待办 / 代码块 / 分割线 / 图片都所见一致）
+- 编辑器工具栏：加粗、斜体、删除线、行内代码、代码块、标题、引用、有序无序列表、待办、链接、分割线、插图、插视频
+- `[[双向链接]]`：正文里链到另一篇笔记，改标题时链接自动跟着改
+- 图片与视频内嵌，本地媒体走相对路径，整个文件夹拷走也不断链
+- 笔记历史版本（每篇保留最近 30 版）+ 崩溃草稿：保存失败会提示并自动重试，草稿不会丢
+- 文件夹树、标签、收藏、置顶、归档、回收站（默认 30 天）
+
+**组织与查看**
+
+- 瀑布流卡片 / 列表两种浏览方式，可调列数
+- 统计页：概览、趋势（柱 / 线 / 面积，可缩放、可多文件夹对比）、文集占比、活跃热力图、发布时段、篇幅分布、连续写作、长文排行、标签分布、高频词、参数统计、存储占用
+- 概览里每一项都能自己关掉，只留你关心的
+
+**数据安全**
+
+- 每日自动数据库快照（本机 `data/snapshots/`，保留 7 份）
+- 每周自动完整备份（数据库 + 全部图片视频，本机 `data/backups/`，保留 2 份）
+- 手动「立即完整备份」可另存到任意位置；恢复前自动存一份安全副本
+- 备份状态（最近成功时间 / 失败原因）在设置页里看得见，不是静默失败
+
+**导入导出**
+
+- 导入 `.docx` / `.txt` / `.md`，可递归整个文件夹并还原文集层级，内嵌图片一并搬进来
+- 导出一篇或整个文集：Markdown / 纯文本 / DOCX / HTML，可连同图片视频一起打包
+- 导入是「整篇要么全成、要么全回滚」，不会留下残缺笔记和孤儿图片
+
+---
+
+## 平台差异
+
+同一份 Dart 代码，两套外壳：
+
+| | Windows | Android |
+|---|---|---|
+| 布局 | 导航 / 列表 / 正文 三栏，可拖宽、可收起 | 底部四个标签，单栏推入 |
+| 菜单 | 贴锚点下拉 | 底部弹层 |
+| 拖拽 | 直接拖 | 长按后拖 |
+| 悬停效果 | 有（鼠标） | 无 |
+| 快捷键 | `Ctrl+N` 新建、`Ctrl+F` 搜索、`Ctrl+1`~`Ctrl+6` 切分区、`Ctrl+/` 看全部 | 无（需要实体键盘才有意义） |
+
+动效统一走一套 `AppMotion`（120 / 200 / 300 / 380 / 420ms + 统一曲线），并且尊重系统的「减弱动态效果」—— 打开之后所有时长归零，不是部分生效。
+
+---
+
+## 构建
+
+需要 Flutter 3.47+ / Dart 3.13+。
+
+```bash
+flutter pub get
+flutter test          # 1000+ 条测试
+flutter analyze       # 应为 0 issue
+```
+
+**Windows**
+
+```bash
+flutter build windows --release
+# 产物：build/windows/x64/runner/Release/元世界.exe
+```
+
+**Android**
+
+```bash
+flutter build apk --release
+# 产物：build/app/outputs/flutter-apk/app-release.apk
+```
+
+> 仓库里**没有**预编译的安装包，请从源码自行构建。
+
+---
+
+## 数据存在哪
+
+| 平台 | 位置 |
+|---|---|
+| Windows | 可执行文件同级的 `data/` 目录 |
+| Android | 应用私有目录（`getApplicationSupportDirectory()`） |
+
+里面有：`yuanworld.db`（SQLite，含 FTS5 全文索引）、`images/`（图片与视频）、`snapshots/`（数据库快照）、`backups/`（完整备份）、`logs/`（错误日志）。
+
+**拷走 `data/` 就等于拷走了全部数据。** 桌面版是绿色软件：整个文件夹搬到 U 盘，数据跟着走。
+
+---
+
+## 遇到问题
+
+设置 → 帮助与诊断 → **导出诊断信息…** 会生成一段可复制的文本（版本、系统、库大小、最近的错误堆栈）。贴到 issue 里比自己描述有用得多。
+
+日志在 `data/logs/`，按天一个文件，最多留 30 份。
+
+---
+
+## 已知限制
+
+- **没有跨设备同步**。Windows 和 Android 各自独立的库，靠「完整备份 → 拷到另一台 → 恢复」搬运。
+- **自动备份和数据库在同一块硬盘上**。硬盘坏了，快照和完整备份一起没。重要数据请手动「立即完整备份」到别的盘或网盘目录。
+- **Android 安装包用调试证书签名**（开源项目自行构建的正常做法）。这意味着：不能覆盖安装别人构建的版本，换构建得先卸载（**会丢数据，务必先导出笔记**）；也不能上应用商店。
+- **两个汉字以内的搜索词走 LIKE 全表扫描**。FTS5 用的 trigram 分词器，三个字以上走索引、很快；两个字的词只能退化扫描。库里几千篇以内感觉不到。
+- **搜索单次最多返回 200 条结果**，超出时会提示「还有更多」，没有翻页。
+- 导入只支持 `.docx` / `.txt` / `.md`；PDF、网页剪藏、其他笔记软件的专有格式都不支持。
+- 没有端到端测试；Windows 端的自动化验证只到「能构建 + 关键流程有 widget 测试」，真机点按靠人工。
+
+---
+
+## 目录结构
+
+```
+lib/
+  core/         动效、主题、快捷键、路径、诊断日志等基础设施
+  data/         数据库（schema + repositories）、导入、导出、备份、媒体
+  features/     按功能划分的界面：shell / notes / collections / search / stats / settings …
+test/           1000+ 条测试，按功能分文件
+third_party/    sqlite3 源码（FTS5 从这里编，不依赖系统 SQLite）
+tool/           命令行工具（导入 / 基准测试）
+docs/           各轮审计记录
+```
+
+`lib/data` 刻意不依赖 Flutter —— `tool/import_cli.dart` 用同一套数据层跑命令行导入。
+
+---
+
+## 反馈
+
+有问题请开 issue，附上「设置 → 导出诊断信息」里的内容。功能建议也欢迎，但这个项目的取舍很明确：**优先本地、优先离线、优先数据可控**，联网同步之类的东西不会进主线。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
