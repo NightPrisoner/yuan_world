@@ -58,8 +58,14 @@ extension NoteQueries on NoteRepository {
         .toList();
   }
 
-  /// 按筛选条件取笔记列表。默认只取正文元数据，不含大字段 content。
-  List<Note> listNotes(NoteFilter f, {int limit = 500, int offset = 0}) {
+  /// 把筛选条件翻译成 SQL 片段。
+  ///
+  /// **`listNotes` 和 `countNotes` 必须共用这一份**：以前只有列表那边拼条件，
+  /// 想加个总数就得照着抄一遍 —— 抄漏一行，页面上「找到 N 篇」就和列表
+  /// 对不上，而且这种不一致极难发现（列表看着是对的，只是数字骗人）。
+  ({List<String> where, List<Object?> args, String from}) _scopeOf(
+    NoteFilter f,
+  ) {
     final where = <String>[];
     final args = <Object?>[];
 
@@ -128,20 +134,44 @@ extension NoteQueries on NoteRepository {
       }
     }
 
-    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    return (where: where, args: args, from: from);
+  }
+
+  /// 按筛选条件取笔记列表。默认只取正文元数据，不含大字段 content。
+  List<Note> listNotes(NoteFilter f, {int limit = 500, int offset = 0}) {
+    final scope = _scopeOf(f);
+    final whereSql = scope.where.isEmpty
+        ? ''
+        : 'WHERE ${scope.where.join(' AND ')}';
     final sql =
         'SELECT ${NoteRepository._noteColumns()} '
-        'FROM $from $whereSql '
+        'FROM ${scope.from} $whereSql '
         // 末尾的 `n.id DESC` 是**兜底排序**：导入的笔记 created_at/updated_at
         // 往往只差几毫秒甚至完全相同，主键一分不出高下时 SQLite 会还一个
         // "任意但稳定"的顺序 —— 表现就是换了排序字段列表却纹丝不动。
         'ORDER BY n.is_pinned DESC, ${f.sort.orderBy}, n.id DESC '
         'LIMIT ? OFFSET ?';
 
-    final rows = _d.select(sql, [...args, limit, offset]);
+    final rows = _d.select(sql, [...scope.args, limit, offset]);
     final notes = rows.map((r) => Note.fromRow(r)).toList();
     _attachTags(notes);
     return notes;
+  }
+
+  /// 命中同一个筛选条件的笔记**总数**（不受 limit/offset 影响）。
+  ///
+  /// 搜索页原来只显示"这一页取到多少篇"，超过一页就是假数字。总数单独查，
+  /// 和列表共用 [_scopeOf]，不会各算一套。
+  int countNotes(NoteFilter f) {
+    final scope = _scopeOf(f);
+    final whereSql = scope.where.isEmpty
+        ? ''
+        : 'WHERE ${scope.where.join(' AND ')}';
+    final rows = _d.select(
+      'SELECT COUNT(*) AS c FROM ${scope.from} $whereSql',
+      scope.args,
+    );
+    return (rows.first['c'] as int?) ?? 0;
   }
 
   /// 批量补上标签，避免 N+1 查询。
@@ -275,10 +305,28 @@ extension NoteQueries on NoteRepository {
   // ── 写入 ────────────────────────────────────────────────────────────────
 
   /// 全文检索，返回带高亮片段的命中。
-  List<Note> search(String q, {int limit = 100}) => listNotes(
+  List<Note> search(String q, {int limit = 100, int offset = 0}) => listNotes(
         NoteFilter(query: q, sort: NoteSort.updatedDesc),
         limit: limit,
+        offset: offset,
       );
+
+  /// 全文检索的一页结果 + 命中总数。
+  ///
+  /// 搜索页要显示「找到 N 篇」并翻页。以前页面拿 `search(limit: 200)` 的
+  /// 返回长度当总数 —— 超过 200 条就是个假数字，而且没有下一页。
+  /// 把「取一页」和「数总数」放在同一个方法里，调用方不可能只用一半。
+  ({List<Note> notes, int total}) searchPage(
+    String q, {
+    int limit = 30,
+    int offset = 0,
+  }) {
+    final filter = NoteFilter(query: q, sort: NoteSort.updatedDesc);
+    return (
+      notes: listNotes(filter, limit: limit, offset: offset),
+      total: countNotes(filter),
+    );
+  }
 
   /// 用于词云/高频词：取全部标题与摘要的原始文本，交给 Dart 侧分词。
   List<String> allTitlesAndExcerpts({int limit = 2000}) {

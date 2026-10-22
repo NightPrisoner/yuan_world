@@ -22,26 +22,53 @@ class SearchPage extends StatefulWidget {
 }
 
 class _SearchPageState extends State<SearchPage> {
+  /// 一页取多少条。取小一点：搜索结果卡片不算高，30 条已经能滚两屏，
+  /// 而用户往往在第 3 条就停下来了。
+  static const int _kPageSize = 30;
+
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focus = FocusNode();
+  final ScrollController _scroll = ScrollController();
   Timer? _debounce;
 
   List<Note> _results = <Note>[];
   bool _searching = false;
+  bool _loadingMore = false;
   String _lastQuery = '';
+
+  /// 命中总数，由 `countNotes` 数出来，**不是** `_results.length`。
+  /// 以前页面拿「这一页取到多少条」当总数，超过 200 条就是个假数字。
+  int _total = 0;
+
+  /// 请求代号：翻页和改关键词可能交替发生，只认最后一次请求的结果。
+  int _generation = 0;
+
+  bool get _hasMore => _results.length < _total;
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) => _focus.requestFocus());
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _scroll.removeListener(_onScroll);
+    _scroll.dispose();
     _controller.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    // 还剩半屏就开始取下一页，滚到底时不至于明显卡一下
+    if (_scroll.position.pixels >=
+        _scroll.position.maxScrollExtent - 320) {
+      _loadMore();
+    }
   }
 
   void _onChanged(String q) {
@@ -50,26 +77,69 @@ class _SearchPageState extends State<SearchPage> {
     _debounce = Timer(const Duration(milliseconds: 180), () => _run(q));
   }
 
-  void _run(String q) {
+  /// 跑一次搜索（从第一页开始）。
+  ///
+  /// [force] 为真时即使关键词没变也重查 —— 「编辑完返回」必须走这条路：
+  /// 正文可能改了，命中集合也就可能变了，而 `_lastQuery` 拦着不让重查，
+  /// 用户看到的就是一份陈旧的列表。以前这里没有这个开关，返回后列表不动。
+  void _run(String q, {bool force = false}) {
     final state = context.read<AppState>();
     final query = q.trim();
-    if (query == _lastQuery) return;
+    if (!force && query == _lastQuery) return;
     _lastQuery = query;
+    final generation = ++_generation;
 
     if (query.isEmpty) {
       setState(() {
         _results = <Note>[];
+        _total = 0;
         _searching = false;
+        _loadingMore = false;
       });
       return;
     }
 
-    setState(() => _searching = true);
-    final hits = state.repo.search(query, limit: 200);
     setState(() {
-      _results = hits;
+      _searching = true;
+      _loadingMore = false;
+    });
+    final page = state.repo.searchPage(query, limit: _kPageSize);
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      _results = page.notes;
+      _total = page.total;
       _searching = false;
     });
+  }
+
+  /// 取下一页，接在已有结果后面。
+  void _loadMore() {
+    if (_searching || _loadingMore || !_hasMore) return;
+    final state = context.read<AppState>();
+    final generation = _generation;
+    setState(() => _loadingMore = true);
+    final page = state.repo.searchPage(
+      _lastQuery,
+      limit: _kPageSize,
+      offset: _results.length,
+    );
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      _results = <Note>[..._results, ...page.notes];
+      _total = page.total;
+      _loadingMore = false;
+    });
+  }
+
+  /// 进详情再回来：重查一次，否则刚编辑过的内容在结果里还是旧的。
+  Future<void> _openNote(Note note) async {
+    await Navigator.of(context).push(
+      ApplePageRoute<void>(
+        pageBuilder: (_) => NoteDetailPage(noteId: note.id),
+      ),
+    );
+    if (!mounted) return;
+    _run(_controller.text, force: true);
   }
 
   @override
@@ -187,16 +257,41 @@ class _SearchPageState extends State<SearchPage> {
     }
 
     return ListView.builder(
+      controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       physics: const BouncingScrollPhysics(),
-      itemCount: _results.length + 1,
+      // 多出来的一格是底部状态行（「还有更多」或「加载中」）
+      itemCount: _results.length + (_hasMore || _loadingMore ? 2 : 1),
       itemBuilder: (context, i) {
         if (i == 0) {
           return Padding(
             padding: const EdgeInsets.only(left: 2, bottom: 10),
             child: Text(
-              '找到 ${_results.length} 篇',
+              // 总数是查库数出来的；达到上限时也要如实显示，别再糊一个
+              // 「找到 200 篇」骗人。
+              _total > _results.length
+                  ? '找到 $_total 篇 · 已显示 ${_results.length} 篇'
+                  : '找到 $_total 篇',
               style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+            ),
+          );
+        }
+        if (i > _results.length) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(0, 6, 0, 10),
+            child: Center(
+              child: _loadingMore
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(
+                      '继续往下滚动加载更多',
+                      style: AppText.caption1.copyWith(
+                        color: c.quaternaryLabel,
+                      ),
+                    ),
             ),
           );
         }
@@ -209,11 +304,7 @@ class _SearchPageState extends State<SearchPage> {
             // 和其他入口用同一条转场：右侧推入、返回时原路退回。
             // 以前这里是裸 PageRouteBuilder + 纯淡入，从搜索结果进正文和
             // 从列表、统计、设置里进正文的观感对不上。
-            onTap: () => Navigator.of(context).push(
-              ApplePageRoute<void>(
-                pageBuilder: (_) => NoteDetailPage(noteId: note.id),
-              ),
-            ),
+            onTap: () => _openNote(note),
           ),
         );
       },
