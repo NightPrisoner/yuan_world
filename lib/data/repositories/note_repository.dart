@@ -13,6 +13,7 @@ import '../db/app_database.dart';
 import '../db/query_scope.dart';
 import '../media/media_counts.dart';
 import '../models.dart';
+import '../search_grams.dart';
 
 /// 排序**字段**。与方向分开，对应 Windows 资源管理器那种
 /// 「先选字段、再选递增/递减」的两段式菜单。

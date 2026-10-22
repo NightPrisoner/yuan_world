@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
+import '../search_grams.dart';
 import 'schema.dart';
 
 /// 应用数据库。负责打开 SQLite、执行迁移、暴露图片目录。
@@ -50,6 +51,11 @@ class AppDatabase {
   static AppDatabase inMemory() {
     final instance = AppDatabase._(sqlite3.openInMemory(), Directory.systemTemp);
     instance._db.execute('PRAGMA foreign_keys = ON');
+    // 自定义函数必须在这里也注册：内存库不走 _tune()，而迁移要用
+    // search_segments() 回填 note_segments —— 漏了就是
+    // "no such function: search_segments"，且**只有测试会炸**，
+    // 真机上反而正常，最容易漏。
+    instance._registerFunctions();
     instance._migrate();
     return instance;
   }
@@ -62,6 +68,34 @@ class AppDatabase {
     _db.execute('PRAGMA temp_store = MEMORY');
     // 大页面缓存，笔记列表滚动更顺
     _db.execute('PRAGMA cache_size = -16000');
+    _registerFunctions();
+  }
+
+  /// 注册 SQL 里能用的 Dart 函数。
+  ///
+  /// 目前只有一个：`search_segments(text)` —— 把正文切成「每个汉字一个
+  /// token」的分段文本，供 [note_segments] 的触发器与 v11 回填使用。
+  ///
+  /// **为什么不让 SQLite 触发器直接维护 note_segments**：SQL 里没有能力
+  /// 逐字符判断 CJK 再插空格（能写，但要用 recursive CTE 逐字处理，
+  /// 又慢又难读）。而切分规则必须与查询侧共用同一份实现（见
+  /// `search_grams.dart` 的铁律），所以只能走自定义函数。
+  ///
+  /// **`directOnly: false` 是必须的**：sqlite3 包默认只允许在直接执行的
+  /// 语句里调用自定义函数，放进触发器里会抛
+  /// `unsafe use of search_segments()`。而这个函数恰恰主要就是给触发器用的。
+  void _registerFunctions() {
+    _db.createFunction(
+      functionName: 'search_segments',
+      argumentCount: const AllowedArgumentCount(1),
+      deterministic: true,
+      directOnly: false,
+      function: (args) {
+        final text = args.isEmpty ? null : args.first;
+        if (text == null) return '';
+        return searchSegments(text as String);
+      },
+    );
   }
 
   /// 关掉连接，好让调用方替换数据库文件（恢复备份用）。

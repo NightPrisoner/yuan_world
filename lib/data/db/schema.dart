@@ -13,7 +13,7 @@
 library;
 
 /// 当前 schema 版本。每次改表结构都要 +1，并在 [kMigrations] 里补一段。
-const int kSchemaVersion = 10;
+const int kSchemaVersion = 11;
 
 /// v8：按文件名规则排序用的键。
 ///
@@ -340,6 +340,11 @@ const List<String> kCreateStatements = <String>[
   // ── 历史版本与编辑草稿（v10） ─────────────────────────────────────────
   // 新库直接建好；老库由 kMigrations[10] 补上，语句是同一份（IF NOT EXISTS）。
   ...kRevisionAndDraftStatements,
+
+  // ── 短词检索的分段索引（v11） ─────────────────────────────────────────
+  // 老库由 kMigrations[11] 补上，语句是同一份。新库此时还没有笔记，
+  // 所以里面那两条回填语句（DELETE + INSERT ... SELECT）恰好什么也不做。
+  ...kSegmentIndexStatements,
 ];
 
 /// v10：笔记历史版本 + 编辑草稿。
@@ -366,9 +371,67 @@ const List<String> kRevisionAndDraftStatements = <String>[
   ''',
 ];
 
-/// 版本迁移脚本。key 是「要升到的版本」，value 是要执行的语句。
+/// v11：短词检索用的「逐字分段索引」。
 ///
-/// 例：将来加字段时
+/// 背景：[notes_fts] 用 trigram 分词器，**只能匹配 3 个字符以上**；
+/// 1~2 个字的词（中文里最常见的那类）只能退回 `content LIKE '%x%'`
+/// 全表扫描，笔记一多就卡。
+///
+/// 这张表存的是**切分过的正文**：每个汉字之间插空格，拉丁字母数字按整词。
+/// tokenize 用 unicode61，于是每个汉字都是一个 token，短语查询 `"读 书"`
+/// 恰好表达「相邻且有序」= 子串语义。
+///
+/// **不能写成 external content 表（`content='notes'`）**：存进索引的不是
+/// 原文而是切分结果，与主表列对不上，FTS5 重建索引时会拿到原文导致索引
+/// 与查询口径不一致。所以这里用**普通 FTS5 表**，自己维护增删。
+const List<String> kSegmentIndexStatements = <String>[
+  '''
+  CREATE VIRTUAL TABLE IF NOT EXISTS note_segments USING fts5(
+    segments,
+    tokenize='unicode61'
+  )
+  ''',
+  // 触发器：任何对 notes 的增删改都同步维护分段索引。
+  //
+  // **必须走触发器而不是在仓储层手动维护**：写入正文的路径不止
+  // `updateNote` 一条（还有改标题时的双链级联、导入、恢复备份、
+  // 命令行工具），漏掉任何一条，那条笔记就永远搜不到短词 ——
+  // 而且没有任何报错，只有"搜不到"。
+  //
+  // FTS5 表支持标准 `DELETE FROM ... WHERE rowid = ?`，比手写
+  // 'delete' 命令安全（不用自己记住旧的分段文本）。
+  '''
+  CREATE TRIGGER IF NOT EXISTS note_segments_ai AFTER INSERT ON notes BEGIN
+    INSERT INTO note_segments(rowid, segments)
+    VALUES (new.id, search_segments(new.title || ' ' || new.content));
+  END
+  ''',
+  '''
+  CREATE TRIGGER IF NOT EXISTS note_segments_au AFTER UPDATE ON notes BEGIN
+    DELETE FROM note_segments WHERE rowid = old.id;
+    INSERT INTO note_segments(rowid, segments)
+    VALUES (new.id, search_segments(new.title || ' ' || new.content));
+  END
+  ''',
+  '''
+  CREATE TRIGGER IF NOT EXISTS note_segments_ad AFTER DELETE ON notes BEGIN
+    DELETE FROM note_segments WHERE rowid = old.id;
+  END
+  ''',
+  // 回填：老库升级时把存量笔记切一遍灌进去。
+  //
+  // `search_segments()` 是 AppDatabase 注册的自定义 SQL 函数（见
+  // `app_database.dart`），**注册必须在迁移之前**，否则这里直接报
+  // "no such function"。
+  //
+  // 先 DELETE 再 INSERT 是为了幂等：自愈逻辑（见 app_database）可能
+  // 重复跑这段，不清空会撞 rowid。
+  'DELETE FROM note_segments',
+  'INSERT INTO note_segments(rowid, segments) '
+      "SELECT id, search_segments(title || ' ' || content) FROM notes",
+];
+
+/// 版本迁移脚本。key 是「要升到的版本」，value 是要执行的语句。
 /// ```dart
 /// 3: ['ALTER TABLE notes ADD COLUMN mood TEXT NOT NULL DEFAULT ""'],
 /// ```
@@ -408,4 +471,9 @@ const Map<int, List<String>> kMigrations = <int, List<String>>{
   //   - [note_drafts] 每篇最多一行，是"已经敲了但还没保存成功"的现场。
   // 两张表都**不参与任何查询/统计**，只在恢复入口读。
   10: kRevisionAndDraftStatements,
+  // v10 → v11：短词（1~2 字）检索的逐字分段索引
+  //
+  // 没有它，中文两字词只能全表 LIKE 扫正文。有了它，`MATCH '"读 书"'`
+  // 走 FTS 索引，短语语义天然等于子串语义。
+  11: kSegmentIndexStatements,
 };

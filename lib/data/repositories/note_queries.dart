@@ -108,28 +108,43 @@ extension NoteQueries on NoteRepository {
         where.add('notes_fts MATCH ?');
         args.add('"${q.replaceAll('"', '""')}"');
       } else {
-        // **短词（1~2 个字）也要搜正文。**
+        // **短词（1~2 个字）走逐字分段索引，不再全表 LIKE。**
         //
-        // FTS5 的 trigram 分词器要求至少 3 个字符，所以两字词只能走 LIKE；
-        // 而以前这里只 LIKE 标题和摘要 —— 中文里两字词恰恰最常见
-        // （"读书""会议""旅行"），用户的感受就是"明明在正文里，搜不到"。
-        // 全表扫 content 在几百篇的量级完全无感（每篇几 KB）。
-        where.add(
-          '(n.title LIKE ? ESCAPE ? OR n.excerpt LIKE ? ESCAPE ? '
-          'OR n.content LIKE ? ESCAPE ?)',
-        );
-        // **必须转义 % 和 _**。这两个字符在 LIKE 里是通配符，
-        // 不转义的话搜一个 "%" 会把整库都匹配出来，搜 "a_b" 也会命中
-        // "axb" —— 用户的感受是"搜什么都出一堆"。
-        final esc = q
-            .replaceAll(r'\', r'\\')
-            .replaceAll('%', r'\%')
-            .replaceAll('_', r'\_');
-        final pat = '%$esc%';
-        for (var i = 0; i < 3; i++) {
-          args
-            ..add(pat)
-            ..add(r'\');
+        // FTS5 的 trigram 分词器要求至少 3 个字符，所以两字词以前只能
+        // `title/excerpt/content LIKE '%x%'` —— 全表扫正文。中文里两字词
+        // 恰恰最常见（"读书""会议""旅行"），笔记一多就卡。
+        //
+        // v11 起另有一张 [note_segments]：存的是**切分过的**正文（每个
+        // 汉字一个 token）。FTS5 的短语查询要求 token 相邻且有序，
+        // 于是 `MATCH '"读 书"'` 精确等于子串「读书」，而且走索引。
+        final phrase = searchPhrase(q);
+        if (phrase != null) {
+          from += ' JOIN note_segments seg ON seg.rowid = n.id';
+          where.add('note_segments MATCH ?');
+          args.add(phrase);
+        } else {
+          // **切不出 token 的词（`%`、`_`、`\` 这类纯符号）还得走 LIKE。**
+          //
+          // 分段索引里只存汉字和拉丁词，标点符号根本没进索引 —— 搜
+          // 「100%」里的那个 `%`、搜文件名里的 `_`，只能扫。这类词极少，
+          // 全表扫无所谓；把符号塞进索引反而会让索引膨胀。
+          //
+          // 注意 LIKE 里 `%` `_` 是通配符，**必须转义**，否则搜一个 `%`
+          // 会命中整库、搜 `a_b` 会命中 `axb`。
+          where.add(
+            '(n.title LIKE ? ESCAPE ? OR n.excerpt LIKE ? ESCAPE ? '
+            'OR n.content LIKE ? ESCAPE ?)',
+          );
+          final esc = q
+              .replaceAll(r'\', r'\\')
+              .replaceAll('%', r'\%')
+              .replaceAll('_', r'\_');
+          final pat = '%$esc%';
+          for (var i = 0; i < 3; i++) {
+            args
+              ..add(pat)
+              ..add(r'\');
+          }
         }
       }
     }
