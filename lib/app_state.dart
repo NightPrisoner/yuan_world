@@ -60,22 +60,39 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 异地的完整备份目录（外接盘、网盘同步目录…），空字符串表示没设。
-  ///
-  /// 本机的 `data/backups/` 和数据库在同一块盘上 —— 盘一坏，库和备份一起
-  /// 没。设了这个目录之后，每次做完整备份会**额外**往那儿放一份。
-  String get backupMirrorDir => repo.getSetting('backup.mirrorDir') ?? '';
+  /// 快照目录（用户可改）。空表示用默认的 `<数据目录>/snapshots/`。
+  String get backupSnapshotDir => repo.getSetting('backup.snapshotDir') ?? '';
 
-  bool get backupMirrorEnabled => backupMirrorDir.trim().isNotEmpty;
+  /// 完整备份目录（用户可改）。空表示用默认的 `<数据目录>/backups/`。
+  String get backupFullDir => repo.getSetting('backup.fullDir') ?? '';
 
-  void setBackupMirrorDir(String path) {
-    repo.setSetting('backup.mirrorDir', path.trim());
+  bool get backupSnapshotDirIsCustom => backupSnapshotDir.trim().isNotEmpty;
+
+  bool get backupFullDirIsCustom => backupFullDir.trim().isNotEmpty;
+
+  /// 改快照目录（空串 = 回默认）。
+  void setBackupSnapshotDir(String path) {
+    repo.setSetting('backup.snapshotDir', path.trim());
+    _syncBackupDirs();
     notifyListeners();
   }
 
-  DateTime? get lastMirrorAt => _readTime('backup.lastMirrorAt');
-  DateTime? get lastMirrorErrorAt => _readTime('backup.lastMirrorErrorAt');
-  String? get lastMirrorError => repo.getSetting('backup.lastMirrorError');
+  /// 改完整备份目录（空串 = 回默认）。
+  void setBackupFullDir(String path) {
+    repo.setSetting('backup.fullDir', path.trim());
+    _syncBackupDirs();
+    notifyListeners();
+  }
+
+  /// 把设置里的目录同步给 [BackupService]。
+  ///
+  /// 服务本身不碰设置表 —— 启动、改设置、搬家之后都得来这里推一次，
+  /// 否则它还在往旧位置写。
+  void _syncBackupDirs() {
+    backup
+      ..snapshotDirPath = backupSnapshotDir
+      ..fullBackupDirPath = backupFullDir;
+  }
 
   /// 自动快照的节奏与保留份数 —— 默认值，可以在设置里改。
   static const Duration autoSnapshotEvery = Duration(hours: 24);
@@ -276,27 +293,8 @@ class AppState extends ChangeNotifier {
       );
       repo.setSetting('backup.lastFullError', '');
       repo.setSetting('backup.lastFullErrorAt', '');
-      // 本机那份已经好了；往异地再放一份，失败只记在异地那一栏
-      await _mirrorFullBackup(file);
     } catch (e) {
       _recordError('backup.lastFullError', 'backup.lastFullErrorAt', e);
-    }
-  }
-
-  /// 把刚做好的完整备份再复制一份到用户指定的异地目录。
-  ///
-  /// 失败**不影响本机备份的记账** —— 本机那份是实实在在写好了的，
-  /// 把"异地复制失败"记到 `backup.lastFullError` 里会让用户以为整个备份
-  /// 都没成，反而更糊涂。所以单独一栏。
-  Future<void> _mirrorFullBackup(File file) async {
-    final dir = backupMirrorDir.trim();
-    if (dir.isEmpty) return;
-    try {
-      await backup.mirrorFullBackup(file, Directory(dir), keep: backupFullKeep);
-      repo.setSetting('backup.lastMirrorAt', DateTime.now().toIso8601String());
-      repo.setSetting('backup.lastMirrorError', '');
-    } catch (e) {
-      _recordError('backup.lastMirrorError', 'backup.lastMirrorErrorAt', e);
     }
   }
 
@@ -313,18 +311,20 @@ class AppState extends ChangeNotifier {
 
   /// 手动触发一次完整备份。
   ///
-  /// [targetDir] 为空时写到本机的 `backups/` 目录（自动轮转、并顺带复制
-  /// 一份到异地目录）；给了就写到用户当场挑的那个文件夹里 —— 那地方是
-  /// 用户自己的（移动硬盘、网盘同步目录），我们只放一份进去，不轮转、
-  /// 也不碰里面的其它东西。
+  /// [targetDir] 为空时写到设置里的完整备份目录（默认 `backups/`，自动
+  /// 轮转）；给了就写到用户当场挑的那个文件夹里 —— 那地方是用户自己的
+  /// （移动硬盘、网盘同步目录），我们只放一份进去，不轮转、也不碰里面的
+  /// 其它东西。
   Future<File> createFullBackupNow({
     Directory? targetDir,
     void Function(double progress)? onProgress,
+    bool Function()? isCancelled,
   }) async {
     final file = await backup.createFullBackup(
       keep: backupFullKeep,
       targetDir: targetDir,
       onProgress: onProgress,
+      isCancelled: isCancelled,
     );
     repo.setSetting(
       'backup.lastFullAt',
@@ -332,8 +332,6 @@ class AppState extends ChangeNotifier {
     );
     repo.setSetting('backup.lastFullError', '');
     repo.setSetting('backup.lastFullErrorAt', '');
-    // 用户当场挑的位置已经就是"别的地方"了，不必再往镜像目录复制一遍
-    if (targetDir == null) await _mirrorFullBackup(file);
     notifyListeners();
     return file;
   }
@@ -372,6 +370,9 @@ class AppState extends ChangeNotifier {
   // ── 生命周期 ────────────────────────────────────────────────────────────
 
   Future<void> init() async {
+    // 备份/快照的自定义目录先同步给服务，后面一整套流程（快照是否到期、
+    // 完整备份写哪儿）都读它。
+    _syncBackupDirs();
     final mode = repo.getSetting('themeMode');
     if (mode != null) {
       _themeMode = switch (mode) {

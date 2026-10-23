@@ -105,10 +105,44 @@ void main() {
     expect(state.backupAutoFull, isFalse);
   });
 
-  testWidgets('完整备份目录单独列出来，不跟快照混在一起', (tester) async {
+  testWidgets('快照与完整备份各成一栏，目录各自能改也能回默认', (tester) async {
     await pumpSettings(tester);
-    expect(find.text('快照目录'), findsOneWidget);
-    expect(find.text('完整备份目录'), findsOneWidget);
+    // 两栏各自的标题都在（快照栏在上、完整备份栏在下）
+    expect(find.text('自动快照'), findsOneWidget);
+    expect(find.text('自动完整备份'), findsOneWidget);
+    // 默认状态下两行都写着"存在默认位置"，副标题里是真实路径
+    expect(find.text('快照存在默认位置'), findsOneWidget);
+    expect(find.text('备份存在默认位置'), findsOneWidget);
+    expect(
+      find.textContaining('${Platform.pathSeparator}snapshots'),
+      findsWidgets,
+    );
     expect(find.textContaining('${Platform.pathSeparator}backups'), findsWidgets);
+    // 没改过目录时不显示"回到默认位置"（回默认是没意义的）
+    expect(find.text('快照回到默认位置'), findsNothing);
+    expect(find.text('备份回到默认位置'), findsNothing);
+  });
+
+  testWidgets('改了备份目录之后：显示新目录，并出现"回到默认位置"', (tester) async {
+    final custom = Directory(
+      '${root.path}${Platform.pathSeparator}my_backups',
+    )..createSync(recursive: true);
+    state.setBackupFullDir(custom.path);
+    await pumpSettings(tester);
+
+    expect(find.text('备份存到：${custom.path}'), findsOneWidget);
+    expect(find.text('备份回到默认位置'), findsOneWidget);
+    // 快照那栏不受影响
+    expect(find.text('快照存在默认位置'), findsOneWidget);
+    expect(find.text('快照回到默认位置'), findsNothing);
+
+    // 点"回到默认位置"就清掉自定义路径
+    await tester.tap(find.text('备份回到默认位置'));
+    await tester.pumpAndSettle();
+    expect(state.backupFullDir, '');
+    expect(
+      state.backup.fullBackupDir.path,
+      state.backup.defaultFullBackupDir.path,
+    );
   });
 }

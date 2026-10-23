@@ -75,6 +75,17 @@ class BackupManifest {
   }
 }
 
+/// 用户主动取消了备份。
+///
+/// 单独一个类型，是为了让界面能把"我不想备了"和"备份出错了"分开说 ——
+/// 后者要红着脸报警，前者只需要一句"已取消"。
+class BackupCancelledException implements Exception {
+  const BackupCancelledException();
+
+  @override
+  String toString() => '备份已取消';
+}
+
 /// 恢复的结果，用来给用户一句人话。
 class RestoreResult {
   const RestoreResult({
@@ -101,16 +112,40 @@ class BackupService {
 
   final AppDatabase db;
 
+  /// 用户给快照指定的目录；空表示用默认的 `<root>/snapshots/`。
+  ///
+  /// 由 [AppState] 在启动和用户改设置时同步进来 —— 服务本身不碰设置表，
+  /// 它只管"往这个目录写"。
+  String snapshotDirPath = '';
+
+  /// 用户给完整备份指定的目录；空表示用默认的 `<root>/backups/`。
+  String fullBackupDirPath = '';
+
   /// 包里的数据库条目名、清单条目名。恢复时按这两个名字认。
   static const String databaseEntryName = 'yuanworld.db';
   static const String manifestEntryName = 'backup.json';
 
-  /// 快照目录：`<root>/snapshots/`。
-  Directory get snapshotDir {
-    final d = Directory(p.join(db.rootDir.path, 'snapshots'));
+  /// 数据库在默认位置的快照目录（回默认时用）。
+  Directory get defaultSnapshotDir => Directory(p.join(db.rootDir.path, 'snapshots'));
+
+  /// 数据库在默认位置的完整备份目录。
+  Directory get defaultFullBackupDir =>
+      Directory(p.join(db.rootDir.path, 'backups'));
+
+  /// 快照目录：用户指定了就写那儿，否则 `<root>/snapshots/`。
+  Directory get snapshotDir => _ensure(snapshotDirPath, defaultSnapshotDir);
+
+  /// 完整备份目录：用户指定了就写那儿，否则 `<root>/backups/`。
+  Directory get fullBackupDir => _ensure(fullBackupDirPath, defaultFullBackupDir);
+
+  /// 指定的目录优先；没指定（或指定了个空串）就用默认的。
+  ///
+  /// 建不出来（磁盘满、同名文件占位）不在这里炸 —— 让真正的写操作去失败，
+  /// 那边有明确的错误信息，界面也能把它显示出来。
+  Directory _ensure(String custom, Directory fallback) {
+    final trimmed = custom.trim();
+    final d = trimmed.isEmpty ? fallback : Directory(trimmed);
     if (!d.existsSync()) {
-      // 建不出来（磁盘满、同名文件占位）别在这里炸 —— 让真正的写操作
-      // 去失败，那边有明确的错误信息，界面也能把它显示出来。
       try {
         d.createSync(recursive: true);
       } catch (_) {}
@@ -201,6 +236,7 @@ class BackupService {
   Future<File> exportAllTo(
     File target, {
     void Function(double progress)? onProgress,
+    bool Function()? isCancelled,
   }) async {
     // 数据库先导出一致副本：VACUUM INTO 必须在当前连接上跑
     final tmpDir = Directory.systemTemp.createTempSync('yw_backup_');
@@ -240,6 +276,16 @@ class BackupService {
         onProgress?.call((done / total).clamp(0.0, 1.0));
       }
 
+      // 用户点了「取消」就别再往下压了。抛一个专门的异常，
+      // 调用方（界面）靠它区分"用户主动取消"和"真出错了"——
+      // 后者要报警、前者不必吓人。
+      void checkCancelled() {
+        if (isCancelled?.call() ?? false) {
+          throw const BackupCancelledException();
+        }
+      }
+
+      checkCancelled();
       final encoder = ZipFileEncoder()..create(target.path);
       try {
         // 用异步版 addFile：它压完会 close 掉文件句柄。同步版不关，
@@ -248,6 +294,7 @@ class BackupService {
         bump();
         var sinceYield = 0;
         for (final entry in media.entries) {
+          checkCancelled();
           await encoder.addFile(entry.value, entry.key);
           bump();
           // 让出事件循环：不然打包期间界面完全是一张静止画面
@@ -256,6 +303,7 @@ class BackupService {
             await Future<void>.delayed(Duration.zero);
           }
         }
+        checkCancelled();
         encoder.addArchiveFile(
           ArchiveFile.string('backup.json', manifestJson),
         );
@@ -336,21 +384,6 @@ class BackupService {
 
   // ── 自动完整备份 ────────────────────────────────────────────────────────
 
-  /// 自动完整备份（数据库 + 全部媒体）落在 `<数据目录>/backups/`。
-  ///
-  /// 跟每日快照（`snapshots/`，几兆、只有数据库）分开放：一个是"改坏了能
-  /// 立刻翻回去"，一个是"整台机器没了也能搬回来"，体积差两个数量级，
-  /// 混在一起既难轮转也难跟用户解释。
-  Directory get fullBackupDir {
-    final dir = Directory(p.join(db.rootDir.path, 'backups'));
-    if (!dir.existsSync()) {
-      try {
-        dir.createSync(recursive: true);
-      } catch (_) {}
-    }
-    return dir;
-  }
-
   /// 现有的自动完整备份，**新的在前**。
   List<File> fullBackups() {
     if (!fullBackupDir.existsSync()) return const <File>[];
@@ -385,6 +418,7 @@ class BackupService {
     int keep = 2,
     Directory? targetDir,
     void Function(double progress)? onProgress,
+    bool Function()? isCancelled,
   }) async {
     final now = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
@@ -406,7 +440,7 @@ class BackupService {
       n++;
     }
     final file = File(p.join(outDir.path, name));
-    await exportAllTo(file, onProgress: onProgress);
+    await exportAllTo(file, onProgress: onProgress, isCancelled: isCancelled);
     if (targetDir != null) return file;
     final files = fullBackups();
     for (var i = keep; i < files.length; i++) {
@@ -417,61 +451,6 @@ class BackupService {
       }
     }
     return file;
-  }
-
-  /// 把一份完整备份**另存到别处**（外接盘、网盘同步目录…）。
-  ///
-  /// 这是为了解决「备份和数据库在同一块硬盘上」这个死角：本机的
-  /// `snapshots/` 和 `backups/` 都在 `data/` 底下，那块盘一坏，数据库和
-  /// 备份一起没。真正要防的是「文件在别处」。
-  ///
-  /// 落到 `<mirror>/yuanworld-backups/` 子目录里，不污染用户选的目录
-  /// （很多人会直接选网盘的根目录）。镜像目录里也按 [keep] 轮转，
-  /// 只删自己放进去的 `full-*.zip`，别的东西一概不碰。
-  ///
-  /// 失败会抛异常 —— 调用方负责记下原因，**但不能因此认为本机备份失败**：
-  /// 本机那份已经写好了。
-  Future<File> mirrorFullBackup(
-    File source,
-    Directory mirror, {
-    int keep = 2,
-  }) async {
-    if (!source.existsSync()) {
-      throw StateError('要复制到异地的备份文件不存在：${source.path}');
-    }
-    final target = Directory(p.join(mirror.path, 'yuanworld-backups'));
-    target.createSync(recursive: true);
-
-    final dest = File(p.join(target.path, p.basename(source.path)));
-    // 同名先删：copy 在文件已存在时会抛，而"上一次同一秒写过一份"是很
-    // 现实的场景（用户连点两次立即备份）
-    if (dest.existsSync()) dest.deleteSync();
-    final copied = await source.copy(dest.path);
-
-    // 轮转：只认自己放进去的 full-*.zip，按文件名倒序（时间戳天然有序）
-    final files = target.listSync().whereType<File>().where((f) {
-      final name = p.basename(f.path);
-      return name.startsWith('full-') && name.endsWith('.zip');
-    }).toList()..sort((a, b) => b.path.compareTo(a.path));
-    for (var i = keep; i < files.length; i++) {
-      try {
-        files[i].deleteSync();
-      } catch (_) {
-        // 网盘目录里有时有占位文件删不掉，不该让备份流程失败
-      }
-    }
-    return copied;
-  }
-
-  /// 现有的异地完整备份，**新的在前**。
-  List<File> mirroredFullBackups(Directory mirror) {
-    final target = Directory(p.join(mirror.path, 'yuanworld-backups'));
-    if (!target.existsSync()) return const <File>[];
-    final files = target.listSync().whereType<File>().where((f) {
-      final name = p.basename(f.path);
-      return name.startsWith('full-') && name.endsWith('.zip');
-    }).toList()..sort((a, b) => b.path.compareTo(a.path));
-    return files;
   }
 
   // ── 恢复 ────────────────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/platform/window_mode.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/widgets/app_background.dart';
+import '../../data/backup/backup_service.dart';
 import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
@@ -29,14 +29,6 @@ import 'diagnostics_sheet.dart';
 import 'field_manager_page.dart';
 
 /// 快照目录（还没建就建出来，用户点"打开"时才不会是空路径）。
-Directory _snapshotDir(AppState state) {
-  final d = Directory(
-    '${state.db.rootDir.path}${Platform.pathSeparator}snapshots',
-  );
-  if (!d.existsSync()) d.createSync(recursive: true);
-  return d;
-}
-
 /// 自动完整备份目录（同上）。
 Directory _fullBackupDir(AppState state) => state.backup.fullBackupDir;
 
@@ -76,21 +68,6 @@ String _fullBackupHint(AppState state) {
   final mb = files.fold<int>(0, (s, f) => s + f.lengthSync()) / 1024 / 1024;
   return '最近一次自动完整备份：${_stamp(last)}，共 ${files.length} 份，'
       '占 ${mb.toStringAsFixed(0)} MB。';
-}
-
-/// 异地备份的实情：复制到哪儿了、上次成没成。
-String _mirrorHint(AppState state) {
-  final dir = state.backupMirrorDir.trim();
-  if (dir.isEmpty) return '';
-  final err = state.lastMirrorError;
-  if (err != null && err.isNotEmpty) {
-    final at = state.lastMirrorErrorAt;
-    final when = at == null ? '' : '（${_stamp(at)}）';
-    return '\n上次复制到别的地方没成功$when：$err';
-  }
-  final last = state.lastMirrorAt;
-  if (last == null) return '\n还没有往「$dir」复制过，下次完整备份时会一起放一份。';
-  return '\n最近一次复制到「$dir」：${_stamp(last)}。';
 }
 
 /// 点一下就有动作的设置行（备份、恢复这类）。
@@ -201,21 +178,23 @@ class _BackupChoice extends StatelessWidget {
   }
 }
 
-/// 让用户挑一个"备份也要放一份"的目录。
+/// 让用户挑一个目录（快照 / 完整备份的存放位置）。
 ///
-/// 不用 `saveFile`（那是存单个文件），这里要的是目录 —— 很多人会直接选
-/// 网盘的同步目录，之后每次完整备份都会自动复制一份进去。
-Future<void> _pickMirrorDir(BuildContext context, AppState state) async {
+/// 不用 `saveFile`（那是存单个文件），这里要的是目录。挑完先探一下能不能
+/// 写 —— 选到只读的盘或没权限的目录时让用户当场知道，而不是等他发现
+/// "备份一直没生效"。
+///
+/// 返回挑好的路径；用户取消或目录不可写时返回 null（不可写会自己弹提示）。
+Future<String?> _pickWritableDir(
+  BuildContext context,
+  String dialogTitle,
+) async {
   final messenger = ScaffoldMessenger.of(context);
-  final picked = await FilePicker.getDirectoryPath(
-    dialogTitle: '选择另外存一份备份的目录',
-  );
-  if (picked == null || picked.trim().isEmpty) return;
-  final dir = Directory(picked);
+  final picked = await FilePicker.getDirectoryPath(dialogTitle: dialogTitle);
+  if (picked == null || picked.trim().isEmpty) return null;
+  final dir = Directory(picked.trim());
   try {
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    // 先探一下能不能写。选到只读的盘或没权限的目录时，让用户当场知道，
-    // 而不是等一周后看到一句"上次备份没成功"。
     final probe = File('${dir.path}${Platform.pathSeparator}.yw-write-test');
     probe.writeAsStringSync('ok');
     probe.deleteSync();
@@ -226,13 +205,57 @@ Future<void> _pickMirrorDir(BuildContext context, AppState state) async {
         duration: const Duration(seconds: 4),
       ),
     );
-    return;
+    return null;
   }
-  state.setBackupMirrorDir(dir.path);
+  return dir.path;
+}
+
+/// 备份与快照各自的存放目录 —— 改地址、回默认。
+///
+/// 两件事都做成"一组一栏"：本地那栏里，开关、节奏、目录、回默认全在一起，
+/// 用户不用在设置页里来回找。
+Future<void> _pickBackupDir(
+  BuildContext context,
+  AppState state, {
+  required bool full,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final picked = await _pickWritableDir(
+    context,
+    full ? '完整备份存到这个文件夹' : '快照存到这个文件夹',
+  );
+  if (picked == null) return;
+  if (full) {
+    state.setBackupFullDir(picked);
+  } else {
+    state.setBackupSnapshotDir(picked);
+  }
   messenger.showSnackBar(
     SnackBar(
-      content: Text('以后每次完整备份都会再放一份到 ${dir.path}'),
+      content: Text(
+        full
+            ? '完整备份以后写到 $picked'
+            : '快照以后写到 $picked',
+      ),
       duration: const Duration(seconds: 4),
+    ),
+  );
+}
+
+/// 恢复默认目录。
+void _resetBackupDir(BuildContext context, AppState state, {required bool full}) {
+  final messenger = ScaffoldMessenger.of(context);
+  if (full) {
+    state.setBackupFullDir('');
+  } else {
+    state.setBackupSnapshotDir('');
+  }
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(
+        full ? '完整备份回到默认目录' : '快照回到默认目录',
+      ),
+      duration: const Duration(seconds: 3),
     ),
   );
 }
@@ -308,6 +331,7 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
 
   final progress = ValueNotifier<double>(0);
   var dialogClosed = false;
+  var cancelled = false;
 
   void closeDialog() {
     if (dialogClosed) return;
@@ -337,10 +361,15 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
           ],
         ),
       ),
+      // 备份几百兆时，用户可能突然想改主意。给一个真能停下来的按钮，
+      // 而不是只把对话框藏起来让它在后台继续压。
       actions: <Widget>[
         TextButton(
-          onPressed: closeDialog,
-          child: const Text('后台继续'),
+          onPressed: () {
+            cancelled = true;
+            closeDialog();
+          },
+          child: const Text('取消备份'),
         ),
       ],
     ),
@@ -350,21 +379,22 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
     final file = await state.createFullBackupNow(
       targetDir: target,
       onProgress: (v) => progress.value = v,
+      isCancelled: () => cancelled,
     );
     progress.value = 1;
     closeDialog();
-    final mirrored =
-        target == null &&
-        state.backupMirrorEnabled &&
-        state.lastMirrorError == null;
     messenger.showSnackBar(
       SnackBar(
         content: Text(
-          '已备份到 ${file.path}（${_mb(file.lengthSync())}）'
-          '${mirrored ? '\n另存了一份到 ${state.backupMirrorDir}' : ''}',
+          '已备份到 ${file.path}（${_mb(file.lengthSync())}）',
         ),
         duration: const Duration(seconds: 6),
       ),
+    );
+  } on BackupCancelledException {
+    closeDialog();
+    messenger.showSnackBar(
+      const SnackBar(content: Text('已取消备份，没有留下半截文件')),
     );
   } catch (e) {
     closeDialog();
@@ -892,10 +922,12 @@ class SettingsPage extends StatelessWidget {
 
             // ── 外观 ───────────────────────────────────────────────────
             _SectionHeader('外观'),
+            _Group(children: [_ThemeRow(state: state)]),
+            const SizedBox(height: 18),
+            // 「瀑布流视图」和它的「每行几列」是**同一件事**，所以单独成组：
+            // 开关和列数挨在一起，用户一眼就知道后者是在调前者。
             _Group(
               children: [
-                _ThemeRow(state: state),
-                _RowDivider(),
                 _SwitchRow(
                   icon: Icons.grid_view_rounded,
                   iconColor: c.functionalPalette[4],
@@ -1141,13 +1173,15 @@ class SettingsPage extends StatelessWidget {
 
             // ── 备份与恢复 ─────────────────────────────────────────────
             _SectionHeader('备份与恢复'),
+            // ── 快照 ────────────────────────────────────────────────────
+            // 开关、节奏、目录、回默认、上次成没成，全在这一栏里。
             _Group(
               children: [
                 _SwitchRow(
                   icon: Icons.history_rounded,
                   iconColor: c.functionalPalette[5],
                   label: '自动快照',
-                  subtitle: '只含数据库（几兆），图片视频不重复备份；保留最近 7 份',
+                  subtitle: '只含数据库（几兆），图片视频不重复备份',
                   value: state.backupAutoSnapshot,
                   onChanged: (v) => state.setBackupAutoSnapshot(v),
                 ),
@@ -1165,11 +1199,51 @@ class SettingsPage extends StatelessWidget {
                   ),
                 ],
                 _RowDivider(),
+                _ActionRow(
+                  icon: Icons.folder_special_rounded,
+                  iconColor: c.functionalPalette[3],
+                  label: state.backupSnapshotDirIsCustom
+                      ? '快照存到：${state.backup.snapshotDir.path}'
+                      : '快照存在默认位置',
+                  subtitle: state.backupSnapshotDirIsCustom
+                      ? '点一下换一个文件夹'
+                      : '${state.backup.snapshotDir.path} · 点一下换一个文件夹',
+                  onTap: () => _pickBackupDir(context, state, full: false),
+                ),
+                if (state.backupSnapshotDirIsCustom) ...[
+                  _RowDivider(),
+                  _ActionRow(
+                    icon: Icons.restart_alt_rounded,
+                    iconColor: c.tertiaryLabel,
+                    label: '快照回到默认位置',
+                    subtitle: state.backup.defaultSnapshotDir.path,
+                    onTap: () =>
+                        _resetBackupDir(context, state, full: false),
+                  ),
+                ],
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Text(
+                _snapshotHint(state),
+                style: AppText.caption1.copyWith(
+                  color: c.tertiaryLabel,
+                  height: 1.6,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 18),
+
+            // ── 完整备份 ────────────────────────────────────────────────
+            _Group(
+              children: [
                 _SwitchRow(
                   icon: Icons.inventory_2_rounded,
                   iconColor: c.functionalPalette[1],
                   label: '自动完整备份',
-                  subtitle: '数据库 + 全部图片视频，存在本机 backups 目录；保留最近 2 份',
+                  subtitle: '数据库 + 全部图片视频，带媒体的那份',
                   value: state.backupAutoFull,
                   onChanged: (v) => state.setBackupAutoFull(v),
                 ),
@@ -1188,6 +1262,28 @@ class SettingsPage extends StatelessWidget {
                 ],
                 _RowDivider(),
                 _ActionRow(
+                  icon: Icons.folder_special_rounded,
+                  iconColor: c.functionalPalette[3],
+                  label: state.backupFullDirIsCustom
+                      ? '备份存到：${state.backup.fullBackupDir.path}'
+                      : '备份存在默认位置',
+                  subtitle: state.backupFullDirIsCustom
+                      ? '点一下换一个文件夹'
+                      : '${state.backup.fullBackupDir.path} · 点一下换一个文件夹',
+                  onTap: () => _pickBackupDir(context, state, full: true),
+                ),
+                if (state.backupFullDirIsCustom) ...[
+                  _RowDivider(),
+                  _ActionRow(
+                    icon: Icons.restart_alt_rounded,
+                    iconColor: c.tertiaryLabel,
+                    label: '备份回到默认位置',
+                    subtitle: state.backup.defaultFullBackupDir.path,
+                    onTap: () => _resetBackupDir(context, state, full: true),
+                  ),
+                ],
+                _RowDivider(),
+                _ActionRow(
                   icon: Icons.archive_rounded,
                   iconColor: c.functionalPalette[2],
                   label: '立即完整备份一次',
@@ -1202,50 +1298,12 @@ class SettingsPage extends StatelessWidget {
                   subtitle: '会覆盖当前数据（恢复前会自动存一份安全副本）',
                   onTap: () => _restoreFromBackup(context, state),
                 ),
-                _RowDivider(),
-                _ActionRow(
-                  icon: Icons.cloud_upload_rounded,
-                  iconColor: c.functionalPalette[4],
-                  label: state.backupMirrorEnabled
-                      ? '每次备份再复制一份到：${state.backupMirrorDir}'
-                      : '让每次备份自动再存一份到另一个位置…',
-                  subtitle: state.backupMirrorEnabled
-                      ? '换一块盘或网盘同步目录，本机硬盘坏了也不至于全没'
-                      : '选个目录（外接盘、网盘同步目录），以后每次备份都自动放一份过去',
-                  onTap: () => _pickMirrorDir(context, state),
-                ),
-                if (state.backupMirrorEnabled) ...[
-                  _RowDivider(),
-                  _ActionRow(
-                    icon: Icons.close_rounded,
-                    iconColor: c.tertiaryLabel,
-                    label: '不再另存到别的地方',
-                    subtitle: '已经复制过去的文件不会被删掉',
-                    onTap: () => state.setBackupMirrorDir(''),
-                  ),
-                ],
-                _RowDivider(),
-                _PathRow(
-                  icon: Icons.folder_special_rounded,
-                  iconColor: c.functionalPalette[3],
-                  label: '快照目录',
-                  path: _snapshotDir(state).path,
-                ),
-                _RowDivider(),
-                _PathRow(
-                  icon: Icons.inventory_2_outlined,
-                  iconColor: c.functionalPalette[1],
-                  label: '完整备份目录',
-                  path: _fullBackupDir(state).path,
-                ),
               ],
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
               child: Text(
-                '${_snapshotHint(state)}\n'
-                '${_fullBackupHint(state)}'
-                '${_mirrorHint(state)}',
+                _fullBackupHint(state),
                 style: AppText.caption1.copyWith(
                   color: c.tertiaryLabel,
                   height: 1.6,
@@ -1877,6 +1935,13 @@ class _ThemeSeedPicker extends StatelessWidget {
   }
 }
 
+/// 背景图那一行右侧的文件名（太长就中间省略，光看名字能认出是哪张）。
+String _fileName(String path) {
+  final name = path.split(Platform.pathSeparator).last;
+  if (name.length <= 18) return name;
+  return '${name.substring(0, 8)}…${name.substring(name.length - 7)}';
+}
+
 /// 界面背景图：选一张本地图片铺在最底层，大小、位置、透明度、模糊都能调。
 ///
 /// 做成一整块而不是几个行，是因为这几样（图、大小、位置、透明度、模糊）
@@ -1931,76 +1996,38 @@ class ThemeBackgroundPicker extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
+        // 以前这里有一块 72 高的缩略预览。用户的原话是"背景图添加后不用
+        // 显示那个小的预览图" —— 那些滑杆调的是整页效果，一小块缩略图
+        // 既看不清也代表不了实际观感，不如把位置让给滑杆。
         Pressable(
           scale: 0.985,
           onTap: () => _pick(context),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-            child: SizedBox(
-              height: 72,
-              child: Stack(
-                fit: StackFit.expand,
-                children: <Widget>[
-                  ColoredBox(color: c.fill),
-                  if (has)
-                    // 预览按真实的大小/位置画，用户拖完滑杆就能看到效果，
-                    // 不用切出去看整页。缩放锚点与界面用的是同一套
-                    // Alignment 映射，所以所见即所得。
-                    Transform.scale(
-                      scale: state.themeBackgroundScale,
-                      alignment: Alignment(
-                        state.themeBackgroundFocus.dx * 2 - 1,
-                        state.themeBackgroundFocus.dy * 2 - 1,
-                      ),
-                      child: Image(
-                        image: ResizeImage(
-                          FileImage(File(path)),
-                          width: 480,
-                          policy: ResizeImagePolicy.fit,
-                        ),
-                        fit: BoxFit.cover,
-                        alignment: Alignment(
-                          state.themeBackgroundFocus.dx * 2 - 1,
-                          state.themeBackgroundFocus.dy * 2 - 1,
-                        ),
-                      ),
-                    ),
-                  if (has)
-                    // 缩略图忠实反映实际观感：真正压住照片的是页面底色，
-                    // 透明度越高压得越少。以前这里固定 0x66000000，预览
-                    // 永远比界面暗一截，等于给用户看了个假效果。
-                    ColoredBox(
-                      color: c.groupedBackground.withValues(
-                        alpha: AppBackground.keepFor(
-                          state.themeBackgroundOpacity,
-                        ),
-                      ),
-                    ),
-                  Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Icon(
-                          has
-                              ? Icons.image_rounded
-                              : Icons.add_photo_alternate_rounded,
-                          size: 16,
-                          // 用 label 而不是写死白色：遮罩是主题底色，浅色
-                          // 主题下底子是亮的，白字会直接糊掉。
-                          color: has ? c.label : c.secondaryLabel,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          has ? '换一张图' : '选一张图',
-                          style: AppText.footnote.copyWith(
-                            color: has ? c.label : c.secondaryLabel,
-                          ),
-                        ),
-                      ],
-                    ),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: c.fill,
+              borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  has ? Icons.image_rounded : Icons.add_photo_alternate_rounded,
+                  size: 16,
+                  color: c.secondaryLabel,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    has ? '换一张图' : '选一张图',
+                    style: AppText.footnote.copyWith(color: c.label),
                   ),
-                ],
-              ),
+                ),
+                if (has)
+                  Text(
+                    _fileName(path),
+                    style: AppText.caption2.copyWith(color: c.tertiaryLabel),
+                  ),
+              ],
             ),
           ),
         ),
