@@ -211,12 +211,11 @@ void main() {
 
       expect(find.text('自动快照'), findsOneWidget);
       expect(find.text('自动完整备份'), findsOneWidget);
-      expect(find.text('多久拍一次'), findsOneWidget);
-      expect(find.text('多久备份一次'), findsOneWidget);
 
+      // 间隔输入框和开关在同一行里，不再单独占一行
       final field = find.descendant(
         of: find.ancestor(
-          of: find.text('多久备份一次'),
+          of: find.text('自动完整备份'),
           matching: find.byType(Row),
         ).first,
         matching: find.byType(TextField),

@@ -105,39 +105,47 @@ void main() {
     expect(state.backupAutoFull, isFalse);
   });
 
-  testWidgets('快照与完整备份各成一栏，目录各自能改也能回默认', (tester) async {
+  testWidgets('快照与完整备份各占一行开关，目录也各占一行', (tester) async {
     await pumpSettings(tester);
-    // 两栏各自的标题都在（快照栏在上、完整备份栏在下）
+    // 开关和间隔合成同一行
     expect(find.text('自动快照'), findsOneWidget);
     expect(find.text('自动完整备份'), findsOneWidget);
-    // 默认状态下两行都写着"存在默认位置"，副标题里是真实路径
-    expect(find.text('快照存在默认位置'), findsOneWidget);
-    expect(find.text('备份存在默认位置'), findsOneWidget);
+    // 目录各占一行，路径直接写在行里
+    expect(find.text('快照存放位置'), findsOneWidget);
+    expect(find.text('备份存放位置'), findsOneWidget);
     expect(
       find.textContaining('${Platform.pathSeparator}snapshots'),
       findsWidgets,
     );
     expect(find.textContaining('${Platform.pathSeparator}backups'), findsWidgets);
-    // 没改过目录时不显示"回到默认位置"（回默认是没意义的）
-    expect(find.text('快照回到默认位置'), findsNothing);
-    expect(find.text('备份回到默认位置'), findsNothing);
+    // 没改过目录时不出现"自定义"标记
+    expect(find.text('自定义'), findsNothing);
   });
 
-  testWidgets('改了备份目录之后：显示新目录，并出现"回到默认位置"', (tester) async {
+  testWidgets('改了备份目录之后：行里显示新路径，并标记为自定义', (tester) async {
     final custom = Directory(
       '${root.path}${Platform.pathSeparator}my_backups',
     )..createSync(recursive: true);
     state.setBackupFullDir(custom.path);
     await pumpSettings(tester);
 
-    expect(find.text('备份存到：${custom.path}'), findsOneWidget);
-    expect(find.text('备份回到默认位置'), findsOneWidget);
-    // 快照那栏不受影响
-    expect(find.text('快照存在默认位置'), findsOneWidget);
-    expect(find.text('快照回到默认位置'), findsNothing);
+    expect(find.text(custom.path), findsOneWidget);
+    expect(find.text('自定义'), findsOneWidget);
+    // 快照那行不受影响
+    expect(
+      find.textContaining('${Platform.pathSeparator}snapshots'),
+      findsWidgets,
+    );
 
-    // 点"回到默认位置"就清掉自定义路径
-    await tester.tap(find.text('备份回到默认位置'));
+    // 菜单里能回默认
+    await tester.tap(find.text('备份存放位置'));
+    await tester.pumpAndSettle();
+    final resetItem = find.descendant(
+      of: find.byType(PopupMenuItem<String>),
+      matching: find.text('回到默认位置'),
+    );
+    expect(resetItem, findsOneWidget);
+    await tester.tap(resetItem);
     await tester.pumpAndSettle();
     expect(state.backupFullDir, '');
     expect(

@@ -18,6 +18,7 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/platform/window_mode.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/app_menu.dart';
 import '../../data/backup/backup_service.dart';
 import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
@@ -68,6 +69,30 @@ String _fullBackupHint(AppState state) {
   final mb = files.fold<int>(0, (s, f) => s + f.lengthSync()) / 1024 / 1024;
   return '最近一次自动完整备份：${_stamp(last)}，共 ${files.length} 份，'
       '占 ${mb.toStringAsFixed(0)} MB。';
+}
+
+/// 一行说明文字（备份成没成这类）。
+///
+/// 以前这些提示挂在分组外面当小字，现在并进组里一行 —— 它跟上面那行
+/// 说的是同一件事，分开摆反而要多滚一屏。
+class _HintRow extends StatelessWidget {
+  const _HintRow({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return _RowShell(
+      child: Text(
+        text,
+        style: AppText.caption1.copyWith(
+          color: c.tertiaryLabel,
+          height: 1.5,
+        ),
+      ),
+    );
+  }
 }
 
 /// 点一下就有动作的设置行（备份、恢复这类）。
@@ -1173,115 +1198,59 @@ class SettingsPage extends StatelessWidget {
 
             // ── 备份与恢复 ─────────────────────────────────────────────
             _SectionHeader('备份与恢复'),
-            // ── 快照 ────────────────────────────────────────────────────
-            // 开关、节奏、目录、回默认、上次成没成，全在这一栏里。
+            // 每一项只占一行：开关和间隔合成一行，目录写进副标题、右边
+            // 一个菜单按钮管"换位置/回默认"。四行说一件事的时代结束了。
             _Group(
               children: [
-                _SwitchRow(
+                _SwitchIntervalRow(
                   icon: Icons.history_rounded,
                   iconColor: c.functionalPalette[5],
                   label: '自动快照',
-                  subtitle: '只含数据库（几兆），图片视频不重复备份',
-                  value: state.backupAutoSnapshot,
-                  onChanged: (v) => state.setBackupAutoSnapshot(v),
+                  subtitle: '只含数据库，几兆',
+                  on: state.backupAutoSnapshot,
+                  onToggled: (v) => state.setBackupAutoSnapshot(v),
+                  value: state.snapshotEveryHours,
+                  unit: '小时',
+                  zeroHint: '现在是 0：不再自动拍，只能手动',
+                  onIntervalChanged: (v) => state.setSnapshotEveryHours(v),
                 ),
-                if (state.backupAutoSnapshot) ...[
-                  _RowDivider(),
-                  _IntervalRow(
-                    icon: Icons.schedule_rounded,
-                    iconColor: c.functionalPalette[5],
-                    label: '多久拍一次',
-                    subtitle: '按小时算，默认 24 小时',
-                    value: state.snapshotEveryHours,
-                    unit: '小时',
-                    zeroHint: '现在是 0：不再自动拍，只能手动',
-                    onChanged: (v) => state.setSnapshotEveryHours(v),
-                  ),
-                ],
                 _RowDivider(),
-                _ActionRow(
+                _BackupDirRow(
                   icon: Icons.folder_special_rounded,
                   iconColor: c.functionalPalette[3],
-                  label: state.backupSnapshotDirIsCustom
-                      ? '快照存到：${state.backup.snapshotDir.path}'
-                      : '快照存在默认位置',
-                  subtitle: state.backupSnapshotDirIsCustom
-                      ? '点一下换一个文件夹'
-                      : '${state.backup.snapshotDir.path} · 点一下换一个文件夹',
-                  onTap: () => _pickBackupDir(context, state, full: false),
+                  label: '快照存放位置',
+                  path: state.backup.snapshotDir.path,
+                  isCustom: state.backupSnapshotDirIsCustom,
+                  onPick: () => _pickBackupDir(context, state, full: false),
+                  onReset: () => _resetBackupDir(context, state, full: false),
                 ),
-                if (state.backupSnapshotDirIsCustom) ...[
-                  _RowDivider(),
-                  _ActionRow(
-                    icon: Icons.restart_alt_rounded,
-                    iconColor: c.tertiaryLabel,
-                    label: '快照回到默认位置',
-                    subtitle: state.backup.defaultSnapshotDir.path,
-                    onTap: () =>
-                        _resetBackupDir(context, state, full: false),
-                  ),
-                ],
-              ],
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-              child: Text(
-                _snapshotHint(state),
-                style: AppText.caption1.copyWith(
-                  color: c.tertiaryLabel,
-                  height: 1.6,
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 18),
-
-            // ── 完整备份 ────────────────────────────────────────────────
-            _Group(
-              children: [
-                _SwitchRow(
+                _RowDivider(),
+                _HintRow(text: _snapshotHint(state)),
+                _RowDivider(),
+                _SwitchIntervalRow(
                   icon: Icons.inventory_2_rounded,
                   iconColor: c.functionalPalette[1],
                   label: '自动完整备份',
-                  subtitle: '数据库 + 全部图片视频，带媒体的那份',
-                  value: state.backupAutoFull,
-                  onChanged: (v) => state.setBackupAutoFull(v),
+                  subtitle: '数据库 + 全部图片视频',
+                  on: state.backupAutoFull,
+                  onToggled: (v) => state.setBackupAutoFull(v),
+                  value: state.fullBackupEveryDays,
+                  unit: '天',
+                  zeroHint: '至少 1 天',
+                  onIntervalChanged: (v) => state.setFullBackupEveryDays(v),
                 ),
-                if (state.backupAutoFull) ...[
-                  _RowDivider(),
-                  _IntervalRow(
-                    icon: Icons.schedule_rounded,
-                    iconColor: c.functionalPalette[1],
-                    label: '多久备份一次',
-                    subtitle: '按天算，默认 7 天',
-                    value: state.fullBackupEveryDays,
-                    unit: '天',
-                    zeroHint: '至少 1 天',
-                    onChanged: (v) => state.setFullBackupEveryDays(v),
-                  ),
-                ],
                 _RowDivider(),
-                _ActionRow(
+                _BackupDirRow(
                   icon: Icons.folder_special_rounded,
                   iconColor: c.functionalPalette[3],
-                  label: state.backupFullDirIsCustom
-                      ? '备份存到：${state.backup.fullBackupDir.path}'
-                      : '备份存在默认位置',
-                  subtitle: state.backupFullDirIsCustom
-                      ? '点一下换一个文件夹'
-                      : '${state.backup.fullBackupDir.path} · 点一下换一个文件夹',
-                  onTap: () => _pickBackupDir(context, state, full: true),
+                  label: '备份存放位置',
+                  path: state.backup.fullBackupDir.path,
+                  isCustom: state.backupFullDirIsCustom,
+                  onPick: () => _pickBackupDir(context, state, full: true),
+                  onReset: () => _resetBackupDir(context, state, full: true),
                 ),
-                if (state.backupFullDirIsCustom) ...[
-                  _RowDivider(),
-                  _ActionRow(
-                    icon: Icons.restart_alt_rounded,
-                    iconColor: c.tertiaryLabel,
-                    label: '备份回到默认位置',
-                    subtitle: state.backup.defaultFullBackupDir.path,
-                    onTap: () => _resetBackupDir(context, state, full: true),
-                  ),
-                ],
+                _RowDivider(),
+                _HintRow(text: _fullBackupHint(state)),
                 _RowDivider(),
                 _ActionRow(
                   icon: Icons.archive_rounded,
@@ -1299,16 +1268,6 @@ class SettingsPage extends StatelessWidget {
                   onTap: () => _restoreFromBackup(context, state),
                 ),
               ],
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-              child: Text(
-                _fullBackupHint(state),
-                style: AppText.caption1.copyWith(
-                  color: c.tertiaryLabel,
-                  height: 1.6,
-                ),
-              ),
             ),
 
             // ── 帮助与诊断 ─────────────────────────────────────────────
@@ -1615,6 +1574,247 @@ class _NavRow extends StatelessWidget {
           ),
           Icon(Icons.chevron_right_rounded, size: 19, color: c.tertiaryLabel),
         ],
+      ),
+    );
+  }
+}
+
+/// 开关 + 间隔输入，**合成一行**。
+///
+/// 快照和完整备份都是"开不开"和"多久一次"两件事，拆成两行读起来像两个
+/// 独立设置，实际是一句话："每 24 小时自动拍一次快照"。所以开关旁边直接
+/// 摆输入框，关掉时输入框收起来，行高也跟着下去。
+class _SwitchIntervalRow extends StatefulWidget {
+  const _SwitchIntervalRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.subtitle,
+    required this.on,
+    required this.onToggled,
+    required this.value,
+    required this.unit,
+    required this.zeroHint,
+    required this.onIntervalChanged,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String subtitle;
+  final bool on;
+  final ValueChanged<bool> onToggled;
+  final int value;
+  final String unit;
+  final String zeroHint;
+  final ValueChanged<int> onIntervalChanged;
+
+  @override
+  State<_SwitchIntervalRow> createState() => _SwitchIntervalRowState();
+}
+
+class _SwitchIntervalRowState extends State<_SwitchIntervalRow> {
+  late final TextEditingController _input =
+      TextEditingController(text: '${widget.value}');
+
+  @override
+  void didUpdateWidget(_SwitchIntervalRow old) {
+    super.didUpdateWidget(old);
+    if (widget.value != old.value && _input.text != '${widget.value}') {
+      _input.text = '${widget.value}';
+    }
+  }
+
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  void _commit(String raw) {
+    final v = int.tryParse(raw.trim());
+    if (v == null) {
+      _input.text = '${widget.value}';
+      return;
+    }
+    widget.onIntervalChanged(v);
+    _input.text = '${widget.value}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final off = !widget.on;
+    return _RowShell(
+      icon: widget.icon,
+      iconColor: off ? c.quaternaryLabel : widget.iconColor,
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.label,
+                  style: AppText.body.copyWith(
+                    color: off ? c.secondaryLabel : c.label,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  off
+                      ? widget.subtitle
+                      : (widget.value <= 0
+                          ? widget.zeroHint
+                          : '${widget.subtitle} · 每 ${widget.value} ${widget.unit}'),
+                  style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                ),
+              ],
+            ),
+          ),
+          if (!off) ...[
+            SizedBox(
+              width: 56,
+              child: TextField(
+                controller: _input,
+                textAlign: TextAlign.center,
+                keyboardType: TextInputType.number,
+                onSubmitted: _commit,
+                onTapOutside: (_) => _commit(_input.text),
+                style: AppText.callout.copyWith(
+                  color: c.label,
+                  fontWeight: FontWeight.w600,
+                ),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: true,
+                  fillColor: c.fill,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              widget.unit,
+              style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+            ),
+            const SizedBox(width: 10),
+          ],
+          Switch.adaptive(value: widget.on, onChanged: widget.onToggled),
+        ],
+      ),
+    );
+  }
+}
+
+/// 备份/快照存哪儿 —— **一行搞定改地址和回默认**。
+///
+/// 原来"目录"和"回到默认位置"各占一行，加上开关和间隔就是四行说一件事。
+/// 现在路径写在副标题里，点右边那个按钮弹菜单：换文件夹 / 回默认。
+class _BackupDirRow extends StatelessWidget {
+  const _BackupDirRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.path,
+    required this.isCustom,
+    required this.onPick,
+    required this.onReset,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String path;
+  final bool isCustom;
+  final VoidCallback onPick;
+  final VoidCallback onReset;
+
+  Future<void> _menu(BuildContext buttonCtx) async {
+    final picked = await showAppMenu<String>(
+      buttonCtx,
+      anchor: AppMenuAnchor(context: buttonCtx),
+      header: label,
+      items: <AppMenuItem<String>>[
+        AppMenuItem<String>(
+          value: 'pick',
+          label: isCustom ? '换一个文件夹…' : '换个位置…',
+          icon: Icons.folder_open_rounded,
+        ),
+        if (isCustom)
+          AppMenuItem<String>(
+            value: 'reset',
+            label: '回到默认位置',
+            icon: Icons.restart_alt_rounded,
+          ),
+      ],
+    );
+    if (picked == 'pick') onPick();
+    if (picked == 'reset') onReset();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Builder(
+      builder: (btnCtx) => _RowShell(
+        icon: icon,
+        iconColor: iconColor,
+        onTap: () => _menu(btnCtx),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        label,
+                        style: AppText.body.copyWith(color: c.label),
+                      ),
+                      if (isCustom) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: c.tint.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '自定义',
+                            style: AppText.caption2.copyWith(color: c.tint),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    path,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              Icons.more_horiz_rounded,
+              size: 18,
+              color: c.quaternaryLabel,
+            ),
+          ],
+        ),
       ),
     );
   }
