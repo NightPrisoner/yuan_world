@@ -96,10 +96,17 @@ class AppBackground extends StatelessWidget {
     }
 
     if (blur > 0.5) {
-      // 模糊时把图放大一点点，否则边缘会被 blur 啃出一圈透明
+      // `tileMode: clamp` 让模糊在图像边缘采样到的是边缘像素本身，而不是
+      // 透明的"什么都没有"。以前这里靠 `Transform.scale(1.08)` 把图放大来
+      // 盖住那圈透明，副作用是模糊一开、画面就跳大 8% —— 用户反馈的
+      // 「模糊从 0 调到 1 图片大小会变」就是这一步。
       image = ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Transform.scale(scale: 1.08, child: image),
+        imageFilter: ui.ImageFilter.blur(
+          sigmaX: blur,
+          sigmaY: blur,
+          tileMode: TileMode.clamp,
+        ),
+        child: image,
       );
     }
 

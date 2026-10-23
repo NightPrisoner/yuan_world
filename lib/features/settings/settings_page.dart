@@ -131,6 +131,76 @@ class _ActionRow extends StatelessWidget {
   }
 }
 
+/// 备份存放位置的一个选项（弹窗里的一张卡片）。
+class _BackupChoice extends StatelessWidget {
+  const _BackupChoice({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Pressable(
+      scale: 0.99,
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+        decoration: BoxDecoration(
+          color: c.secondaryBackground,
+          borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+          border: Border.all(color: c.separator, width: 0.5),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: c.tint.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, size: 16, color: c.tint),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: AppText.body.copyWith(
+                      color: c.label,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: AppText.caption1.copyWith(
+                      color: c.tertiaryLabel,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// 让用户挑一个"备份也要放一份"的目录。
 ///
 /// 不用 `saveFile`（那是存单个文件），这里要的是目录 —— 很多人会直接选
@@ -167,15 +237,75 @@ Future<void> _pickMirrorDir(BuildContext context, AppState state) async {
   );
 }
 
-/// 立刻做一次完整备份：打包到本机 backups 目录，配了异地目录就顺手复制一份。
+/// 备份存到哪里。
+enum _BackupWhere { local, pick }
+
+/// 立刻做一次完整备份。
 ///
-/// 以前这里和"另外存一份到别的地方"是两条路：一条弹保存框让你挑一个 zip 放哪，
-/// 一条每周自动往镜像目录丢一份 —— 用户看着就是"两个功能重了"，而且手动那条
-/// 走的是内存里拼整包的老路，几百兆会卡住界面、也没有任何进度。
-/// 现在统一成一条：走流式的 `createFullBackupNow`，中途弹进度，结尾说清楚
-/// 存到了哪、有没有复制到异地。
+/// **先问存哪儿，再开始打包** —— 以前点一下就直接往 `data/backups/` 写，
+/// 想放移动硬盘的人只能备份完再自己去翻文件。现在给两个选择：
+/// 放本机（默认目录、自动轮转），或者当场挑一个文件夹（移动硬盘、网盘同步
+/// 目录都行，那个位置我们不轮转、也不碰里面别的东西）。
 Future<void> _backupNow(BuildContext context, AppState state) async {
   final messenger = ScaffoldMessenger.of(context);
+  final where = await showDialog<_BackupWhere>(
+    context: context,
+    builder: (ctx) {
+      final c = ctx.colors;
+      return AlertDialog(
+        title: const Text('备份存到哪里？'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '整包包含数据库和全部图片视频，几百兆起步。',
+              style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+            ),
+            const SizedBox(height: 14),
+            _BackupChoice(
+              icon: Icons.inventory_2_outlined,
+              label: '存在本机',
+              subtitle: '${_fullBackupDir(state).path}\n自动轮转，只留最近几份',
+              onTap: () => Navigator.of(ctx).pop(_BackupWhere.local),
+            ),
+            const SizedBox(height: 10),
+            _BackupChoice(
+              icon: Icons.folder_open_rounded,
+              label: '自己挑一个文件夹',
+              subtitle: '移动硬盘、网盘同步目录都行\n挑好的位置只放这一份，不会被清理',
+              onTap: () => Navigator.of(ctx).pop(_BackupWhere.pick),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      );
+    },
+  );
+  if (where == null || !context.mounted) return;
+
+  Directory? target;
+  if (where == _BackupWhere.pick) {
+    final picked = await FilePicker.getDirectoryPath(
+      dialogTitle: '备份存到这个文件夹',
+    );
+    if (picked == null || picked.trim().isEmpty) return;
+    target = Directory(picked.trim());
+    try {
+      target.createSync(recursive: true);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('这个文件夹用不了：$e')),
+      );
+      return;
+    }
+  }
+
   final progress = ValueNotifier<double>(0);
   var dialogClosed = false;
 
@@ -185,6 +315,10 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
     if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
   }
 
+  if (!context.mounted) {
+    progress.dispose();
+    return;
+  }
   // 打包在后台跑，先把进度框挂上去
   unawaited(showDialog<void>(
     context: context,
@@ -214,11 +348,15 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
 
   try {
     final file = await state.createFullBackupNow(
+      targetDir: target,
       onProgress: (v) => progress.value = v,
     );
     progress.value = 1;
     closeDialog();
-    final mirrored = state.backupMirrorEnabled && state.lastMirrorError == null;
+    final mirrored =
+        target == null &&
+        state.backupMirrorEnabled &&
+        state.lastMirrorError == null;
     messenger.showSnackBar(
       SnackBar(
         content: Text(
@@ -571,32 +709,43 @@ class _IntervalRowState extends State<_IntervalRow> {
               ],
             ),
           ),
-          SizedBox(
-            width: 62,
-            child: TextField(
-              controller: _input,
-              textAlign: TextAlign.center,
-              keyboardType: TextInputType.number,
-              onSubmitted: _commit,
-              onTapOutside: (_) => _commit(_input.text),
-              style: AppText.callout.copyWith(
-                color: c.label,
-                fontWeight: FontWeight.w600,
-              ),
-              decoration: InputDecoration(
-                isDense: true,
-                filled: true,
-                fillColor: c.fill,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide.none,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 64,
+                child: TextField(
+                  controller: _input,
+                  textAlign: TextAlign.center,
+                  keyboardType: TextInputType.number,
+                  onSubmitted: _commit,
+                  onTapOutside: (_) => _commit(_input.text),
+                  style: AppText.callout.copyWith(
+                    color: c.label,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: true,
+                    fillColor: c.fill,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
                 ),
-                suffixText: widget.unit,
-                suffixStyle: AppText.caption1.copyWith(color: c.tertiaryLabel),
               ),
-            ),
+              // 单位放在输入框**外面**：塞进 suffixText 时它和数字抢那点宽度，
+              // 宽度一固定，"24 小时"这种两位数加两个字的就显示不下了
+              // （以前固定 62，用户看到的就是「24 小」被截掉）。
+              const SizedBox(width: 6),
+              Text(
+                widget.unit,
+                style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+              ),
+            ],
           ),
         ],
       ),
@@ -749,7 +898,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _SwitchRow(
                   icon: Icons.grid_view_rounded,
-                  iconColor: c.palette[4],
+                  iconColor: c.functionalPalette[4],
                   label: '瀑布流视图',
                   subtitle: '首页默认使用卡片布局',
                   value: state.gridMode,
@@ -762,7 +911,7 @@ class SettingsPage extends StatelessWidget {
                   _RowDivider(),
                   _ColumnCountRow(
                     icon: Icons.view_column_rounded,
-                    iconColor: c.palette[4],
+                    iconColor: c.functionalPalette[4],
                     value: state.gridColumns,
                     onChanged: state.setGridColumns,
                   ),
@@ -782,7 +931,7 @@ class SettingsPage extends StatelessWidget {
                 // 入口放这儿是因为它属于"系统级的地方"，不是一种筛选视图。
                 _NavRow(
                   icon: Icons.delete_outline_rounded,
-                  iconColor: c.palette[3],
+                  iconColor: c.functionalPalette[3],
                   label: '回收站',
                   subtitle: state.trashedNotes.isEmpty
                       ? '空的'
@@ -794,7 +943,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _NavRow(
                   icon: Icons.playlist_add_rounded,
-                  iconColor: c.palette[4],
+                  iconColor: c.functionalPalette[4],
                   label: '文章参数',
                   subtitle: '头参数 / 尾参数的个数与种类',
                   onTap: () => Navigator.of(context).push(
@@ -806,7 +955,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _SwitchRow(
                   icon: Icons.vertical_align_top_rounded,
-                  iconColor: c.palette[4],
+                  iconColor: c.functionalPalette[4],
                   label: '显示头参数',
                   subtitle: '标题与正文之间',
                   value: state.headFieldsEnabled,
@@ -815,7 +964,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _SwitchRow(
                   icon: Icons.vertical_align_bottom_rounded,
-                  iconColor: c.palette[4],
+                  iconColor: c.functionalPalette[4],
                   label: '显示尾参数',
                   subtitle: '文章末尾右对齐一行',
                   value: state.tailFieldsEnabled,
@@ -824,7 +973,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _ChoiceRow(
                   icon: Icons.format_size_rounded,
-                  iconColor: c.palette[3],
+                  iconColor: c.functionalPalette[3],
                   label: '文字大小',
                   options: AppState.textScaleOptions,
                   labelOf: (v) => switch (v) {
@@ -839,7 +988,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _SwitchRow(
                   icon: Icons.toc_rounded,
-                  iconColor: c.palette[4],
+                  iconColor: c.functionalPalette[4],
                   label: '显示文章目录',
                   subtitle: '正文有标题时，右上角出现目录入口',
                   value: state.tocEnabled,
@@ -848,7 +997,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _NavRow(
                   icon: Icons.folder_rounded,
-                  iconColor: c.palette[2],
+                  iconColor: c.functionalPalette[2],
                   label: '文件夹管理',
                   subtitle: '新建 / 重命名 / 排序 / 删除',
                   onTap: () => Navigator.of(context).push(
@@ -860,7 +1009,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _NavRow(
                   icon: Icons.label_rounded,
-                  iconColor: c.palette[5],
+                  iconColor: c.functionalPalette[5],
                   label: '标签管理',
                   subtitle: '重命名 / 合并 / 换色 / 删除',
                   onTap: () => Navigator.of(context).push(
@@ -880,7 +1029,7 @@ class SettingsPage extends StatelessWidget {
                   icon: state.privacyMode
                       ? Icons.lock_open_rounded
                       : Icons.lock_rounded,
-                  iconColor: c.palette[6],
+                  iconColor: c.functionalPalette[6],
                   label: state.privacyMode ? '退出隐私空间' : '进入隐私空间',
                   subtitle: state.privacyMode
                       ? '当前只看隐私内容，退出后回到全部笔记'
@@ -899,7 +1048,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _NavRow(
                   icon: Icons.password_rounded,
-                  iconColor: c.palette[6],
+                  iconColor: c.functionalPalette[6],
                   label: '隐私空间密码',
                   subtitle: hasPrivacyPassword(state) ? '已设置，点击修改' : '未设置，点击添加',
                   onTap: () => showPasswordSetup(context),
@@ -907,7 +1056,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _NavRow(
                   icon: Icons.help_outline_rounded,
-                  iconColor: c.palette[6],
+                  iconColor: c.functionalPalette[6],
                   label: '密保问题',
                   subtitle: hasSecurityQuestion(state) ? '已设置，点击修改' : '未设置，忘记密码时无法找回',
                   onTap: () => showSecurityQuestionSetup(context),
@@ -915,7 +1064,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _NavRow(
                   icon: Icons.download_rounded,
-                  iconColor: c.palette[0],
+                  iconColor: c.functionalPalette[0],
                   label: '导入 .docx 文集',
                   subtitle: '支持整个文件夹批量导入',
                   onTap: () => Navigator.of(context).push(
@@ -947,7 +1096,7 @@ class SettingsPage extends StatelessWidget {
               children: [
                 _PathRow(
                   icon: Icons.storage_rounded,
-                  iconColor: c.palette[2],
+                  iconColor: c.functionalPalette[2],
                   label: '数据库',
                   path:
                       '${state.db.rootDir.path}${Platform.pathSeparator}yuanworld.db',
@@ -957,7 +1106,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _PathRow(
                   icon: Icons.photo_library_rounded,
-                  iconColor: c.palette[6],
+                  iconColor: c.functionalPalette[6],
                   label: '图片与视频',
                   path: state.db.imageRoot.path,
                 ),
@@ -967,7 +1116,7 @@ class SettingsPage extends StatelessWidget {
                   _RowDivider(),
                   _ActionRow(
                     icon: Icons.drive_file_move_rounded,
-                    iconColor: c.palette[4],
+                    iconColor: c.functionalPalette[4],
                     label: state.dataLocationIsCustom
                         ? '换一个位置…'
                         : '更改数据位置…',
@@ -980,7 +1129,7 @@ class SettingsPage extends StatelessWidget {
                     _RowDivider(),
                     _ActionRow(
                       icon: Icons.restart_alt_rounded,
-                      iconColor: c.palette[0],
+                      iconColor: c.functionalPalette[0],
                       label: '回到默认位置',
                       subtitle: '搬回软件目录下的 data/，原来的那份会随搬移删掉',
                       onTap: () => _resetDataLocation(context, state),
@@ -996,7 +1145,7 @@ class SettingsPage extends StatelessWidget {
               children: [
                 _SwitchRow(
                   icon: Icons.history_rounded,
-                  iconColor: c.palette[5],
+                  iconColor: c.functionalPalette[5],
                   label: '自动快照',
                   subtitle: '只含数据库（几兆），图片视频不重复备份；保留最近 7 份',
                   value: state.backupAutoSnapshot,
@@ -1006,7 +1155,7 @@ class SettingsPage extends StatelessWidget {
                   _RowDivider(),
                   _IntervalRow(
                     icon: Icons.schedule_rounded,
-                    iconColor: c.palette[5],
+                    iconColor: c.functionalPalette[5],
                     label: '多久拍一次',
                     subtitle: '按小时算，默认 24 小时',
                     value: state.snapshotEveryHours,
@@ -1018,7 +1167,7 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _SwitchRow(
                   icon: Icons.inventory_2_rounded,
-                  iconColor: c.palette[1],
+                  iconColor: c.functionalPalette[1],
                   label: '自动完整备份',
                   subtitle: '数据库 + 全部图片视频，存在本机 backups 目录；保留最近 2 份',
                   value: state.backupAutoFull,
@@ -1028,7 +1177,7 @@ class SettingsPage extends StatelessWidget {
                   _RowDivider(),
                   _IntervalRow(
                     icon: Icons.schedule_rounded,
-                    iconColor: c.palette[1],
+                    iconColor: c.functionalPalette[1],
                     label: '多久备份一次',
                     subtitle: '按天算，默认 7 天',
                     value: state.fullBackupEveryDays,
@@ -1040,17 +1189,15 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _ActionRow(
                   icon: Icons.archive_rounded,
-                  iconColor: c.palette[2],
+                  iconColor: c.functionalPalette[2],
                   label: '立即完整备份一次',
-                  subtitle: state.backupMirrorEnabled
-                      ? '打包存在本机 backups 目录，并复制一份到异地目录'
-                      : '打包存在本机 backups 目录；想多一层保障可以再配个异地目录',
+                  subtitle: '打包数据库 + 全部图片视频，先问你存到哪里',
                   onTap: () => _backupNow(context, state),
                 ),
                 _RowDivider(),
                 _ActionRow(
                   icon: Icons.settings_backup_restore_rounded,
-                  iconColor: c.palette[0],
+                  iconColor: c.functionalPalette[0],
                   label: '从备份恢复…',
                   subtitle: '会覆盖当前数据（恢复前会自动存一份安全副本）',
                   onTap: () => _restoreFromBackup(context, state),
@@ -1058,13 +1205,13 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _ActionRow(
                   icon: Icons.cloud_upload_rounded,
-                  iconColor: c.palette[4],
+                  iconColor: c.functionalPalette[4],
                   label: state.backupMirrorEnabled
-                      ? '异地目录：${state.backupMirrorDir}'
-                      : '配一个异地目录…',
+                      ? '每次备份再复制一份到：${state.backupMirrorDir}'
+                      : '让每次备份自动再存一份到另一个位置…',
                   subtitle: state.backupMirrorEnabled
-                      ? '每次完整备份都会再复制一份到这里（外接盘、网盘同步目录）'
-                      : '本机的备份和数据库在同一块盘上，换个盘或网盘目录更稳妥',
+                      ? '换一块盘或网盘同步目录，本机硬盘坏了也不至于全没'
+                      : '选个目录（外接盘、网盘同步目录），以后每次备份都自动放一份过去',
                   onTap: () => _pickMirrorDir(context, state),
                 ),
                 if (state.backupMirrorEnabled) ...[
@@ -1080,14 +1227,14 @@ class SettingsPage extends StatelessWidget {
                 _RowDivider(),
                 _PathRow(
                   icon: Icons.folder_special_rounded,
-                  iconColor: c.palette[3],
+                  iconColor: c.functionalPalette[3],
                   label: '快照目录',
                   path: _snapshotDir(state).path,
                 ),
                 _RowDivider(),
                 _PathRow(
                   icon: Icons.inventory_2_outlined,
-                  iconColor: c.palette[1],
+                  iconColor: c.functionalPalette[1],
                   label: '完整备份目录',
                   path: _fullBackupDir(state).path,
                 ),
@@ -1114,7 +1261,7 @@ class SettingsPage extends StatelessWidget {
               children: [
                 _ActionRow(
                   icon: Icons.bug_report_rounded,
-                  iconColor: c.palette[3],
+                  iconColor: c.functionalPalette[3],
                   label: '导出诊断信息…',
                   subtitle: '版本、系统、库大小和最近的错误记录，复制后贴到反馈里',
                   onTap: () => showDiagnosticsSheet(context),
@@ -1132,7 +1279,7 @@ class SettingsPage extends StatelessWidget {
                 // 内容直接读 core/shortcuts 的定义，不在这里手抄一份。
                 _ActionRow(
                   icon: Icons.keyboard_rounded,
-                  iconColor: c.palette[5],
+                  iconColor: c.functionalPalette[5],
                   label: '快捷键',
                   subtitle: 'Ctrl+N 新建 · Ctrl+F 搜索 · Ctrl+/ 看全部',
                   onTap: () => showShortcutHelp(context),
@@ -1576,7 +1723,7 @@ class _ThemeRow extends StatelessWidget {
 
     return _RowShell(
       icon: Icons.palette_rounded,
-      iconColor: c.palette[3],
+      iconColor: c.functionalPalette[3],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1677,7 +1824,7 @@ class _ThemeRow extends StatelessWidget {
 /// 很容易调出一片看不清字的效果。
 ///
 /// 想大改视觉的走下面 [ThemeBackgroundPicker]：那条路由用户自己显式
-/// 选图和调浓度，出事也是他自己调出来的。
+/// 选图和调透明度，出事也是他自己调出来的。
 class _ThemeSeedPicker extends StatelessWidget {
   const _ThemeSeedPicker({required this.state});
   final AppState state;
@@ -1730,10 +1877,10 @@ class _ThemeSeedPicker extends StatelessWidget {
   }
 }
 
-/// 界面背景图：选一张本地图片铺在最底层，浓度和模糊都能调。
+/// 界面背景图：选一张本地图片铺在最底层，大小、位置、透明度、模糊都能调。
 ///
-/// 做成一整块而不是几个行，是因为这三样（图、浓度、模糊）互相关联 ——
-/// 换了图基本都要顺手重调浓度，拆开摆到设置页各处会很难用。
+/// 做成一整块而不是几个行，是因为这几样（图、大小、位置、透明度、模糊）
+/// 互相关联，换了图基本都要顺手重调透明度，拆开摆到设置页各处会很难用。
 ///
 /// **不提供"内置图片"**：内置图会让安装包变大，而且用户多半想用自己的
 /// 照片。代价是手机上得走文件选择器，桌面端就是普通打开文件对话框。
@@ -1820,7 +1967,7 @@ class ThemeBackgroundPicker extends StatelessWidget {
                     ),
                   if (has)
                     // 缩略图忠实反映实际观感：真正压住照片的是页面底色，
-                    // 浓度越高压得越少。以前这里固定 0x66000000，预览
+                    // 透明度越高压得越少。以前这里固定 0x66000000，预览
                     // 永远比界面暗一截，等于给用户看了个假效果。
                     ColoredBox(
                       color: c.groupedBackground.withValues(
@@ -1867,7 +2014,7 @@ class ThemeBackgroundPicker extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           _SliderRow(
-            label: '浓度',
+            label: '透明度',
             value: state.themeBackgroundOpacity,
             display: '${(state.themeBackgroundOpacity * 100).round()}%',
             onChanged: state.setThemeBackgroundOpacity,
@@ -1884,7 +2031,7 @@ class ThemeBackgroundPicker extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             // 说清楚代价，别让用户以为"背景图不花钱"
-            '图片铺在所有页面底下，浓度调高会让照片更清楚、底色更淡。'
+            '图片铺在所有页面底下，透明度调高会让照片更清楚、底色更淡。'
             '深色主题下照片会显得闷，建议配合浅色主题用。',
             style: AppText.caption2.copyWith(color: c.tertiaryLabel),
           ),

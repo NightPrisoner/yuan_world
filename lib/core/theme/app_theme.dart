@@ -79,6 +79,43 @@ class AppColors extends ThemeExtension<AppColors> {
   /// 用于文集 / 图表的多彩配色
   final List<Color> palette;
 
+  /// 语义功能色：设置页左栏那些小图标用的那一套。
+  ///
+  /// 和 [palette] 分开是因为两者承担的事完全不同：[palette] 是"给内容上色"
+  /// （文集颜色、图表系列），跟着强调色走才协调；这一套是**功能标记**
+  /// （备份是绿的、隐私是红的、回收站是橙的），用户靠颜色认功能，强调色
+  /// 一换它们全变样就"很怪"。所以 [fromSeed] 只动 palette，这一套永远是
+  /// 系统那十色。
+  List<Color> get functionalPalette => brightness == Brightness.dark
+      ? darkPalette
+      : lightPalette;
+
+  static const List<Color> lightPalette = <Color>[
+    Color(0xFF007AFF),
+    Color(0xFF34C759),
+    Color(0xFFFF9500),
+    Color(0xFFFF2D55),
+    Color(0xFFAF52DE),
+    Color(0xFF5856D6),
+    Color(0xFF00C7BE),
+    Color(0xFFFFCC00),
+    Color(0xFF5AC8FA),
+    Color(0xFFFF6482),
+  ];
+
+  static const List<Color> darkPalette = <Color>[
+    Color(0xFF0A84FF),
+    Color(0xFF30D158),
+    Color(0xFFFF9F0A),
+    Color(0xFFFF375F),
+    Color(0xFFBF5AF2),
+    Color(0xFF5E5CE6),
+    Color(0xFF40C8E0),
+    Color(0xFFFFD60A),
+    Color(0xFF64D2FF),
+    Color(0xFFFF7A93),
+  ];
+
   bool get isDark => brightness == Brightness.dark;
 
   static const AppColors light = AppColors(
@@ -95,18 +132,7 @@ class AppColors extends ThemeExtension<AppColors> {
     fill: Color(0x1F767680),
     tint: Color(0xFF007AFF),
     destructive: Color(0xFFFF3B30),
-    palette: <Color>[
-      Color(0xFF007AFF),
-      Color(0xFF34C759),
-      Color(0xFFFF9500),
-      Color(0xFFFF2D55),
-      Color(0xFFAF52DE),
-      Color(0xFF5856D6),
-      Color(0xFF00C7BE),
-      Color(0xFFFFCC00),
-      Color(0xFF5AC8FA),
-      Color(0xFFFF6482),
-    ],
+    palette: lightPalette,
   );
 
   static const AppColors dark = AppColors(
@@ -123,18 +149,7 @@ class AppColors extends ThemeExtension<AppColors> {
     fill: Color(0x1F767680),
     tint: Color(0xFF0A84FF),
     destructive: Color(0xFFFF453A),
-    palette: <Color>[
-      Color(0xFF0A84FF),
-      Color(0xFF30D158),
-      Color(0xFFFF9F0A),
-      Color(0xFFFF375F),
-      Color(0xFFBF5AF2),
-      Color(0xFF5E5CE6),
-      Color(0xFF40C8E0),
-      Color(0xFFFFD60A),
-      Color(0xFF64D2FF),
-      Color(0xFFFF7A93),
-    ],
+    palette: darkPalette,
   );
 
   /// 用自定义种子色派生出整套颜色。
@@ -178,6 +193,10 @@ class AppColors extends ThemeExtension<AppColors> {
     return base.copyWith(
       tint: accent,
       palette: rotated,
+      // **`functionalPalette` 不动。** 设置页左栏那些小图标（浅色、备份、
+      // 隐私、回收站…）用的是它，颜色本身就是"分类色"，红是隐私、绿是备份、
+      // 橙是回收站，换强调色时它们不该跟着一起变 —— 用户的原话是"看起来
+      // 很怪"。系统那套 palette 是 iOS 的语义色，本来就该跟强调色解耦。
       groupedBackground:
           _tintSurface(base.groupedBackground, accent, base.isDark),
       tertiaryBackground:

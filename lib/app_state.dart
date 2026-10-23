@@ -311,12 +311,19 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// 手动触发一次自动完整备份（设置页的"立即做一次完整备份"）。
+  /// 手动触发一次完整备份。
+  ///
+  /// [targetDir] 为空时写到本机的 `backups/` 目录（自动轮转、并顺带复制
+  /// 一份到异地目录）；给了就写到用户当场挑的那个文件夹里 —— 那地方是
+  /// 用户自己的（移动硬盘、网盘同步目录），我们只放一份进去，不轮转、
+  /// 也不碰里面的其它东西。
   Future<File> createFullBackupNow({
+    Directory? targetDir,
     void Function(double progress)? onProgress,
   }) async {
     final file = await backup.createFullBackup(
       keep: backupFullKeep,
+      targetDir: targetDir,
       onProgress: onProgress,
     );
     repo.setSetting(
@@ -325,7 +332,8 @@ class AppState extends ChangeNotifier {
     );
     repo.setSetting('backup.lastFullError', '');
     repo.setSetting('backup.lastFullErrorAt', '');
-    await _mirrorFullBackup(file);
+    // 用户当场挑的位置已经就是"别的地方"了，不必再往镜像目录复制一遍
+    if (targetDir == null) await _mirrorFullBackup(file);
     notifyListeners();
     return file;
   }

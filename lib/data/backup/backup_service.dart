@@ -377,8 +377,13 @@ class BackupService {
   /// 做一次自动完整备份并按 [keep] 轮转，返回写好的 zip。
   ///
   /// 内部走 [exportAllTo]：边压边写盘，不会把几百兆媒体全塞进内存。
+  ///
+  /// [targetDir] 给了就直接写到那个目录（用户手动选的位置），**不做轮转**
+  /// —— 那是用户自己挑的地方，里面可能有别的东西，我们只放一份进去，删不删
+  /// 由用户决定。不给才写进本机的 `backups/` 并按 [keep] 轮转。
   Future<File> createFullBackup({
     int keep = 2,
+    Directory? targetDir,
     void Function(double progress)? onProgress,
   }) async {
     final now = DateTime.now();
@@ -386,14 +391,23 @@ class BackupService {
     final stamp =
         '${now.year}${two(now.month)}${two(now.day)}'
         '-${two(now.hour)}${two(now.minute)}${two(now.second)}';
+    final outDir = targetDir ?? fullBackupDir;
+    if (!outDir.existsSync()) {
+      try {
+        outDir.createSync(recursive: true);
+      } catch (_) {
+        // 建不出来就让下面写文件的时候真报错，这里不吞
+      }
+    }
     var name = 'full-$stamp.zip';
     var n = 2;
-    while (File(p.join(fullBackupDir.path, name)).existsSync()) {
+    while (File(p.join(outDir.path, name)).existsSync()) {
       name = 'full-$stamp-$n.zip';
       n++;
     }
-    final file = File(p.join(fullBackupDir.path, name));
+    final file = File(p.join(outDir.path, name));
     await exportAllTo(file, onProgress: onProgress);
+    if (targetDir != null) return file;
     final files = fullBackups();
     for (var i = keep; i < files.length; i++) {
       try {
