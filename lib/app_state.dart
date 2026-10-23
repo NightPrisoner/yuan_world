@@ -358,6 +358,57 @@ class AppState extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
   ThemeMode get themeMode => _themeMode;
 
+  // ── 主题相关的读缓存 ────────────────────────────────────────────────────
+  //
+  // 这几个 getter 以前每次调用都现查一次 settings 表。听着不贵（一条
+  // 主键查询），但它们的调用点在 build 里：`AppChrome` 的 context.select、
+  // `MaterialApp` 的主题、设置页的每个滑杆，一帧可能问好几次。用户拖动
+  // 「透明度」滑杆时就是每帧十几次 SQL。
+  //
+  // 改成写的时候顺手存一份，读的时候直接用；不出现在设置页里的值
+  // （比如别的进程改库）本来也影响不到当前进程。
+  Color? _themeSeedCache;
+  String? _themeBgPathCache;
+  bool _themeCacheLoaded = false;
+  double _themeBgOpacityCache = 0.5;
+  double _themeBgBlurCache = 0;
+  double _themeBgScaleCache = 1;
+  Offset _themeBgFocusCache = const Offset(0.5, 0.5);
+
+  /// 把这几项从库里读进内存。启动时调一次，之后由各个 setter 维护。
+  void _loadThemeCache() {
+    final raw = int.tryParse(repo.getSetting('theme.seed') ?? '');
+    _themeSeedCache = raw == null ? null : Color(raw);
+    final path = (repo.getSetting('theme.bgPath') ?? '').trim();
+    _themeBgPathCache = path.isEmpty ? null : path;
+    _themeBgOpacityCache = (double.tryParse(
+      repo.getSetting('theme.bgOpacity') ?? '',
+    ) ?? 0.5).clamp(0.0, 1.0);
+    _themeBgBlurCache = (double.tryParse(
+      repo.getSetting('theme.bgBlur') ?? '',
+    ) ?? 0.0).clamp(0.0, 40.0);
+    _themeBgScaleCache = (double.tryParse(
+      repo.getSetting('theme.bgScale') ?? '',
+    ) ?? 1.0).clamp(1.0, 4.0);
+    final focus = repo.getSetting('theme.bgFocus') ?? '';
+    final parts = focus.split(',');
+    if (parts.length == 2) {
+      final x = double.tryParse(parts[0]);
+      final y = double.tryParse(parts[1]);
+      if (x != null && y != null) {
+        _themeBgFocusCache = Offset(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+      }
+    } else {
+      _themeBgFocusCache = const Offset(0.5, 0.5);
+    }
+    _themeCacheLoaded = true;
+  }
+
+  /// 第一次读主题相关设置时把库里的值搬进内存，之后只走内存。
+  void _ensureThemeCache() {
+    if (!_themeCacheLoaded) _loadThemeCache();
+  }
+
   bool _loading = true;
   bool get loading => _loading;
 
@@ -373,6 +424,7 @@ class AppState extends ChangeNotifier {
     // 备份/快照的自定义目录先同步给服务，后面一整套流程（快照是否到期、
     // 完整备份写哪儿）都读它。
     _syncBackupDirs();
+    _loadThemeCache();
     final mode = repo.getSetting('themeMode');
     if (mode != null) {
       _themeMode = switch (mode) {
@@ -746,16 +798,14 @@ class AppState extends ChangeNotifier {
   /// 只存种子色，不存整套调色板 —— 明暗两套主题都由它现推出来，
   /// 以后改派生规则时所有用户自动跟着更新。
   Color? get themeSeed {
-    final raw = int.tryParse(repo.getSetting('theme.seed') ?? '');
-    return raw == null ? null : Color(raw);
+    _ensureThemeCache();
+    return _themeSeedCache;
   }
 
   void setThemeSeed(Color? seed) {
-    if (seed == null) {
-      repo.setSetting('theme.seed', '');
-    } else {
-      repo.setSetting('theme.seed', '${seed.toARGB32()}');
-    }
+    _themeSeedCache = seed;
+    _themeCacheLoaded = true;
+    repo.setSetting('theme.seed', seed == null ? '' : '${seed.toARGB32()}');
     notifyListeners();
   }
 
@@ -769,20 +819,34 @@ class AppState extends ChangeNotifier {
     repo.setSetting('theme.bgBlur', '');
     repo.setSetting('theme.bgScale', '');
     repo.setSetting('theme.bgFocus', '');
+    _themeSeedCache = null;
+    _themeBgPathCache = null;
+    _themeBgOpacityCache = 0.5;
+    _themeBgBlurCache = 0;
+    _themeBgScaleCache = 1;
+    _themeBgFocusCache = const Offset(0.5, 0.5);
     notifyListeners();
   }
 
   /// 界面背景图（本地绝对路径）；null = 纯色背景。
+  ///
+  /// 图被用户删掉就当没设过 —— 否则每帧都在 File 上失败一次。
+  /// 存在性检查只在真正要返回路径时做，且只在值变化后第一次读时做。
   String? get themeBackgroundPath {
-    final raw = repo.getSetting('theme.bgPath') ?? '';
-    if (raw.isEmpty) return null;
-    // 图被用户删了就当没设过，否则每帧都在 File 上失败一次
-    if (!File(raw).existsSync()) return null;
-    return raw;
+    _ensureThemeCache();
+    final cached = _themeBgPathCache;
+    if (cached == null) return null;
+    if (!File(cached).existsSync()) {
+      _themeBgPathCache = null;
+      return null;
+    }
+    return cached;
   }
 
   void setThemeBackgroundPath(String? path) {
-    repo.setSetting('theme.bgPath', (path ?? '').trim());
+    final next = (path ?? '').trim();
+    _themeBgPathCache = next.isEmpty ? null : next;
+    repo.setSetting('theme.bgPath', next);
     notifyListeners();
   }
 
@@ -790,23 +854,25 @@ class AppState extends ChangeNotifier {
   ///
   /// 默认给 0.5 —— 满浓度铺在文字底下基本没法读，而太淡又看不出有图。
   double get themeBackgroundOpacity {
-    final raw = double.tryParse(repo.getSetting('theme.bgOpacity') ?? '');
-    return (raw ?? 0.5).clamp(0.0, 1.0);
+    _ensureThemeCache();
+    return _themeBgOpacityCache;
   }
 
   void setThemeBackgroundOpacity(double v) {
-    repo.setSetting('theme.bgOpacity', v.clamp(0.0, 1.0).toStringAsFixed(2));
+    _themeBgOpacityCache = v.clamp(0.0, 1.0);
+    repo.setSetting('theme.bgOpacity', _themeBgOpacityCache.toStringAsFixed(2));
     notifyListeners();
   }
 
   /// 背景图的模糊半径（逻辑像素）：调大一点，图就不跟正文抢注意力。
   double get themeBackgroundBlur {
-    final raw = double.tryParse(repo.getSetting('theme.bgBlur') ?? '');
-    return (raw ?? 0.0).clamp(0.0, 40.0);
+    _ensureThemeCache();
+    return _themeBgBlurCache;
   }
 
   void setThemeBackgroundBlur(double v) {
-    repo.setSetting('theme.bgBlur', v.clamp(0.0, 40.0).toStringAsFixed(1));
+    _themeBgBlurCache = v.clamp(0.0, 40.0);
+    repo.setSetting('theme.bgBlur', _themeBgBlurCache.toStringAsFixed(1));
     notifyListeners();
   }
 
@@ -815,12 +881,13 @@ class AppState extends ChangeNotifier {
   /// 下限 1 而不是更小 —— 小于 1 会露出底色，看起来像图没铺满，用户
   /// 真正想要的是「把画面里那一块放大看」，那就只有 >= 1。
   double get themeBackgroundScale {
-    final raw = double.tryParse(repo.getSetting('theme.bgScale') ?? '');
-    return (raw ?? 1.0).clamp(1.0, 4.0);
+    _ensureThemeCache();
+    return _themeBgScaleCache;
   }
 
   void setThemeBackgroundScale(double v) {
-    repo.setSetting('theme.bgScale', v.clamp(1.0, 4.0).toStringAsFixed(2));
+    _themeBgScaleCache = v.clamp(1.0, 4.0);
+    repo.setSetting('theme.bgScale', _themeBgScaleCache.toStringAsFixed(2));
     notifyListeners();
   }
 
@@ -829,21 +896,17 @@ class AppState extends ChangeNotifier {
   /// 存归一化值而不是像素偏移：窗口一拉大、手机上横竖屏一换，像素偏移
   /// 立刻失去意义，而「我要看图的右下角」这个意图不变。
   Offset get themeBackgroundFocus {
-    final raw = repo.getSetting('theme.bgFocus') ?? '';
-    final parts = raw.split(',');
-    if (parts.length == 2) {
-      final x = double.tryParse(parts[0]);
-      final y = double.tryParse(parts[1]);
-      if (x != null && y != null) {
-        return Offset(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
-      }
-    }
-    return const Offset(0.5, 0.5);
+    _ensureThemeCache();
+    return _themeBgFocusCache;
   }
 
   void setThemeBackgroundFocus(Offset v) {
-    final x = v.dx.clamp(0.0, 1.0).toStringAsFixed(3);
-    final y = v.dy.clamp(0.0, 1.0).toStringAsFixed(3);
+    _themeBgFocusCache = Offset(
+      v.dx.clamp(0.0, 1.0),
+      v.dy.clamp(0.0, 1.0),
+    );
+    final x = _themeBgFocusCache.dx.toStringAsFixed(3);
+    final y = _themeBgFocusCache.dy.toStringAsFixed(3);
     repo.setSetting('theme.bgFocus', '$x,$y');
     notifyListeners();
   }

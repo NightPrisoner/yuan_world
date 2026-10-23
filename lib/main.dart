@@ -158,7 +158,15 @@ class YuanWorldApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
+    // 这里**只挑真正影响 MaterialApp 本身的四个值**。
+    //
+    // 以前是 `context.watch<AppState>()`：笔记列表一刷新、待办勾一下、
+    // 收藏点一下，都会让整个 MaterialApp 重建一遍 —— 主题、本地化、
+    // 文字缩放那层 MediaQuery 全部重新拼装，等于一次"软重启界面"。
+    // 数据变化由下面的页面各自 watch，跟这里无关。
+    final look = context.select<AppState, ({ThemeMode mode, Color? seed, double scale})>(
+      (s) => (mode: s.themeMode, seed: s.themeSeed, scale: s.textScale),
+    );
     return MaterialApp(
       title: '元世界',
       navigatorKey: navigatorKey,
@@ -171,9 +179,9 @@ class YuanWorldApp extends StatelessWidget {
       localizationsDelegates: kAppLocalizationsDelegates,
       // 只有带 --dart-define=YW_PERF=true 的构建才有，见 kShowPerfOverlay
       showPerformanceOverlay: kShowPerfOverlay,
-      themeMode: state.themeMode,
-      theme: AppTheme.light(seed: state.themeSeed),
-      darkTheme: AppTheme.dark(seed: state.themeSeed),
+      themeMode: look.mode,
+      theme: AppTheme.light(seed: look.seed),
+      darkTheme: AppTheme.dark(seed: look.seed),
       // 字号缩放放在这里一处生效：不改 AppText 里的每个字号，
       // 也让第三方组件（对话框、滚轮、Toast）跟着一起缩放。
       //
@@ -181,8 +189,8 @@ class YuanWorldApp extends StatelessWidget {
       // 半透明铺在图上；没选就直接透传，一分钱不花。
       builder: (context, child) => AppChrome(
         child: MediaQuery.withClampedTextScaling(
-          minScaleFactor: state.textScale,
-          maxScaleFactor: state.textScale,
+          minScaleFactor: look.scale,
+          maxScaleFactor: look.scale,
           child: child ?? const SizedBox.shrink(),
         ),
       ),
