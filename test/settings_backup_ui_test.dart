@@ -118,11 +118,13 @@ void main() {
       findsWidgets,
     );
     expect(find.textContaining('${Platform.pathSeparator}backups'), findsWidgets);
-    // 没改过目录时不出现"自定义"标记
-    expect(find.text('自定义'), findsNothing);
+    // 三个动作都直接摆在行上，不用点开菜单才看得见
+    expect(find.text('打开'), findsWidgets);
+    expect(find.text('修改'), findsWidgets);
+    expect(find.text('回到默认'), findsWidgets);
   });
 
-  testWidgets('改了备份目录之后：行里显示新路径，并标记为自定义', (tester) async {
+  testWidgets('改了备份目录之后：行里显示新路径，点「默认」能退回去', (tester) async {
     final custom = Directory(
       '${root.path}${Platform.pathSeparator}my_backups',
     )..createSync(recursive: true);
@@ -130,22 +132,16 @@ void main() {
     await pumpSettings(tester);
 
     expect(find.text(custom.path), findsOneWidget);
-    expect(find.text('自定义'), findsOneWidget);
     // 快照那行不受影响
     expect(
       find.textContaining('${Platform.pathSeparator}snapshots'),
       findsWidgets,
     );
 
-    // 菜单里能回默认
-    await tester.tap(find.text('备份存放位置'));
-    await tester.pumpAndSettle();
-    final resetItem = find.descendant(
-      of: find.byType(PopupMenuItem<String>),
-      matching: find.text('回到默认位置'),
-    );
-    expect(resetItem, findsOneWidget);
-    await tester.tap(resetItem);
+    // 「回到默认」按钮就在备份那一行里，点一下退回默认位置。
+    // 页面上还有别的行也有这个按钮（数据库、图片、快照），备份那行在最下面。
+    final resetOnRow = find.text('回到默认').last;
+    await tester.tap(resetOnRow);
     await tester.pumpAndSettle();
     expect(state.backupFullDir, '');
     expect(

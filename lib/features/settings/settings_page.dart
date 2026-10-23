@@ -18,7 +18,6 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/platform/window_mode.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/widgets/app_menu.dart';
 import '../../data/backup/backup_service.dart';
 import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
@@ -809,29 +808,26 @@ class _IntervalRowState extends State<_IntervalRow> {
 }
 
 /// 瀑布流列数：**直接填数字，没有上限**。
-class _ColumnCountRow extends StatefulWidget {
-  const _ColumnCountRow({
-    required this.icon,
-    required this.iconColor,
-    required this.value,
-    required this.onChanged,
-  });
+/// 「每行几列」那个小输入框，只渲染控件本身。
+///
+/// 以前它自己占一整行、还要带一句副标题，其实它和上面「瀑布流视图」的
+/// 开关是同一件事，塞在同一行就够了。
+class _ColumnField extends StatefulWidget {
+  const _ColumnField({required this.value, required this.onChanged});
 
-  final IconData icon;
-  final Color iconColor;
   final int value;
   final ValueChanged<int> onChanged;
 
   @override
-  State<_ColumnCountRow> createState() => _ColumnCountRowState();
+  State<_ColumnField> createState() => _ColumnFieldState();
 }
 
-class _ColumnCountRowState extends State<_ColumnCountRow> {
+class _ColumnFieldState extends State<_ColumnField> {
   late final TextEditingController _input =
       TextEditingController(text: '${widget.value}');
 
   @override
-  void didUpdateWidget(_ColumnCountRow old) {
+  void didUpdateWidget(_ColumnField old) {
     super.didUpdateWidget(old);
     // 外部改了值（比如其它入口），同步到输入框；正在输入时不动它
     if (widget.value != old.value && _input.text != '${widget.value}') {
@@ -859,57 +855,40 @@ class _ColumnCountRowState extends State<_ColumnCountRow> {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    return _RowShell(
-      icon: widget.icon,
-      iconColor: widget.iconColor,
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '瀑布流每行几列',
-                  style: AppText.callout.copyWith(color: c.label),
-                ),
-                const SizedBox(height: 1),
-                Text(
-                  '想几列就几列，最多按一列 60 像素算',
-                  style: AppText.caption1.copyWith(color: c.tertiaryLabel),
-                ),
-              ],
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 50,
+          child: TextField(
+            controller: _input,
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            onSubmitted: _commit,
+            onTapOutside: (_) => _commit(_input.text),
+            style: AppText.callout.copyWith(
+              color: c.label,
+              fontWeight: FontWeight.w600,
             ),
-          ),
-          SizedBox(
-            width: 62,
-            child: TextField(
-              controller: _input,
-              textAlign: TextAlign.center,
-              keyboardType: TextInputType.number,
-              onSubmitted: _commit,
-              onTapOutside: (_) => _commit(_input.text),
-              style: AppText.callout.copyWith(
-                color: c.label,
-                fontWeight: FontWeight.w600,
-              ),
-              decoration: InputDecoration(
-                isDense: true,
-                filled: true,
-                fillColor: c.fill,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide.none,
-                ),
-                suffixText: '列',
-                suffixStyle:
-                    AppText.caption1.copyWith(color: c.tertiaryLabel),
+            decoration: InputDecoration(
+              isDense: true,
+              filled: true,
+              fillColor: c.fill,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide.none,
               ),
             ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          '列',
+          style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+        ),
+      ],
     );
   }
 }
@@ -949,8 +928,9 @@ class SettingsPage extends StatelessWidget {
             _SectionHeader('外观'),
             _Group(children: [_ThemeRow(state: state)]),
             const SizedBox(height: 18),
-            // 「瀑布流视图」和它的「每行几列」是**同一件事**，所以单独成组：
-            // 开关和列数挨在一起，用户一眼就知道后者是在调前者。
+            // 「瀑布流视图」和「每行几列」是同一件事：列数只在开了瀑布流
+            // 之后才出现，而且就摆在开关左边 —— 以前它自己占一整行，
+            // 看着像另一项设置。
             _Group(
               children: [
                 _SwitchRow(
@@ -960,19 +940,11 @@ class SettingsPage extends StatelessWidget {
                   subtitle: '首页默认使用卡片布局',
                   value: state.gridMode,
                   onChanged: state.setGridMode,
-                ),
-                // 每行几列**只在开了瀑布流之后才出现** ——
-                // 列表视图下它没有任何作用，摆在那里只会让人困惑
-                // "我设了怎么没反应"。
-                if (state.gridMode) ...[
-                  _RowDivider(),
-                  _ColumnCountRow(
-                    icon: Icons.view_column_rounded,
-                    iconColor: c.functionalPalette[4],
+                  before: _ColumnField(
                     value: state.gridColumns,
                     onChanged: state.setGridColumns,
                   ),
-                ],
+                ),
               ],
             ),
 
@@ -1159,6 +1131,15 @@ class SettingsPage extends StatelessWidget {
                       '${state.db.rootDir.path}${Platform.pathSeparator}yuanworld.db',
                   // 是文件不是目录：打开它**所在的目录**才有意义
                   isDirectory: false,
+                  // 手机上数据必须待在应用私有目录里，系统才不清理，
+                  // 所以只在桌面端给"修改/默认"这两个动作。
+                  onMove: isDesktopWindow
+                      ? () => _moveDataLocation(context, state)
+                      : null,
+                  onReset: isDesktopWindow
+                      ? () => _resetDataLocation(context, state)
+                      : null,
+                  isCustom: state.dataLocationIsCustom,
                 ),
                 _RowDivider(),
                 _PathRow(
@@ -1166,33 +1147,14 @@ class SettingsPage extends StatelessWidget {
                   iconColor: c.functionalPalette[6],
                   label: '图片与视频',
                   path: state.db.imageRoot.path,
+                  onMove: isDesktopWindow
+                      ? () => _moveDataLocation(context, state)
+                      : null,
+                  onReset: isDesktopWindow
+                      ? () => _resetDataLocation(context, state)
+                      : null,
+                  isCustom: state.dataLocationIsCustom,
                 ),
-                // 手机上数据必须待在应用私有目录里，系统才不清理，
-                // 所以只在桌面端给这两个入口。
-                if (isDesktopWindow) ...[
-                  _RowDivider(),
-                  _ActionRow(
-                    icon: Icons.drive_file_move_rounded,
-                    iconColor: c.functionalPalette[4],
-                    label: state.dataLocationIsCustom
-                        ? '换一个位置…'
-                        : '更改数据位置…',
-                    subtitle: state.dataLocationIsCustom
-                        ? '当前用的是自定义位置，可以再换到别的盘'
-                        : '搬到其它盘或网盘目录，原来的那份会随搬移删掉',
-                    onTap: () => _moveDataLocation(context, state),
-                  ),
-                  if (state.dataLocationIsCustom) ...[
-                    _RowDivider(),
-                    _ActionRow(
-                      icon: Icons.restart_alt_rounded,
-                      iconColor: c.functionalPalette[0],
-                      label: '回到默认位置',
-                      subtitle: '搬回软件目录下的 data/，原来的那份会随搬移删掉',
-                      onTap: () => _resetDataLocation(context, state),
-                    ),
-                  ],
-                ],
               ],
             ),
 
@@ -1584,6 +1546,10 @@ class _NavRow extends StatelessWidget {
 /// 快照和完整备份都是"开不开"和"多久一次"两件事，拆成两行读起来像两个
 /// 独立设置，实际是一句话："每 24 小时自动拍一次快照"。所以开关旁边直接
 /// 摆输入框，关掉时输入框收起来，行高也跟着下去。
+/// 一行里同时有：开关、数字输入框、单位和开关。
+///
+/// 这几样说的是同一件事（要不要自动做、多久做一次），拆成两行来摆
+/// 会让人以为它们互不相干。关掉时输入框收起 —— 关着的功能调周期没意义。
 class _SwitchIntervalRow extends StatefulWidget {
   const _SwitchIntervalRow({
     required this.icon,
@@ -1716,6 +1682,10 @@ class _SwitchIntervalRowState extends State<_SwitchIntervalRow> {
 ///
 /// 原来"目录"和"回到默认位置"各占一行，加上开关和间隔就是四行说一件事。
 /// 现在路径写在副标题里，点右边那个按钮弹菜单：换文件夹 / 回默认。
+/// 备份/快照存哪儿 —— 一行搞定，三个动作都摆在外面。
+///
+/// 以前只有一个「…」，点开才知道能换位置、能回默认；用户压根不知道
+/// 那行可以点。现在「打开 / 修改 / 默认」直接摊在同一行上。
 class _BackupDirRow extends StatelessWidget {
   const _BackupDirRow({
     required this.icon,
@@ -1735,87 +1705,16 @@ class _BackupDirRow extends StatelessWidget {
   final VoidCallback onPick;
   final VoidCallback onReset;
 
-  Future<void> _menu(BuildContext buttonCtx) async {
-    final picked = await showAppMenu<String>(
-      buttonCtx,
-      anchor: AppMenuAnchor(context: buttonCtx),
-      header: label,
-      items: <AppMenuItem<String>>[
-        AppMenuItem<String>(
-          value: 'pick',
-          label: isCustom ? '换一个文件夹…' : '换个位置…',
-          icon: Icons.folder_open_rounded,
-        ),
-        if (isCustom)
-          AppMenuItem<String>(
-            value: 'reset',
-            label: '回到默认位置',
-            icon: Icons.restart_alt_rounded,
-          ),
-      ],
-    );
-    if (picked == 'pick') onPick();
-    if (picked == 'reset') onReset();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final c = context.colors;
-    return Builder(
-      builder: (btnCtx) => _RowShell(
-        icon: icon,
-        iconColor: iconColor,
-        onTap: () => _menu(btnCtx),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        label,
-                        style: AppText.body.copyWith(color: c.label),
-                      ),
-                      if (isCustom) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: c.tint.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            '自定义',
-                            style: AppText.caption2.copyWith(color: c.tint),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    path,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppText.caption1.copyWith(color: c.tertiaryLabel),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              Icons.more_horiz_rounded,
-              size: 18,
-              color: c.quaternaryLabel,
-            ),
-          ],
-        ),
-      ),
+    return _PathRow(
+      icon: icon,
+      iconColor: iconColor,
+      label: label,
+      path: path,
+      onMove: onPick,
+      onReset: onReset,
+      isCustom: isCustom,
     );
   }
 }
@@ -1828,6 +1727,7 @@ class _SwitchRow extends StatelessWidget {
     required this.value,
     required this.onChanged,
     this.subtitle,
+    this.before,
   });
 
   final IconData icon;
@@ -1836,6 +1736,11 @@ class _SwitchRow extends StatelessWidget {
   final String? subtitle;
   final bool value;
   final ValueChanged<bool> onChanged;
+
+  /// 开关左边再放一个控件（比如瀑布流的"每行几列"）。
+  ///
+  /// 它和开关管的是同一件事，摆在同一行才不会让人以为是两项设置。
+  final Widget? before;
 
   @override
   Widget build(BuildContext context) {
@@ -1860,6 +1765,7 @@ class _SwitchRow extends StatelessWidget {
               ],
             ),
           ),
+          if (before != null && value) ...[before!, const SizedBox(width: 8)],
           Switch.adaptive(value: value, onChanged: onChanged),
         ],
       ),
@@ -1867,6 +1773,10 @@ class _SwitchRow extends StatelessWidget {
   }
 }
 
+/// 一个位置行：标签 + 路径，右边三个按钮「打开 / 修改 / 默认」。
+///
+/// 以前这几个动作藏在"点整行弹菜单"里，用户根本不知道能点。按钮摆出来
+/// 才看得见 —— 看不见的功能等于没有。
 class _PathRow extends StatelessWidget {
   const _PathRow({
     required this.icon,
@@ -1874,6 +1784,9 @@ class _PathRow extends StatelessWidget {
     required this.label,
     required this.path,
     this.isDirectory = true,
+    this.onMove,
+    this.onReset,
+    this.isCustom = false,
   });
 
   final IconData icon;
@@ -1885,24 +1798,14 @@ class _PathRow extends StatelessWidget {
   /// 双击一个 .db 文件只会让系统问"用什么打开"，那不是用户想要的。
   final bool isDirectory;
 
-  Future<void> _open(BuildContext context) async {
-    final target = isDirectory ? path : File(path).parent.path;
-    final dir = Directory(target);
-    if (!dir.existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('目录还不存在')),
-      );
-      return;
-    }
-    try {
-      await launchUrl(Uri.file(target), mode: LaunchMode.externalApplication);
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('打不开：$e')),
-      );
-    }
-  }
+  /// 给 null 就不显示「修改」按钮（手机端数据必须待在应用私有目录）。
+  final VoidCallback? onMove;
+
+  /// 给 null 就不显示「默认」按钮。
+  final VoidCallback? onReset;
+
+  /// 现在是不是自定义位置 —— 不是的话「默认」按钮没意义，置灰。
+  final bool isCustom;
 
   @override
   Widget build(BuildContext context) {
@@ -1910,59 +1813,142 @@ class _PathRow extends StatelessWidget {
     return _RowShell(
       icon: icon,
       iconColor: iconColor,
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: AppText.body.copyWith(color: c.label)),
-                const SizedBox(height: 3),
-                SelectableText(
-                  path,
-                  maxLines: 2,
-                  style: AppText.caption2.copyWith(
-                    color: c.tertiaryLabel,
-                    height: 1.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          // 点一下直接在文件管理器里打开 —— 路径本身没法点，
-          // 用户要复制出去再粘贴到资源管理器，太绕了
-          Pressable(
-            onTap: () => _open(context),
-            scale: 0.94,
-            child: Tooltip(
-              message: '在文件管理器中打开',
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-                decoration: BoxDecoration(
-                  color: c.fill,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.folder_open_rounded, size: 14, color: c.tint),
-                    const SizedBox(width: 5),
-                    Text(
-                      '打开',
-                      style: AppText.caption1.copyWith(
-                        color: c.tint,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final info = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: AppText.body.copyWith(color: c.label)),
+              const SizedBox(height: 3),
+              SelectableText(
+                path,
+                maxLines: 2,
+                style: AppText.caption2.copyWith(
+                  color: c.tertiaryLabel,
+                  height: 1.5,
                 ),
               ),
-            ),
-          ),
-        ],
+            ],
+          );
+          final buttons = Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _RowButton(
+                icon: Icons.folder_open_rounded,
+                label: '打开',
+                tooltip: '在文件管理器中打开',
+                onTap: () => _openPath(context, path, isDirectory),
+              ),
+              if (onMove != null)
+                _RowButton(
+                  icon: Icons.drive_file_move_rounded,
+                  label: '修改',
+                  tooltip: '换一个位置（原来的那份会随搬移删掉）',
+                  onTap: onMove,
+                ),
+              if (onReset != null)
+                _RowButton(
+                  icon: Icons.restart_alt_rounded,
+                  label: '回到默认',
+                  tooltip: isCustom ? '搬回默认位置' : '现在就是默认位置',
+                  onTap: isCustom ? onReset : null,
+                ),
+            ],
+          );
+
+          // 桌面窗口够宽就摆右边，窄屏换到下一行 —— 一行塞不下会溢出，
+          // 而溢出的按钮是点不到的。
+          if (box.maxWidth >= 420) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: info),
+                const SizedBox(width: 10),
+                buttons,
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [info, const SizedBox(height: 9), buttons],
+          );
+        },
       ),
     );
+  }
+}
+
+/// 在文件管理器里打开一个路径（目录直接开，文件开它所在的目录）。
+Future<void> _openPath(
+  BuildContext context,
+  String path, [
+  bool isDirectory = true,
+]) async {
+  final target = isDirectory ? path : File(path).parent.path;
+  final dir = Directory(target);
+  if (!dir.existsSync()) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('目录还不存在')),
+    );
+    return;
+  }
+  try {
+    await launchUrl(Uri.file(target), mode: LaunchMode.externalApplication);
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('打不开：$e')),
+    );
+  }
+}
+
+/// 设置行里的一个小按钮。`onTap` 为 null 时是灰的（不可点）。
+class _RowButton extends StatelessWidget {
+  const _RowButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.tooltip,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final enabled = onTap != null;
+    final tint = enabled ? c.tint : c.quaternaryLabel;
+    final button = Pressable(
+      onTap: onTap,
+      scale: 0.94,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: enabled ? c.tint.withValues(alpha: 0.10) : c.fill,
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: tint),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: AppText.caption1.copyWith(
+                color: tint,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (tooltip == null) return button;
+    return Tooltip(message: tooltip!, child: button);
   }
 }
 
