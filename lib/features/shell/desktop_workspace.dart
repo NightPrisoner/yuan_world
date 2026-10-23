@@ -436,6 +436,10 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     setState(() {
       _detailOpen = false;
       _editorFullscreen = false;
+      // 选中态也一起清掉。之前只关面板、留着 _selectedNoteId，列表里那一行
+      // 还会是蓝底 —— 面板都收起来了，行却还是"选中"的样子，点它还会因为
+      // 同一篇而重新打开，看起来像"关不掉"。
+      _selectedNoteId = null;
     });
     _syncDetailAnim();
     _syncFullscreenAnim();
