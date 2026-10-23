@@ -17,9 +17,8 @@ import 'package:provider/provider.dart';
 import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/widgets/app_menu.dart';
 import '../../data/models.dart';
-import '../../data/repositories/note_repository.dart';
+import 'trash_retention.dart';
 
 class TrashPage extends StatefulWidget {
   const TrashPage({super.key, this.embedded = false});
@@ -280,34 +279,10 @@ class _TrashPageState extends State<TrashPage> {
   }
 
   /// 选自动清理天数。0 = 永不清理。
-  Future<void> _pickRetentionDays(BuildContext context, AppState state) async {
-    const options = <int>[0, 7, 14, 30, 60, 90, 180];
-    final current = state.trashRetentionDays;
-    final picked = await showAppMenu<int>(
-      context,
-      header: '回收站保留多久',
-      anchor: AppMenuAnchor(context: context),
-      items: <AppMenuItem<int>>[
-        for (final d in options)
-          AppMenuItem(
-            value: d,
-            label: d == 0 ? '一直不删，手动清理' : '$d 天',
-            icon: d == current
-                ? Icons.check_circle_rounded
-                : Icons.circle_outlined,
-            color: d == current ? context.colors.tint : null,
-          ),
-      ],
-    );
-    if (picked == null || !mounted) return;
-    state.setTrashRetentionDays(picked);
-    // 改成更短的保留期，当场就把超期的清掉 —— 否则用户以为立刻生效，
-    // 结果要等下次启动才清。改为 0（永不清理）时什么也不做。
-    if (picked > 0) {
-      state.repo.purgeTrashOlderThan(picked);
-      state.refreshTrash();
-    }
-  }
+  /// 真正的实现在 `trash_retention.dart`：设置页「回收站」那一行尾巴上的
+  /// 胶囊也调同一个，两边不会各说各话。
+  Future<void> _pickRetentionDays(BuildContext context, AppState state) =>
+      pickTrashRetention(context, state);
 
   Widget _pill(AppColors c, String label, Color color, VoidCallback onTap) =>
       Pressable(

@@ -18,6 +18,7 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/platform/window_mode.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
+import '../trash/trash_retention.dart';
 import '../../data/backup/backup_service.dart';
 import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
@@ -958,6 +959,9 @@ class SettingsPage extends StatelessWidget {
                 // 之前 TrashPage 只被 desktop_workspace 引用 —— 也就是说
                 // 在手机上删掉的笔记**永远找不回来**（也没有地方彻底清空）。
                 // 入口放这儿是因为它属于"系统级的地方"，不是一种筛选视图。
+                //
+                // 「保留多久」原本藏在回收站页面里，要进那一页才看得到；
+                // 它其实是这一行的属性，摆在外面才不会有人说"找不到"。
                 _NavRow(
                   icon: Icons.delete_outline_rounded,
                   iconColor: c.functionalPalette[3],
@@ -967,6 +971,10 @@ class SettingsPage extends StatelessWidget {
                       : '${state.trashedNotes.length} 篇，可恢复或彻底删除',
                   onTap: () => Navigator.of(context).push(
                     ApplePageRoute<void>(pageBuilder: (_) => const TrashPage()),
+                  ),
+                  trailing: _RetentionChip(
+                    days: state.trashRetentionDays,
+                    onPick: () => pickTrashRetention(context, state),
                   ),
                 ),
                 _RowDivider(),
@@ -1502,6 +1510,7 @@ class _NavRow extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.subtitle,
+    this.trailing,
   });
 
   final IconData icon;
@@ -1509,6 +1518,11 @@ class _NavRow extends StatelessWidget {
   final String label;
   final String? subtitle;
   final VoidCallback onTap;
+
+  /// 行尾除了箭头之外还想摆的东西（比如回收站那一行的"保留 30 天"）。
+  ///
+  /// 它自己处理点击，点它不会顺带把整行点开 —— 改保留天数不该同时跳进回收站。
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -1534,8 +1548,52 @@ class _NavRow extends StatelessWidget {
               ],
             ),
           ),
+          ?trailing,
           Icon(Icons.chevron_right_rounded, size: 19, color: c.tertiaryLabel),
         ],
+      ),
+    );
+  }
+}
+
+/// 回收站那一行尾巴上的「保留 30 天」。
+///
+/// 以前这条要进回收站页面才看得到，而"删掉的东西留多久"是设置里才会去找的
+/// 事。摆在这一行上，扫一眼就知道现在的策略，点一下就能改。
+class _RetentionChip extends StatelessWidget {
+  const _RetentionChip({required this.days, required this.onPick});
+
+  final int days;
+  final VoidCallback onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final text = days > 0 ? '保留 $days 天' : '一直不删';
+    return Pressable(
+      onTap: onPick,
+      scale: 0.94,
+      child: Container(
+        margin: const EdgeInsets.only(right: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: c.fill,
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              text,
+              style: AppText.caption1.copyWith(
+                color: c.secondaryLabel,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 3),
+            Icon(Icons.expand_more_rounded, size: 13, color: c.tertiaryLabel),
+          ],
+        ),
       ),
     );
   }
