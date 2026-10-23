@@ -112,7 +112,12 @@ Future<T?> showAppMenu<T>(
   // 锚点的优先级：显式传入 > 上一次菜单的位置（二级菜单）> 调用处自己。
   if (prefersAnchoredMenu(context)) {
     final explicit = anchor == null ? null : _anchorRect(context, anchor);
-    final rect = explicit ?? _lastMenuRect ?? _rectOf(context);
+    // 显式给了锚点就别退回"上一次菜单的位置"：那是给二级菜单用的，
+    // 一级菜单用上一次的位置会莫名其妙地贴在别处（用户看到的就是
+    // "点这里，菜单跑到那边去了"）。锚点算不出来时才用调用处自己。
+    final rect = anchor != null
+        ? (explicit ?? _rectOf(context))
+        : (_lastMenuRect ?? _rectOf(context));
     _lastMenuRect = rect;
     {
       final overlay =
@@ -265,12 +270,21 @@ Rect _rectOf(BuildContext context) {
 }
 
 /// 算出锚点的全局矩形。
+///
+/// 和 [_rectOf] 守**同一条规矩**：按钮、图标这种小控件才是天然锚点；
+/// 整页那种大块头不能当锚点。
+///
+/// 之前这里没有这条保护：设置页把 `SettingsPage` 的 context 当锚点传进来，
+/// 矩形就是整个页面 —— 菜单被摆到"页面右下角再往下 4 像素"，于是跑到屏幕
+/// 左下角去了（用户看到的就是这个）。返回 null 让调用方退回别的锚点。
 Rect? _anchorRect(BuildContext context, AppMenuAnchor anchor) {
   final ac = anchor.context;
   if (ac != null && ac.mounted) {
     final box = ac.findRenderObject();
     if (box is RenderBox && box.hasSize) {
-      return box.localToGlobal(Offset.zero) & box.size;
+      final rect = box.localToGlobal(Offset.zero) & box.size;
+      if (rect.width <= 480 && rect.height <= 140) return rect;
+      return null;
     }
   }
   final pos = anchor.position;

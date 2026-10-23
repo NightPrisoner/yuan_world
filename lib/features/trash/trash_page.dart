@@ -244,18 +244,23 @@ class _TrashPageState extends State<TrashPage> {
               children: [
                 Text('回收站', style: AppText.title2.copyWith(color: c.label)),
                 const SizedBox(height: 3),
-                GestureDetector(
-                  // 天数写在这一行里，点它就能改 —— 单独放一个"设置"入口
-                  // 反而让人找不到。0 天 = 永不自动清理。
-                  onTap: () => _pickRetentionDays(context, state),
-                  child: Text(
-                    total == 0
-                        ? '空'
-                        : '$total 项 · ${days > 0 ? '超过 $days 天自动清理' : '不自动清理'}',
-                    style: AppText.caption1.copyWith(
-                      color: c.tertiaryLabel,
-                      decoration: TextDecoration.underline,
-                      decorationColor: c.quaternaryLabel,
+                // 用 Builder 拿**这一行文字自己**的 context 当菜单锚点。
+                // 直接用页面级的 context，菜单会贴着整个页面的右下角弹出，
+                // 看起来就是跑到了屏幕左下角。
+                Builder(
+                  builder: (labelCtx) => GestureDetector(
+                    // 天数写在这一行里，点它就能改 —— 单独放一个"设置"入口
+                    // 反而让人找不到。0 天 = 永不自动清理。
+                    onTap: () => _pickRetentionDays(labelCtx, state),
+                    child: Text(
+                      total == 0
+                          ? '空'
+                          : '$total 项 · ${days > 0 ? '超过 $days 天自动清理' : '不自动清理'}',
+                      style: AppText.caption1.copyWith(
+                        color: c.tertiaryLabel,
+                        decoration: TextDecoration.underline,
+                        decorationColor: c.quaternaryLabel,
+                      ),
                     ),
                   ),
                 ),

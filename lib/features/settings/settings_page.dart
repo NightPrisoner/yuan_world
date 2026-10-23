@@ -974,7 +974,7 @@ class SettingsPage extends StatelessWidget {
                   ),
                   trailing: _RetentionChip(
                     days: state.trashRetentionDays,
-                    onPick: () => pickTrashRetention(context, state),
+                    state: state,
                   ),
                 ),
                 _RowDivider(),
@@ -1561,17 +1561,19 @@ class _NavRow extends StatelessWidget {
 /// 以前这条要进回收站页面才看得到，而"删掉的东西留多久"是设置里才会去找的
 /// 事。摆在这一行上，扫一眼就知道现在的策略，点一下就能改。
 class _RetentionChip extends StatelessWidget {
-  const _RetentionChip({required this.days, required this.onPick});
+  const _RetentionChip({required this.days, required this.state});
 
   final int days;
-  final VoidCallback onPick;
+  final AppState state;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     final text = days > 0 ? '保留 $days 天' : '一直不删';
     return Pressable(
-      onTap: onPick,
+      // 锚点必须是**这个胶囊自己**的 context：在外面把页面级的 context
+      // 当锚点传进去，菜单会贴着整个页面的右下角弹，看起来跑到了屏幕左下角。
+      onTap: () => pickTrashRetention(context, state),
       scale: 0.94,
       child: Container(
         margin: const EdgeInsets.only(right: 6),

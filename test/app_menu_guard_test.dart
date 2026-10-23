@@ -158,4 +158,45 @@ void main() {
     await tester.pumpAndSettle();
     expectNearButton();
   });
+
+  testWidgets('把整页的 context 当锚点也不会把菜单甩到别处', (tester) async {
+    // 用户报过的现象：设置页点「回收站 · 保留 30 天」那个胶囊，
+    // 菜单跑到了屏幕左下角。根因是调用处传进来的是**页面级**的 context，
+    // 它的矩形是整页 —— 菜单被摆到"页面右下角再往下 4 像素"，
+    // 超出屏幕后又被夹回左下。大块头不能当锚点，这条要钉住。
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    late BuildContext pageCtx;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Builder(
+          builder: (c) {
+            pageCtx = c;
+            return const Scaffold(body: SizedBox.expand());
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final f = showAppMenu<String>(
+      pageCtx,
+      anchor: AppMenuAnchor(context: pageCtx),
+      items: items(<String>['甲']),
+    );
+    await tester.pumpAndSettle();
+
+    final menu = tester.getRect(find.byType(PopupMenuItem<String>).first);
+    // 不能贴到屏幕最下面（原来就是被夹到底部去了），
+    // 也不能紧贴页面底边 —— 兜底锚点在页面上部。
+    expect(menu.bottom, lessThan(500), reason: '菜单跑到屏幕下半部分去了');
+    expect(menu.top, lessThan(300), reason: '菜单没落在页面上部');
+
+    Navigator.of(pageCtx).pop();
+    await tester.pumpAndSettle();
+    await f;
+  });
 }
