@@ -55,3 +55,14 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# 用户数据（绝不该进仓库）
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 签名密钥
+*.jks
+*.keystore
+key.properties
