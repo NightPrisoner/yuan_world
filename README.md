@@ -10,6 +10,36 @@ Flutter · Windows + Android
 
 </div>
 
+<br>
+
+<div align="center">
+
+<img src="docs/screenshots/home.png" width="920" alt="主页：左侧文件夹树、中间卡片墙、右侧正文">
+
+**主页** —— 左侧文件夹树 · 中间卡片墙 · 右侧正文，一整面墙都是你自己的笔记
+
+</div>
+
+<br>
+
+<div align="center">
+
+<img src="docs/screenshots/stats.png" width="920" alt="数据可视化：概览、发布趋势、累计增长">
+
+**数据可视化** —— 概览、发布趋势、累计增长、文件夹对比、活跃热力图、篇幅分布、高频词
+
+</div>
+
+<br>
+
+<div align="center">
+
+<img src="docs/screenshots/settings.png" width="920" alt="设置：主题、强调色、背景图、回收站、参数、导入导出与备份">
+
+**设置** —— 强调色与背景图、回收站保留天数、备份位置，都能自己调
+
+</div>
+
 ---
 
 ## 下载
@@ -89,7 +119,7 @@ Markdown 风格的纯文本编辑，标题、列表、引用、代码块、图�
 
 ```bash
 flutter pub get
-flutter test          # 1188 条测试
+flutter test          # 1200 条测试
 flutter analyze
 
 # Windows
@@ -123,10 +153,11 @@ lib/
   data/          数据库、仓储、导入导出、备份（不依赖 Flutter）
   features/      各页面：笔记、编辑器、统计、设置、导入…
   app_state.dart 全局状态（Provider）
-test/            90 个测试文件
+test/            92 个测试文件
 third_party/     SQLite amalgamation 源码
 tool/            CLI 工具：批量导入、数据库探针、数据修复
 android/ windows/  平台工程
+docs/screenshots/  README 用的截图
 ```
 
 `lib/data` 不 import Flutter，所以 `tool/import_cli.dart` 这种纯命令行工具能复用同一套逻辑。
