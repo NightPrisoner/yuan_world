@@ -16,8 +16,8 @@ Flutter · Windows + Android
 
 | 平台 | 版本 | 下载 |
 |:---|:---|:---|
-| **Windows 10/11 x64** | 1.0.0 | [yuan_world-1.0.0-windows-x64-20261024.zip](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.0/yuan_world-1.0.0-windows-x64-20261024.zip) |
-| **Android（arm64-v8a）** | 1.0.0 | [yuan_world-1.0.0-android-arm64-20261024.zip](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.0/yuan_world-1.0.0-android-arm64-20261024.zip) |
+| **Windows 10/11 x64** | 1.0.0 | [yuan_world-1.0.0-windows-x64-20261026.zip](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.0/yuan_world-1.0.0-windows-x64-20261026.zip) |
+| **Android（arm64-v8a）** | 1.0.0 | [yuan_world-1.0.0-android-arm64-20261026.zip](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.0/yuan_world-1.0.0-android-arm64-20261026.zip) |
 
 全部版本 → **[Releases](https://github.com/NightPrisoner/yuan_world/releases)**　　使用教程 → **[使用说明.md](使用说明.md)**
 
