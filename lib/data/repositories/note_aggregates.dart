@@ -50,6 +50,18 @@ extension NoteAggregates on NoteRepository {
     return rows.length;
   }
 
+  /// 哪些笔记把这个文件当封面用。
+  ///
+  /// 编辑器删正文里的图之前要问一句：删掉的那个文件，会不会正好是
+  /// **另一篇**的头图？是的话就留着 —— 那边删了就是一块灰。
+  List<int> notesUsingCover(String relPath) {
+    if (relPath.isEmpty) return const <int>[];
+    return _d
+        .select('SELECT id FROM notes WHERE cover_image = ?', <Object?>[relPath])
+        .map((r) => r['id'] as int)
+        .toList();
+  }
+
   /// 给「有图片但没有头图」的笔记补上头图。  ///
   /// 头图的默认值就是正文里的第一张图。导入时已经会设，这里负责
   /// **存量数据**：老库里的笔记没有这个字段，启动时补一次。

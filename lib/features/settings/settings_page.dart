@@ -24,6 +24,7 @@ import '../collections/manage_collections_page.dart';
 import '../easter_egg/version_egg.dart';
 import '../importer/import_page.dart';
 import '../privacy/privacy_page.dart';
+import '../privacy/privacy_transition.dart';
 import '../tags/manage_tags_page.dart';
 import '../trash/trash_page.dart';
 import 'diagnostics_sheet.dart';
@@ -1073,7 +1074,12 @@ class SettingsPage extends StatelessWidget {
                       : _privacySubtitle(context),
                   onTap: () async {
                     if (state.privacyMode) {
-                      state.exitPrivacyMode();
+                      // 走和手机胶囊、桌面侧栏同一条出口。
+                      //
+                      // 以前这里直接 `state.exitPrivacyMode()`，绕过了那层
+                      // 遮罩过渡 —— 结果同一件事，从设置点出去是"啪"地
+                      // 一下换掉，从左栏点出去却有淡出动画，像两套软件。
+                      await leavePrivacySpace(context);
                       return;
                     }
                     // 没密码直接进，有密码验一下就进 —— 不再有中间页

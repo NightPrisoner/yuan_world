@@ -245,7 +245,10 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
 
     final imageRoot = state.db.imageRoot.path;
-    final cover = note.coverImage;
+    // 用 displayCover 而不是原始字段：它同时排掉「用户明确不要头图」的
+    // `__none__` 标记和**文件已经不在**的路径。后者以前会渲染成一整块
+    // 灰色矩形顶在标题上方，用户只能看到一个说不清含义的灰块。
+    final cover = displayCover(note.coverImage, imageRoot);
 
     // 只留文件夹归属、字数、图片与视频数。
     // 作者、发布时间、来源链接都不显示 —— 那些原本是从 Word 文档头
@@ -396,7 +399,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
           ),
 
           // 封面横幅：与列表卡片缩略图共用 Hero tag（嵌入模式下不用 Hero）
-          if (cover != null && cover.isNotEmpty)
+          if (cover != null)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 6, 20, 18),

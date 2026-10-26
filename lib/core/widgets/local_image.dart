@@ -40,6 +40,7 @@ class LocalImage extends StatelessWidget {
     required this.path,
     this.fit = BoxFit.cover,
     this.fallbackColor,
+    this.emptyBuilder,
     this.errorBuilder,
     this.fadeIn = true,
     this.gaplessPlayback = true,
@@ -55,7 +56,18 @@ class LocalImage extends StatelessWidget {
   final BoxFit fit;
 
   /// 文件不存在时的兜底底色（默认透明）。
+  ///
+  /// 只在**明确想要一块占位**时传色：给了色就会画满一整块（列表缩略图、
+  /// 卡片封面这类"位置已经占好了"的地方）。没给色时走 [emptyBuilder]。
   final Color? fallbackColor;
+
+  /// 文件不存在、又没给 [fallbackColor] 时显示什么；默认什么都不画。
+  ///
+  /// 默认 `SizedBox.shrink()` 而不是灰块：调用方通常已经用
+  /// `displayCover` 之类判过文件在不在，走到这里说明是"图突然没了"，
+  /// 此时画一块说不清含义的灰色矩形，比什么都不画更让人困惑
+  /// （用户会以为图片坏了，可那其实是文件被删了）。
+  final WidgetBuilder? emptyBuilder;
 
   /// 加载失败时显示什么。不给就用 [fallbackColor] 填一块。
   final WidgetBuilder? errorBuilder;
@@ -82,7 +94,7 @@ class LocalImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final file = File(path);
-    if (!file.existsSync()) return _fallback(context);
+    if (!file.existsSync()) return _missing(context);
 
     if (fullResolution) {
       return Image.file(
@@ -150,6 +162,17 @@ class LocalImage extends StatelessWidget {
     final custom = errorBuilder;
     if (custom != null) return custom(context);
     return ColoredBox(color: fallbackColor ?? Colors.transparent);
+  }
+
+  /// 文件根本不在时的兜底：优先 [emptyBuilder]，其次 [fallbackColor]，
+  /// 都没有就什么都不画。**不再默认画一块灰色** —— 那种"位置还在、
+  /// 内容没了"的灰块会被当成加载失败，实际是文件被删了。
+  Widget _missing(BuildContext context) {
+    final custom = emptyBuilder ?? errorBuilder;
+    if (custom != null) return custom(context);
+    final color = fallbackColor;
+    if (color != null) return ColoredBox(color: color);
+    return const SizedBox.shrink();
   }
 }
 

@@ -33,6 +33,7 @@ import '../../../core/widgets/app_menu.dart';
 import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_counts.dart';
 import '../../../data/media/media_importer.dart';
+import '../../../data/models.dart';
 import 'body_segments.dart';
 import 'markdown_controller.dart';
 import 'markdown_editing.dart';
@@ -90,7 +91,7 @@ class _MediaDeleteButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return Tooltip(
-      message: '从笔记里移除',
+      message: '删掉这个文件',
       child: Pressable(
         onTap: onTap,
         scale: 0.9,
@@ -937,10 +938,10 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('从笔记里移除这个文件？'),
+        title: const Text('删掉这个文件？'),
         content: const Text(
-          '只会去掉正文里的这一行，磁盘上的文件会保留，'
-          '需要的话可以重新插入。',
+          '正文里的这一行会去掉，磁盘上的文件也一起删掉。'
+          '删了就找不回来，需要的话得重新插入。',
         ),
         actions: <Widget>[
           TextButton(
@@ -952,7 +953,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
             style: TextButton.styleFrom(
               foregroundColor: context.colors.destructive,
             ),
-            child: const Text('移除'),
+            child: const Text('删掉'),
           ),
         ],
       ),
@@ -975,8 +976,70 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _redoStack.clear();
     _body.text = joinBodySegments(ensureTextSegment(next));
     _rebuildSegments();
+    _deleteMediaFile(seg, next);
+    _syncCoverAfterDelete(seg);
     _scheduleSave();
     if (mounted) setState(() {});
+  }
+
+  /// 删掉的正好是头图时，头图要跟着换（或干脆没有），
+  /// 不能继续指着那个已经被删掉的文件 —— 否则详情页顶一块灰。
+  void _syncCoverAfterDelete(ImageSegment seg) {
+    final repo = context.read<AppState>().repo;
+    final current = repo.getNote(widget.noteId);
+    if (current == null) return;
+    final cover = current.coverImage;
+    // 没设过头图、或者用户明确选了"不设置头图"，都不该自作主张
+    if (cover == null || cover.isEmpty || cover == kCoverNone) return;
+    if (cover != seg.path) return;
+    // 有剩下的图就用第一张，一张不剩就清成空串（将来插图还能再派生）
+    repo.updateNote(
+      id: widget.noteId,
+      coverImage: firstImageOf(_body.text) ?? '',
+      touch: false,
+    );
+  }
+
+  /// 把正文里移除的那个文件**从磁盘上删掉**。
+  ///
+  /// 以前只删正文那一行，文件永远留在 `images/<noteId>/` 里：
+  /// 用户以为删了，其实是躲在角落里占空间（也是隐私 —— 用户不想要的内容
+  /// 还在硬盘上）。现在跟着删。
+  ///
+  /// 三条保护：
+  ///   - 同一篇里还引用了同一个文件（复制了一行）就先不删；
+  ///   - 路径必须落在图片根目录之内，防止 `..` 之类的东西误删到别处；
+  ///   - 删不掉（被占用、只读）只提示，不回滚正文 —— 用户要的是"别出现在
+  ///     笔记里"，这一步绝不能失败。
+  void _deleteMediaFile(ImageSegment seg, List<BodySegment> remaining) {
+    final stillUsed = remaining.any((s) => s is ImageSegment && s.path == seg.path);
+    if (stillUsed) return;
+    try {
+      final root = context.read<AppState>().db.imageRoot.path;
+      final abs = p.normalize(p.join(root, seg.path));
+      if (!p.isWithin(root, abs)) return;
+      final file = File(abs);
+      if (!file.existsSync()) return;
+      // 别的笔记把它当封面用着？那就留着 —— 删了那边就一块灰。
+      final coverUsers = context.read<AppState>().repo.notesUsingCover(seg.path);
+      if (coverUsers.any((id) => id != widget.noteId)) return;
+      file.deleteSync();
+      _vacuumImageDir(abs);
+    } catch (e) {
+      _toast('正文里的图片已经去掉了，但磁盘文件没能删除：$e');
+    }
+  }
+
+  /// 删完文件顺手清掉空的笔记媒体目录，让它真的回到"没有图片"的样子。
+  void _vacuumImageDir(String abs) {
+    final dir = Directory(p.dirname(abs));
+    if (!dir.existsSync()) return;
+    if (dir.listSync().isNotEmpty) return;
+    try {
+      dir.deleteSync();
+    } catch (_) {
+      // 目录删不掉无所谓，它是空的
+    }
   }
 
   void _toast(String msg) {

@@ -6,6 +6,10 @@
 /// 颜色一律用 ARGB 整数表示，由 UI 层负责转成 `Color`。
 library;
 
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+
 /// 文集（小米笔记里叫「文件夹」）。支持嵌套：`parentId` 非空即为子文件夹。
 /// 「用户明确不要头图」的标记。
 ///
@@ -28,6 +32,22 @@ String? effectiveCover(String? cover) {
 
 /// 用户是否明确选择了"不设置头图"。
 bool isCoverDisabled(String? cover) => cover == kCoverNone;
+
+/// 界面上真正该显示的头图；null 表示**什么都别画**。
+///
+/// 和 [effectiveCover] 的区别只有一条：这个还要求**文件真的存在**。
+///
+/// 头图存的是相对路径，指针可以指向一张后来没了的图 —— 用户在图库里
+/// 把手删了、或者换机时只拷了数据库没拷 `images/`。以前界面不看文件
+/// 在不在，`LocalImage` 拿不到图就退回底色，于是阅读页标题上方顶着
+/// 一整块灰色矩形：看着像"图片加载失败"，可图上什么也没有，删又删不掉。
+/// 与其画一个说不清意思的灰块，不如当它没设过头图。
+String? displayCover(String? cover, String? imageRoot) {
+  final rel = effectiveCover(cover);
+  if (rel == null || imageRoot == null || imageRoot.isEmpty) return null;
+  final file = File(p.join(imageRoot, rel));
+  return file.existsSync() ? rel : null;
+}
 
 class Collection {
   const Collection({

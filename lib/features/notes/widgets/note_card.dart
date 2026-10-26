@@ -61,12 +61,17 @@ class _NoteCardState extends State<NoteCard> {
   Note get note => widget.note;
   String get imageRoot => widget.imageRoot;
 
+  /// 这张卡片真的该显示的头图（相对路径）。
+  ///
+  /// 用 [displayCover] 而不是 `effectiveCover`：`__none__`（用户明确不要
+  /// 头图）是个非空串，只看 isNotEmpty 会把它当路径去拼文件名；另外它还会
+  /// 排掉**文件已经不在**的路径 —— 否则卡片顶上会留一条空荡荡的灰条。
+  String? get _cover => displayCover(note.coverImage, imageRoot);
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    // 用 effectiveCover：`__none__`（用户明确不要头图）是个非空串，
-    // 只看 isNotEmpty 会把它当路径去拼文件名
-    final hasCover = effectiveCover(note.coverImage) != null;
+    final hasCover = _cover != null;
 
     return MouseRegion(
       onEnter: (_) {
@@ -161,7 +166,7 @@ class _NoteCardState extends State<NoteCard> {
             const SizedBox(width: 12),
             _maybeHero(
               _Thumb(
-                path: p.join(imageRoot, effectiveCover(note.coverImage)!),
+                path: p.join(imageRoot, _cover!),
                 size: 66,
                 fadeIn: !widget.enableHero,
               ),
@@ -182,7 +187,7 @@ class _NoteCardState extends State<NoteCard> {
         if (hasCover)
           _maybeHero(
             _Cover(
-              path: p.join(imageRoot, effectiveCover(note.coverImage)!),
+              path: p.join(imageRoot, _cover!),
               color: c.fill,
               fadeIn: !widget.enableHero,
             ),

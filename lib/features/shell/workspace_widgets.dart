@@ -836,7 +836,10 @@ class _NoteGridCardState extends State<_NoteGridCard> {
   Widget build(BuildContext context) {
     final c = context.colors;
     final n = widget.note;
-    final hasCover = effectiveCover(n.coverImage) != null;
+    // displayCover：既排掉「明确不要头图」的 `__none__`，也排掉文件已经
+    // 不在的路径 —— 否则卡片顶上会留一条空荡荡的灰条。
+    final cover = displayCover(n.coverImage, widget.imageRoot);
+    final hasCover = cover != null;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -912,7 +915,7 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                             child: LocalImage(
                               path: p.join(
                                 widget.imageRoot,
-                                effectiveCover(n.coverImage)!,
+                                cover,
                               ),
                               fit: BoxFit.cover,
                               fallbackColor: c.fill,

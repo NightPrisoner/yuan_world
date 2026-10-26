@@ -398,6 +398,35 @@ void main() {
       expect(state.privacyMode, isFalse);
       expect(find.text('公开的'), findsOneWidget);
     });
+
+    testWidgets('从设置页退出隐私空间，也要走那层过渡，不是啪一下换掉', (tester) async {
+      add('公开的');
+      final secret = add('秘密');
+      state.repo.setNoteHidden(secret, true);
+      state.enterPrivacyMode();
+      await state.refresh();
+
+      await pumpPhone(tester, const SettingsPage());
+      expect(find.text('退出隐私空间'), findsOneWidget);
+      await tester.ensureVisible(find.text('退出隐私空间'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('退出隐私空间'));
+      // 过渡一共 620ms，推到中段时锁和那句字应该在画面上。
+      // 以前这里直接调 state.exitPrivacyMode()，这一帧什么都不会出现 ——
+      // 同一件事，从设置点出去是「啪」一下，从左栏点出去才有动画。
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.text('已离开隐私空间'),
+        findsOneWidget,
+        reason: '设置页的出口也得有那层过渡',
+      );
+
+      await tester.pumpAndSettle();
+      expect(state.privacyMode, isFalse);
+      expect(find.text('已离开隐私空间'), findsNothing, reason: '过渡要收干净');
+    });
   });
 
   group('手机端目录面板', () {

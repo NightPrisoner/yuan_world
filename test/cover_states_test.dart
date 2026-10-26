@@ -10,7 +10,10 @@
 ///     **只要再编辑一下正文触发自动保存，头图就自己回来了**
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:yuan_world/data/db/app_database.dart';
 import 'package:yuan_world/data/models.dart';
 import 'package:yuan_world/data/repositories/note_repository.dart';
@@ -96,5 +99,51 @@ void main() {
     repo.updateNote(id: id, content: '改一下\n\n![](7/a.png)\n');
     expect(repo.getNote(id)!.coverImage, '9/manual.png');
     expect(effectiveCover(repo.getNote(id)!.coverImage), '9/manual.png');
+  });
+
+  group('displayCover：文件不在就当没设过', () {
+    late Directory root;
+
+    setUp(() {
+      // 真实目录：这个函数要看文件在不在，内存库替不了
+      root = Directory.systemTemp.createTempSync('yw_cover_');
+    });
+
+    tearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
+
+    void putImage(String rel) {
+      final f = File(p.join(root.path, rel));
+      f.parent.createSync(recursive: true);
+      f.writeAsBytesSync(<int>[1, 2, 3, 4]);
+    }
+
+    test('文件还在就照常显示', () {
+      putImage('7/a.png');
+      expect(displayCover('7/a.png', root.path), '7/a.png');
+    });
+
+    test('文件被删掉之后不再显示（否则界面上是一块灰）', () {
+      putImage('7/a.png');
+      File(p.join(root.path, '7/a.png')).deleteSync();
+      expect(
+        displayCover('7/a.png', root.path),
+        isNull,
+        reason: '指针还在但图没了，就该当没设过头图，而不是画一块灰色占位',
+      );
+    });
+
+    test('「明确不要」和空值仍然是空', () {
+      expect(displayCover(kCoverNone, root.path), isNull);
+      expect(displayCover('', root.path), isNull);
+      expect(displayCover(null, root.path), isNull);
+    });
+
+    test('拿不到图片根目录时不敢乱显示', () {
+      putImage('7/a.png');
+      expect(displayCover('7/a.png', null), isNull);
+      expect(displayCover('7/a.png', ''), isNull);
+    });
   });
 }

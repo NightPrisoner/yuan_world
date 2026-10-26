@@ -157,6 +157,10 @@ extension NoteMutations on NoteRepository {
       // **用户明确选过"不设置头图"就不能再自动补。**
       // 以前只看 isEmpty，于是点了"不设置头图"之后只要再编辑一下正文
       // （触发一次自动保存），头图就自己回来了 —— 用户会觉得这开关坏了。
+      //
+      // 注意这里**不能**顺手判"文件还在不在"然后覆盖：手动选的头图
+      // 有可能还没落盘（导入中、刚选完），一判就把它顶成正文第一张。
+      // "删图之后头图该怎么变"由删除动作自己负责（编辑器删媒体时显式改）。
       if (existing != kCoverNone && (existing == null || existing.isEmpty)) {
         final first = firstImageOf(nextContent);
         if (first != null) set('cover_image', first);

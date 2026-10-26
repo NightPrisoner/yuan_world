@@ -134,17 +134,33 @@ bool isBadTitle(String title) {
   return stripped.isEmpty;
 }
 
+/// 正文里出现的所有图片路径，按出现顺序。
+///
+/// 返回的是相对图片根目录的路径（如 `45/1.png`），外链（http）不算。
+/// 抽出来是因为「取第一张当默认头图」和「删掉一张之后该换成哪张」
+/// 需要同一套解析 —— 两处各写一条正则会慢慢长歪。
+List<String> imagePathsIn(String markdown) {
+  final out = <String>[];
+  for (final m in RegExp(r'!\[[^\]]*\]\(([^)]+)\)').allMatches(markdown)) {
+    var path = m.group(1)!.trim();
+    // Markdown 允许 `![说明](a.png "标题")`，标题不属于路径
+    final quoteAt = path.indexOf(RegExp('''\\s+["']'''));
+    if (quoteAt > 0) path = path.substring(0, quoteAt).trim();
+    if (path.isEmpty || path.startsWith('http')) continue;
+    // 导入阶段的占位路径带 images/ 前缀，落盘并改写后不带，统一剥掉
+    if (path.startsWith('images/')) path = path.substring('images/'.length);
+    if (path.isEmpty) continue;
+    out.add(path);
+  }
+  return out;
+}
+
 /// 取正文里的第一张图片路径。没有就返回 null。
 ///
 /// 头图的默认值就是它：用户不用特意去设，写了图自然就有头图。
-/// 返回的是相对图片根目录的路径（如 `45/1.png`）。
 String? firstImageOf(String markdown) {
-  final m = RegExp(r'!\[[^\]]*\]\(([^)]+)\)').firstMatch(markdown);
-  if (m == null) return null;
-  final path = m.group(1)!.trim();
-  if (path.isEmpty || path.startsWith('http')) return null;
-  // 导入阶段的占位路径带 images/ 前缀，落盘并改写后不带，统一剥掉
-  return path.startsWith('images/') ? path.substring('images/'.length) : path;
+  final all = imagePathsIn(markdown);
+  return all.isEmpty ? null : all.first;
 }
 
 /// 从正文生成列表预览摘要：去掉 Markdown 标记与图片语法，压缩空白。
