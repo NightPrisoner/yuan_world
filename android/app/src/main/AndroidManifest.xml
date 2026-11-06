@@ -1,8 +1,33 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      权限。
+
+      READ_EXTERNAL_STORAGE / WRITE_EXTERNAL_STORAGE 在 Android 13+ 已失效，
+      真正生效的是 READ_MEDIA_IMAGES / READ_MEDIA_VIDEO。用 maxSdkVersion 让
+      老系统用旧权限、新系统用新权限，两者互斥不冲突。
+
+      **MANAGE_EXTERNAL_STORAGE（所有文件访问）要声明。**
+      理由：这个应用只通过 GitHub 分发，不上架应用商店（Google Play 会拒这类
+      权限，但我们的分发方式不受这条限制）。而"和桌面端一样能把数据放到任意
+      文件夹"必须有它 —— 没有这个权限，Android 只允许应用写自己的两个私有
+      目录，用户想放到 SD 卡或别的目录一律 EACCES。设置页里点「修改」时会
+      引导用户去系统设置里开这个开关。
+    -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
     <application
         android:label="元世界"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="false">
         <!-- 桌面上显示的名字就是上面的 android:label（元世界）。
              这里以前是 Flutter 默认的包名 "yuan_world"，装到手机上
              桌面和任务切换里都是一串英文下划线。 -->
@@ -28,6 +53,29 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!--
+          FileProvider：把私有目录里的文件交给别的应用看/存的唯一合法通道。
+
+          从 Android 7（API 24）起，Intent 里带 file:// 会直接抛
+          FileUriExposedException，系统连选择器都不会弹。之前「设置 → 存储位置
+          → 打开」点了没反应、用户反馈"报错、本地目录都是空的"，就是因为那一步
+          用的是 `launchUrl(Uri.file(path))`。
+
+          有了它，同一份文件可以给出
+          content://com.yuanworld.yuan_world.fileprovider/files/snapshots
+          这样的 URI，系统文件管理器、相册、分享面板都认。
+          路径白名单在 res/xml/file_paths.xml。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

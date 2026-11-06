@@ -38,6 +38,9 @@ Future<void> main() async {
     await _setupDesktopWindow();
   }
 
+  // 手机上指针文件在应用私有目录里，路径要先算出来 —— 之后
+  // `configuredAppRoot()`（同步、build 里会调）才有得读。
+  await primeAppRootPointer();
   final db = AppDatabase.openAt(await resolveAppRoot());
   // 崩溃日志：接管 Flutter 框架错误与引擎侧异步错误，写进 data/logs/。
   // 必须在 runApp 之前装好，否则启动阶段的崩溃一条也抓不到。

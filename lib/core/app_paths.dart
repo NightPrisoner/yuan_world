@@ -25,6 +25,18 @@ import 'package:path_provider/path_provider.dart';
 const String kLocationFileName = 'data-location.txt';
 
 /// 默认的数据根目录（不考虑用户改过位置的情况）。
+///
+/// 手机上有两个可写的地方：
+/// * `getApplicationSupportDirectory()` → `/data/user/0/<包名>/files`
+///   真正的私有目录，**任何文件管理器都进不去**（卸载才清）。
+/// * `getExternalStorageDirectory()` → `/storage/emulated/0/Android/data/<包名>/files`
+///   外部私有目录，**部分文件管理器能翻到**（MT 管理器、ZArchiver），
+///   Android 11+ 起连系统文件管理器自己都进不去，所以也不能保证。
+///
+/// **默认放前者（应用私有）**。这是最稳的位置：系统不会因为"清理缓存"动它，
+/// 也不会被别的应用扫到。代价是文件管理器进不去 —— 所以设置页里点「打开」
+/// 会直接告诉用户"要搬到外部位置才能打开"，而不是弹一个注定失败的选择器。
+/// 用户真想拿文件出来时，点「修改」搬到外部位置即可。
 Future<String> defaultAppRoot() async {
   if (Platform.isAndroid || Platform.isIOS) {
     final dir = await getApplicationSupportDirectory();
@@ -38,19 +50,75 @@ Future<String> defaultAppRoot() async {
   return root;
 }
 
-/// 指针文件路径（桌面才用得上）。
-String? get _pointerPath {
-  if (Platform.isAndroid || Platform.isIOS) return null;
+/// 手机上「应用私有目录」（`/data/user/0/<包名>/files`）。
+///
+/// 和 [externalAppRoot] 是两回事：这里文件管理器**绝对进不去**，
+/// 但系统不会因为"清理缓存"动它。只在用户明确选择时才用。
+Future<String?> privateAppRoot() async {
+  if (!Platform.isAndroid && !Platform.isIOS) return null;
+  try {
+    final dir = await getApplicationSupportDirectory();
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir.path;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 手机上「可以自己翻到」的那个位置（外部私有目录）。
+///
+/// 返回 null 表示不是手机，或者这个系统拿不到外部目录（比如没插存储）。
+/// 文件管理器里能看到它：`Android/data/<包名>/files`。
+Future<String?> externalAppRoot() async {
+  if (!Platform.isAndroid) return null;
+  try {
+    final dir = await getExternalStorageDirectory();
+    if (dir == null) return null;
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir.path;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 指针文件路径。
+///
+/// 桌面放在 exe 同级（数据搬走后 `data/` 可能就没了，指针跟着消失就再也
+/// 找不到新位置）。手机上 exe 同级这个概念不存在，改用应用私有目录里的
+/// 一个文件 —— **不能直接返回 null**：那样 Android 上 `configuredAppRoot()`
+/// 恒为 null，设置页的「回到默认」按钮永远是灰的，用户改过位置也回不去。
+String? _pointerPathSync() {
+  if (Platform.isAndroid || Platform.isIOS) return _mobilePointerPath;
   final exeDir = File(Platform.resolvedExecutable).parent.path;
   return p.join(exeDir, kLocationFileName);
 }
 
-/// 用户改过的数据目录；没改过（或手机）返回 null。
+/// 手机上的指针文件（应用私有目录里，和数据库分开，不会被搬走）。
+String? _mobilePointerPathCache;
+
+String? get _mobilePointerPath {
+  // `getApplicationSupportDirectory()` 是异步的，而 `configuredAppRoot()`
+  // 在 build 里被同步调用 —— 所以缓存一份，启动时由 [primeAppRootPointer] 填。
+  return _mobilePointerPathCache;
+}
+
+/// 启动时调一次，把手机上的指针路径算出来（异步那一步）。
+Future<void> primeAppRootPointer() async {
+  if (!Platform.isAndroid && !Platform.isIOS) return;
+  try {
+    final dir = await getApplicationSupportDirectory();
+    _mobilePointerPathCache = p.join(dir.path, kLocationFileName);
+  } catch (_) {
+    _mobilePointerPathCache = null;
+  }
+}
+
+/// 用户改过的数据目录；没改过返回 null。
 ///
 /// 只读指针、不检查目录是否还在 —— 界面要能显示"你设的是这个"，
 /// 哪怕那块盘现在没插上。
 String? configuredAppRoot() {
-  final path = _pointerPath;
+  final path = _pointerPathSync();
   if (path == null) return null;
   try {
     final f = File(path);
@@ -77,9 +145,15 @@ String dataDirIn(String chosen) =>
 /// 先写 `-wal`：库文件单独摆出去而日志没跟上，恢复时 SQLite 会把它当成
 /// 一个没提交过事务的旧库，最近写的内容就没了。
 Future<String> resolveAppRoot() async {
-  if (Platform.isAndroid || Platform.isIOS) {
-    return defaultAppRoot();
+  if (Platform.isAndroid) {
+    final root = await defaultAppRoot();
+    // 老版本曾经把数据放在外部私有目录（Android/data/<包名>/files）。
+    // 现在默认回到应用私有目录 —— 第一次启动时把老数据搬回来，否则用户
+    // 看到的是"我的笔记全没了"。
+    await _migrateAndroidExternalTo(root);
+    return root;
   }
+  if (Platform.isIOS) return defaultAppRoot();
 
   final custom = configuredAppRoot();
   if (custom != null) {
@@ -103,9 +177,28 @@ Future<String> resolveAppRoot() async {
   return root;
 }
 
+/// 把老版本留在**外部私有目录**里的数据搬回应用私有目录（Android 专用）。
+///
+/// 只在「目标里还没有库、而外部目录里有库」时动手 —— 用户已经在新位置
+/// 用了一阵子的话，外部那份是旧的，绝不能盖回去。
+Future<void> _migrateAndroidExternalTo(String target) async {
+  try {
+    final externalPath = await externalAppRoot();
+    if (externalPath == null) return;
+    if (p.normalize(externalPath) == p.normalize(target)) return;
+    final oldDb = File(p.join(externalPath, 'yuanworld.db'));
+    final newDb = File(p.join(target, 'yuanworld.db'));
+    if (!oldDb.existsSync() || newDb.existsSync()) return;
+    await migrateDataRoot(externalPath, target);
+  } catch (_) {
+    // 搬不动就按新位置开一个空库 —— 至少应用能启动。
+    // 老数据还在外部目录里，没被删。
+  }
+}
+
 /// 把数据目录设成 [path]（写指针）。真正搬文件由 [migrateDataRoot] 负责。
 Future<void> rememberAppRoot(String path) async {
-  final pointer = _pointerPath;
+  final pointer = _pointerPathSync();
   if (pointer == null) return;
   final text = path.trim();
   if (text.isEmpty) {
@@ -117,7 +210,7 @@ Future<void> rememberAppRoot(String path) async {
 
 /// 回到默认位置（删指针）。已经在默认位置时无副作用。
 Future<void> forgetAppRoot() async {
-  final pointer = _pointerPath;
+  final pointer = _pointerPathSync();
   if (pointer == null) return;
   final f = File(pointer);
   if (f.existsSync()) f.deleteSync();
@@ -191,6 +284,7 @@ Future<MoveDataResult> migrateDataRoot(
   String from,
   String to, {
   void Function(double progress)? onProgress,
+  Set<String> skipNames = const <String>{},
 }) async {
   final target = Directory(to);
   if (!target.existsSync()) target.createSync(recursive: true);
@@ -199,6 +293,10 @@ Future<MoveDataResult> migrateDataRoot(
   final entries = <FileSystemEntity>[];
   if (source.existsSync()) {
     for (final name in kDataEntryNamesWalFirst) {
+      // 快照/备份被设成自定义位置时，数据目录里那份是**旧的残留**：
+      // 用户已经把新快照写到别处去了，这里再搬过去只会白搬几百兆，
+      // 而且搬到新位置后看着像"备份就在这儿"，实际早搬走了。
+      if (skipNames.contains(name)) continue;
       final path = p.join(source.path, name);
       final type = FileSystemEntity.typeSync(path);
       if (type == FileSystemEntityType.notFound) continue;

@@ -21,7 +21,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 生成的 versionName / build，所以改版本只改这一行。
 # 格式 `<name>+<build>`：Android 的 versionName / versionCode、Windows 的
 # 文件版本都从它派生。发布前改这里就行：未发布期间一直是 1.0.0。
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.3
@@ -76,7 +76,6 @@ dependencies:
   # 直接用 SetFileTime 设置 Windows 上导出的"创建时间"（Dart 没有对应 API）。
   # 只用到 toNativeUtf16 / calloc，体量很小。
   ffi: ^2.1.4
-
 dev_dependencies:
   flutter_test:
     sdk: flutter

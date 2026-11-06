@@ -118,6 +118,51 @@ void main() {
     });
   });
 
+  group('快照/备份已设自定义位置时，残留目录不跟着搬', () {
+    test('skipNames 里的目录原样留在源位置，不进目标', () async {
+      final from = dir('from');
+      put('from/yuanworld.db', 'db');
+      put('from/images/1/a.png', 'img');
+      // 用户早把快照和备份设到别处去了，数据目录里这两个是旧残留
+      put('from/snapshots/yw-old.db', 'stale');
+      put('from/backups/full-old.zip', 'stale');
+
+      final to = dir('to');
+      final result = await migrateDataRoot(
+        from.path,
+        to.path,
+        skipNames: <String>{'snapshots', 'backups'},
+      );
+
+      // 真数据搬过去了
+      expect(File(p.join(to.path, 'yuanworld.db')).readAsStringSync(), 'db');
+      expect(File(p.join(to.path, 'images/1/a.png')).readAsStringSync(), 'img');
+      // 残留一个都没跟过来
+      expect(Directory(p.join(to.path, 'snapshots')).existsSync(), isFalse);
+      expect(Directory(p.join(to.path, 'backups')).existsSync(), isFalse);
+      // 源那边也没被删（不是数据项，不该被"搬走"）
+      expect(
+        File(p.join(from.path, 'snapshots/yw-old.db')).readAsStringSync(),
+        'stale',
+      );
+      // 只数到 1 个库 + 1 张图
+      expect(result.files, 2);
+    });
+
+    test('没设自定义位置时照常搬（skipNames 为空）', () async {
+      final from = dir('from');
+      put('from/yuanworld.db', 'db');
+      put('from/snapshots/yw.db', 'snap');
+      put('from/backups/full.zip', 'zip');
+
+      final to = dir('to');
+      await migrateDataRoot(from.path, to.path);
+
+      expect(File(p.join(to.path, 'snapshots/yw.db')).existsSync(), isTrue);
+      expect(File(p.join(to.path, 'backups/full.zip')).existsSync(), isTrue);
+    });
+  });
+
   group('盘符根要收进子目录', () {
     test('isDriveRoot 认得出盘根，不认普通目录', () {
       final root = p.rootPrefix(tmp.path);

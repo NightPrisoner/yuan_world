@@ -174,6 +174,14 @@ class AppState extends ChangeNotifier {
       throw StateError('不能把数据目录搬到它自己的上层目录里');
     }
 
+    // 这个判断要**在关库之前**做完：skipNames 要读设置表，
+    // 而下面 closeForRestore() 之后库已经关了，再读就抛
+    // 「This database has already been closed」。
+    final skipNames = <String>{
+      if (backupSnapshotDirIsCustom) 'snapshots',
+      if (backupFullDirIsCustom) 'backups',
+    };
+
     db.checkpoint();
     // **必须先关库再搬。** 数据库开着的时候 yuanworld.db / -wal / -shm
     // 是被当前进程锁着的，Windows 上删不掉；以前直接搬，文件拷过去了、
@@ -182,7 +190,15 @@ class AppState extends ChangeNotifier {
     db.closeForRestore();
     MoveDataResult result;
     try {
-      result = await migrateDataRoot(from, target, onProgress: onProgress);
+      result = await migrateDataRoot(
+        from,
+        target,
+        onProgress: onProgress,
+        // 快照/备份已经被用户设成自定义位置时，数据目录里那份是**旧残留**：
+        // 新的快照早写到别处去了，再搬过去只会白搬几百兆，而且搬到新位置后
+        // 看着像"备份就在这儿"，实际早搬走了。所以这两种情况各自跳过。
+        skipNames: skipNames,
+      );
     } catch (_) {
       // 没搬成：把原来的库重新打开，用户还能继续用，源文件一个字节没动
       db.reopen();

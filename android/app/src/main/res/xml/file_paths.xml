@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+      FileProvider 的路径白名单。
+
+      为什么需要它：从 Android 7（API 24）起，跨应用传 file:// 会直接抛
+      FileUriExposedException。要把"我们自己的文件"交给别的应用（文件管理器、
+      图片查看器、分享面板）看，只能给 content:// URI，而 content:// 背后的
+      真实路径必须在这里登记过，否则 FileProvider 会拒绝。
+
+      四个根目录：
+        files-path          → getFilesDir()          /data/user/0/<包名>/files/
+        cache-path          → getCacheDir()
+        external-files-path → getExternalFilesDir()  /storage/emulated/0/Android/data/<包名>/files/
+        external-cache-path → getExternalCacheDir()
+
+      ⚠ 为什么非要 external-files-path：
+      Android 11+ 起，`Android/data/` 目录**任何应用都进不去**（连系统自己的
+      DocumentsUI 也会抛 "does not have permission to
+      content://com.android.externalstorage.documents/document/primary%3AAndroid
+      %2Fdata%2F..."）。所以「点打开跳转到那个目录」不能靠系统文件管理器的
+      路径授权，只能由**我们自己的 FileProvider** 出一个 content:// URI，
+      再把临时读权限交给用户挑的那个文件管理器（MT 管理器、ZArchiver…）。
+
+      external-files-path 登记的正是应用外部私有目录，也就是现在默认的数据
+      位置，所以「打开」这条路才能真正走通。
+    -->
+    <files-path name="files" path="." />
+    <cache-path name="cache" path="." />
+    <external-files-path name="ext" path="." />
+    <external-cache-path name="extcache" path="." />
+
+    <!--
+      外部存储根 /storage/emulated/0/。
+
+      用户可以把数据位置改到任意文件夹（`/storage/emulated/0/元世界` 这种），
+      那些路径不属于上面任何一条，FileProvider 会直接抛
+      `Failed to find configured root that contains ...` —— 表现就是
+      「修改之后打不开」。
+
+      必须用 root-path 而不是 external-path：external-path 只覆盖主外部存储，
+      数据放在 SD 卡（/storage/XXXX-XXXX/…）时仍然会失败。root-path 是唯一
+      能覆盖"用户随便挑一个文件夹"的登记方式。
+
+      安全性：content:// URI 本身不可枚举，也必须由本应用主动
+      addFlags(FLAG_GRANT_READ_URI_PERMISSION) 才可读；别的应用拿不到入口。
+      本应用不上架商店、数据本来就在用户自己的存储里，这个取舍是合理的。
+    -->
+    <root-path name="root" path="/" />
+</paths>

@@ -7,15 +7,15 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../app_state.dart';
 import '../../core/app_info.dart';
 import '../../core/app_paths.dart';
 import '../../core/motion/app_motion.dart';
 import '../../core/motion/apple_page_route.dart';
-import '../../core/platform/window_mode.dart';
+import '../../core/platform/external_open.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
 import '../trash/trash_retention.dart';
@@ -211,29 +211,193 @@ class _BackupChoice extends StatelessWidget {
 /// "备份一直没生效"。
 ///
 /// 返回挑好的路径；用户取消或目录不可写时返回 null（不可写会自己弹提示）。
+/// 挑一个可写目录 —— **直接用手机自带的文件管理器**。
+///
+/// 数据位置、快照、备份三处共用这一个函数，行为完全一致：
+/// 1. 调系统的目录选择器（就是文件管理器那个界面），让用户自己翻、自己挑；
+/// 2. 挑完当场探写一次 —— 能写才认；
+/// 3. 写不进去时才去查「所有文件访问」，缺了才引导 —— 不提前拦人。
+///
+/// 为什么不在挑之前先查权限：没权限的用户也想先看看文件管理器长什么样，
+/// 一上来就弹设置页很粗暴。挑完发现写不进去，这时候说"要开个权限"才讲得通。
 Future<String?> _pickWritableDir(
   BuildContext context,
-  String dialogTitle,
-) async {
+  String dialogTitle, {
+  String why = '',
+}) async {
+  // 手机上先给两个选项，而不是直接甩一个文件管理器：
+  //   1. 应用私有目录（默认，最稳）
+  //   2. 自己挑一个文件夹 —— 走手机自带的文件管理器
+  // 前者一键切过去；后者进 [_pickCustomDir]。
+  //
+  // **只有在"还没决定放哪"的时候才该问这个。** 调用方已经明确是
+  // "我要自己挑"（比如完整备份弹窗里选了「自己挑一个文件夹」）时，
+  // 直接用 [_pickCustomDir]，别让用户看第二遍同样的选择。
+  if (needsFileProvider) {
+    final choice = await _pickMobileLocation(context);
+    if (choice == null) return null;
+    if (!context.mounted) return null;
+    if (choice == kPickCustomDir) {
+      return _pickCustomDir(context, dialogTitle, why: why);
+    }
+    return p.join(choice, 'backups');
+  }
+  return _pickCustomDir(context, dialogTitle, why: why);
+}
+
+/// 打开系统文件管理器让用户挑一个文件夹，挑完当场探写。
+///
+/// 探写失败时才去查「所有文件访问」—— 不提前拦人：没权限的用户也想先看看
+/// 文件管理器长什么样，挑完发现写不进去，这时候说"要开个权限"才讲得通。
+Future<String?> _pickCustomDir(
+  BuildContext context,
+  String dialogTitle, {
+  String why = '',
+}) async {
   final messenger = ScaffoldMessenger.of(context);
   final picked = await FilePicker.getDirectoryPath(dialogTitle: dialogTitle);
   if (picked == null || picked.trim().isEmpty) return null;
+  if (!context.mounted) return null;
+
   final dir = Directory(picked.trim());
   try {
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    final probe = File('${dir.path}${Platform.pathSeparator}.yw-write-test');
+    final probe = File(p.join(dir.path, '.yw-write-test'));
     probe.writeAsStringSync('ok');
     probe.deleteSync();
   } catch (e) {
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text('这个目录写不进去：$e'),
-        duration: const Duration(seconds: 4),
-      ),
-    );
+    if (needsFileProvider && !await hasAllFilesAccess()) {
+      if (!context.mounted) return null;
+      await _promptAllFilesAccess(
+        context,
+        why: why.isEmpty ? '刚才那个文件夹写不进去。' : why,
+      );
+      return null;
+    }
+    if (context.mounted) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('这个目录写不进去：$e'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
     return null;
   }
   return dir.path;
+}
+
+/// 「自己挑一个文件夹」在 [_pickMobileLocation] 里的哨兵值。
+const String kPickCustomDir = '\u0000custom';
+
+/// 手机上的存放位置：二选一 —— **默认** 或 **自定义**。
+///
+/// 选「自定义」之后走手机自带的文件管理器挑文件夹（系统目录选择器）。
+/// 不再给「Android/data」那种中间项：那个位置在 Android 11+ 连系统
+/// 文件管理器自己都进不去，列出来只是让人多犹豫一次。
+Future<String?> _pickMobileLocation(BuildContext context) async {
+  final current = context.read<AppState>().db.rootDir.path;
+  final privateRoot = await privateAppRoot();
+  if (!context.mounted) return null;
+
+  final onDefault =
+      privateRoot != null && p.normalize(current) == p.normalize(privateRoot);
+
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) {
+      final c = ctx.colors;
+      return AlertDialog(
+        title: const Text('放在哪里？'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              onDefault
+                  ? '现在用的是默认位置（应用私有目录）。'
+                  : '现在用的是自定义位置：\n$current',
+              style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+            ),
+            const SizedBox(height: 14),
+            _BackupChoice(
+              icon: Icons.shield_rounded,
+              label: '默认位置',
+              subtitle: '应用私有目录，系统不会清理\n文件管理器进不去',
+              onTap: () => Navigator.of(ctx).pop(privateRoot),
+            ),
+            const SizedBox(height: 10),
+            _BackupChoice(
+              icon: Icons.folder_open_rounded,
+              label: '自定义位置…',
+              subtitle: '用手机自带的文件管理器挑一个文件夹\nSD 卡、网盘同步目录都行',
+              onTap: () => Navigator.of(ctx).pop(kPickCustomDir),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+/// 告诉用户「所有文件访问」在哪开，并直接跳过去。
+Future<void> _promptAllFilesAccess(
+  BuildContext context, {
+  required String why,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final go = await showDialog<bool>(
+    context: context,
+    builder: (ctx) {
+      final c = ctx.colors;
+      return AlertDialog(
+        title: const Text('需要「所有文件访问」权限'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              why.isEmpty ? '刚才那个文件夹写不进去。' : why,
+              style: AppText.callout.copyWith(color: c.label, height: 1.6),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Android 默认只允许应用写它自己的两个私有目录，'
+              '别的文件夹要先给这个权限才能写。',
+              style:
+                  AppText.callout.copyWith(color: c.secondaryLabel, height: 1.6),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '系统设置里找「元世界」→「所有文件访问」，打开后回来再点一次。',
+              style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('去开启'),
+          ),
+        ],
+      );
+    },
+  );
+  if (go != true || !context.mounted) return;
+  final error = await requestAllFilesAccess();
+  if (error != null && context.mounted) {
+    messenger.showSnackBar(SnackBar(content: Text(error)));
+  }
 }
 
 /// 备份与快照各自的存放目录 —— 改地址、回默认。
@@ -340,19 +504,11 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
 
   Directory? target;
   if (where == _BackupWhere.pick) {
-    final picked = await FilePicker.getDirectoryPath(
-      dialogTitle: '备份存到这个文件夹',
-    );
-    if (picked == null || picked.trim().isEmpty) return;
-    target = Directory(picked.trim());
-    try {
-      target.createSync(recursive: true);
-    } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('这个文件夹用不了：$e')),
-      );
-      return;
-    }
+    // 用户已经明确说了"自己挑"，就别再弹一遍"默认还是自定义"——
+    // 直接进系统文件管理器。
+    final picked = await _pickCustomDir(context, '备份存到这个文件夹');
+    if (picked == null) return;
+    target = Directory(picked);
   }
 
   final progress = ValueNotifier<double>(0);
@@ -444,10 +600,14 @@ Future<void> _backupNow(BuildContext context, AppState state) async {
 /// 一份。两份并存过一次，结果用户自己也分不清哪个是正在用的。
 Future<void> _moveDataLocation(BuildContext context, AppState state) async {
   final messenger = ScaffoldMessenger.of(context);
-  final picked = await FilePicker.getDirectoryPath(
-    dialogTitle: '选择数据存放位置',
+
+  // 和数据、快照、备份三处走**同一套**挑目录逻辑（系统文件管理器）。
+  final picked = await _pickWritableDir(
+    context,
+    '选择数据存放位置',
+    why: '刚才那个文件夹写不进去，可能还没给「所有文件访问」。',
   );
-  if (picked == null || picked.trim().isEmpty) return;
+  if (picked == null) return;
   if (!context.mounted) return;
   final target = dataDirIn(picked.trim());
 
@@ -494,6 +654,7 @@ Future<void> _resetDataLocation(BuildContext context, AppState state) async {
 
   await _runDataMove(context, state, null, messenger, '已回到默认位置');
 }
+
 
 /// 真正干活的：进度框 + 调 AppState + 结果提示。
 Future<void> _runDataMove(
@@ -1135,38 +1296,23 @@ class SettingsPage extends StatelessWidget {
 
             // ── 存储位置 ───────────────────────────────────────────────
             _SectionHeader('存储位置'),
+            // 只有数据库和图片视频合并成一行 —— 这两者**物理上必须待在一起**：
+            // 正文里存的是 `55/xxx.png` 这种相对路径，渲染时用 imageRoot 拼回
+            // 绝对路径，拆成两处就解析不出来。拆成两行只会让人以为能分别设置，
+            // 实际上改一个必然连带另一个。
+            //
+            // 快照和备份**不在这里**：它们各自有独立的存放位置，可以指向任意
+            // 目录（移动硬盘、网盘同步目录都行），在下面的「备份与恢复」里设。
             _Group(
               children: [
                 _PathRow(
-                  icon: Icons.storage_rounded,
+                  icon: Icons.folder_rounded,
                   iconColor: c.functionalPalette[2],
-                  label: '数据库',
-                  path:
-                      '${state.db.rootDir.path}${Platform.pathSeparator}yuanworld.db',
-                  // 是文件不是目录：打开它**所在的目录**才有意义
-                  isDirectory: false,
-                  // 手机上数据必须待在应用私有目录里，系统才不清理，
-                  // 所以只在桌面端给"修改/默认"这两个动作。
-                  onMove: isDesktopWindow
-                      ? () => _moveDataLocation(context, state)
-                      : null,
-                  onReset: isDesktopWindow
-                      ? () => _resetDataLocation(context, state)
-                      : null,
-                  isCustom: state.dataLocationIsCustom,
-                ),
-                _RowDivider(),
-                _PathRow(
-                  icon: Icons.photo_library_rounded,
-                  iconColor: c.functionalPalette[6],
-                  label: '图片与视频',
-                  path: state.db.imageRoot.path,
-                  onMove: isDesktopWindow
-                      ? () => _moveDataLocation(context, state)
-                      : null,
-                  onReset: isDesktopWindow
-                      ? () => _resetDataLocation(context, state)
-                      : null,
+                  label: '数据目录',
+                  path: state.db.rootDir.path,
+                  subtitle: '数据库和图片视频在这里；快照与备份的位置在下面单独设',
+                  onMove: () => _moveDataLocation(context, state),
+                  onReset: () => _resetDataLocation(context, state),
                   isCustom: state.dataLocationIsCustom,
                 ),
               ],
@@ -1849,7 +1995,7 @@ class _PathRow extends StatelessWidget {
     required this.iconColor,
     required this.label,
     required this.path,
-    this.isDirectory = true,
+    this.subtitle,
     this.onMove,
     this.onReset,
     this.isCustom = false,
@@ -1860,11 +2006,10 @@ class _PathRow extends StatelessWidget {
   final String label;
   final String path;
 
-  /// 是目录就打开它，是文件就打开所在目录 ——
-  /// 双击一个 .db 文件只会让系统问"用什么打开"，那不是用户想要的。
-  final bool isDirectory;
+  /// 路径下面再补一句说明（哪些东西在里边、为什么不能分开）。
+  final String? subtitle;
 
-  /// 给 null 就不显示「修改」按钮（手机端数据必须待在应用私有目录）。
+  /// 给 null 就不显示「修改」按钮。
   final VoidCallback? onMove;
 
   /// 给 null 就不显示「默认」按钮。
@@ -1894,17 +2039,33 @@ class _PathRow extends StatelessWidget {
                   height: 1.5,
                 ),
               ),
+              if (subtitle != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  subtitle!,
+                  style: AppText.caption2.copyWith(
+                    color: c.quaternaryLabel,
+                    height: 1.5,
+                  ),
+                ),
+              ],
             ],
           );
           final buttons = Wrap(
             spacing: 6,
             runSpacing: 6,
             children: [
+              // 三个按钮两端一致，不搞"手机专用按钮"。
+              // 手机上「打开」= 弹系统「打开方式」让你挑应用（文件管理器、
+              // MT 管理器、ZArchiver 都在里面）—— 挑中哪个由它自己决定是
+              // 定位到目录还是预览，我们不替用户选。
               _RowButton(
                 icon: Icons.folder_open_rounded,
                 label: '打开',
-                tooltip: '在文件管理器中打开',
-                onTap: () => _openPath(context, path, isDirectory),
+                tooltip: needsFileProvider
+                    ? '选一个应用打开（文件管理器、MT 管理器、ZArchiver 都行）'
+                    : '在文件管理器中打开',
+                onTap: () => _openPath(context, path),
               ),
               if (onMove != null)
                 _RowButton(
@@ -1946,27 +2107,92 @@ class _PathRow extends StatelessWidget {
 }
 
 /// 在文件管理器里打开一个路径（目录直接开，文件开它所在的目录）。
-Future<void> _openPath(
-  BuildContext context,
-  String path, [
-  bool isDirectory = true,
-]) async {
-  final target = isDirectory ? path : File(path).parent.path;
-  final dir = Directory(target);
-  if (!dir.existsSync()) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('目录还不存在')),
+///
+/// 手机上没有"文件管理器"能进私有目录 —— 这条路走 [openPathSmart]，
+/// 它会导出到公共「下载」目录，然后告诉用户存到哪了。
+/// 在文件管理器里定位到一个目录。
+///
+/// 手机上的流程是「先列应用，再让用户挑，最后用那个应用打开」——
+/// 不能直接丢给系统的 `createChooser`：MIUI 那个 chooser 只显示几个应用，
+/// 用户明明装了 MT 管理器却不出现（真机上验证过）。自己列一遍，
+/// 用户想用哪个就用哪个。
+Future<void> _openPath(BuildContext context, String path) async {
+  final messenger = ScaffoldMessenger.of(context);
+  // 一律当目录处理：这一行改成一个「数据目录」之后，传进来的就是目录。
+  final target = path;
+
+  if (!needsFileProvider) {
+    final error = await openPathSmart(path);
+    if (error == null || !context.mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(error),
+        duration: const Duration(seconds: 5),
+      ),
     );
     return;
   }
-  try {
-    await launchUrl(Uri.file(target), mode: LaunchMode.externalApplication);
-  } catch (e) {
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('打不开：$e')),
+
+  // 手机上有两种情况要分开处理，之前混成一条路了。
+  //
+  // 一、数据还在**应用私有目录**里：别的应用连读都读不到，弹出选择器
+  //     是让人白点一次。这里先如实说清楚，并给一个直达「修改」的按钮。
+  // 二、数据已经搬到**外部位置/自定义目录**：直接交给系统自带的
+  //     「打开方式」选择器 —— 系统级的排序、最近使用、默认应用记忆都在，
+  //     选完还能用「文件管理器」。
+  if (isPrivateAndroidPath(target)) {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final c = ctx.colors;
+        return AlertDialog(
+          title: const Text('这个位置打不开'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '数据现在放在应用私有目录里，别的应用读不到。',
+                style: AppText.callout.copyWith(color: c.label, height: 1.6),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '想用文件管理器打开它，请先点「修改」把位置换到外部位置。',
+                style:
+                    AppText.callout.copyWith(color: c.secondaryLabel, height: 1.6),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('知道了'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('去改位置'),
+            ),
+          ],
+        );
+      },
     );
+    if (go != true || !context.mounted) return;
+    final state = context.read<AppState>();
+    await _moveDataLocation(context, state);
+    return;
   }
+
+  // 外部位置：交给系统「打开方式」选择器，**由用户挑应用**。
+  // 挑中系统「文件」时，原生侧会把它当成"跳到这个位置"处理
+  // （见 MainActivity 的 openDirectoryWith → isDocumentsUi → locateDirectory）。
+  final error = await openPathSmart(target, isDirectory: true);
+  if (error == null || !context.mounted) return;
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(error),
+      duration: const Duration(seconds: 5),
+    ),
+  );
 }
 
 /// 设置行里的一个小按钮。`onTap` 为 null 时是灰的（不可点）。
