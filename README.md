@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/screenshots/logo.png" width="128" alt="元世界 logo">
+
 # 元世界
 
 **本地优先的笔记与知识可视化工具**
