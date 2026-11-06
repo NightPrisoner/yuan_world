@@ -46,14 +46,18 @@ Flutter · Windows + Android
 
 ## 下载
 
-**最新版本：1.0.1** · **[→ 所有版本](https://github.com/NightPrisoner/yuan_world/releases)**
+**最新版本：[1.0.1](https://github.com/NightPrisoner/yuan_world/releases/tag/v1.0.1)**
+
+**Releases 页面：<https://github.com/NightPrisoner/yuan_world/releases>**
 
 | 平台 | 包 | 说明 |
 |---|---|---|
 | Windows x64 | [`yuan_world-1.0.1-windows-x64-20261107.zip`](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-windows-x64-20261107.zip) | 解压即用，双击 `元世界.exe`，不用安装 |
 | Android arm64 | [`yuan_world-1.0.1-android-arm64-20261107.zip`](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-android-arm64-20261107.zip) | Android 7+，arm64 设备 |
 
-- **[Windows 版下载](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-windows-x64-20261107.zip)** · **[Android 版下载](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-android-arm64-20261107.zip)** · [更新记录](CHANGELOG.md)
+- **[Windows 版直接下载](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-windows-x64-20261107.zip)**
+- **[Android 版直接下载](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-android-arm64-20261107.zip)**
+- [本版更新说明](https://github.com/NightPrisoner/yuan_world/releases/tag/v1.0.1) · [完整更新记录](CHANGELOG.md)
 
 两个包都不含任何数据，首次运行会自己建。
 
