@@ -6,6 +6,22 @@
 
 ---
 
+## 下载
+
+**[→ 最新版本（Releases）](https://github.com/NightPrisoner/yuan_world/releases/latest)**
+
+| 平台 | 包 | 说明 |
+|---|---|---|
+| Windows x64 | `yuan_world-*-windows-x64-*.zip` | 解压即用，双击 `元世界.exe`，不用安装 |
+| Android arm64 | `yuan_world-*-android-arm64-*.zip` | Android 7+，arm64 设备 |
+
+两个包都不含任何数据，首次运行会自己建。
+
+> Android 包用调试证书签名（开源项目自行构建的常态）。换版本时若提示签名冲突，
+> 需要先卸载 —— **卸载会清数据，请先在设置里导出备份**。
+
+---
+
 ## 它是什么
 
 一套能装下长期写作的本地笔记库，加一层把自己写的东西看清楚的可视化。
@@ -63,7 +79,7 @@
 
 ```bash
 flutter pub get
-flutter test          # 1000+ 条测试
+flutter test          # 1200+ 条测试
 flutter analyze       # 应为 0 issue
 ```
 
@@ -81,7 +97,7 @@ flutter build apk --release
 # 产物：build/app/outputs/flutter-apk/app-release.apk
 ```
 
-> 仓库里**没有**预编译的安装包，请从源码自行构建。
+> 也可以直接从 [Releases](https://github.com/NightPrisoner/yuan_world/releases) 下载预编译包，不必自己构建。
 
 ---
 
