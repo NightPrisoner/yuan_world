@@ -1,8 +1,44 @@
+<div align="center">
+
 # 元世界
 
-本地优先的笔记与知识可视化应用。Windows 与 Android 同一份代码：Windows 上是三栏桌面布局，Android 上是底部标签的手机布局。
+**本地优先的笔记与知识可视化工具**
 
-**数据全部存在你自己的机器上，不联网、不上传、不登录。**
+数据全部存在你自己的机器上 · 不联网 · 不上传 · 不登录
+
+Flutter · Windows + Android
+
+</div>
+
+<br>
+
+<div align="center">
+
+<img src="docs/screenshots/home.png" width="920" alt="主页：左侧文件夹树、中间卡片墙、右侧正文">
+
+**主页** —— 左侧文件夹树 · 中间卡片墙 · 右侧正文，一整面墙都是你自己的笔记
+
+</div>
+
+<br>
+
+<div align="center">
+
+<img src="docs/screenshots/stats.png" width="920" alt="数据可视化：概览、发布趋势、累计增长">
+
+**数据可视化** —— 概览、发布趋势、累计增长、文件夹对比、活跃热力图、篇幅分布、高频词
+
+</div>
+
+<br>
+
+<div align="center">
+
+<img src="docs/screenshots/settings.png" width="920" alt="设置：主题、强调色、背景图、回收站、参数、导入导出与备份">
+
+**设置** —— 强调色与背景图、回收站保留天数、备份位置，都能自己调
+
+</div>
 
 ---
 
@@ -140,10 +176,10 @@ lib/
   core/         动效、主题、快捷键、路径、诊断日志等基础设施
   data/         数据库（schema + repositories）、导入、导出、备份、媒体
   features/     按功能划分的界面：shell / notes / collections / search / stats / settings …
-test/           1000+ 条测试，按功能分文件
+test/           1200+ 条测试，按功能分文件
 third_party/    sqlite3 源码（FTS5 从这里编，不依赖系统 SQLite）
 tool/           命令行工具（导入 / 基准测试）
-docs/           各轮审计记录
+docs/           README 用的截图（docs/screenshots/）
 ```
 
 `lib/data` 刻意不依赖 Flutter —— `tool/import_cli.dart` 用同一套数据层跑命令行导入。
