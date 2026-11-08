@@ -13,7 +13,35 @@
 library;
 
 /// 当前 schema 版本。每次改表结构都要 +1，并在 [kMigrations] 里补一段。
-const int kSchemaVersion = 11;
+const int kSchemaVersion = 13;
+
+/// v13：每篇笔记各自决定「段落首行缩进两字」。
+///
+/// 中文长文（网文、读书笔记）习惯每段空两格，写代码笔记的人则相反。
+/// 所以不是全局设置，而是每篇一个开关，默认关（保持加这一列之前的样子）。
+const List<String> kIndentStatements = <String>[
+  'ALTER TABLE notes ADD COLUMN indent_first_line INTEGER NOT NULL DEFAULT 0',
+];
+
+/// v12：头图可编辑（显示比例、放大倍数、取景位置）。
+///
+/// 头图以前是写死的 16:10 + 居中裁切。实际用起来三种情况都不合适：
+/// 竖构图（手机拍的）被裁掉一大半、长图只剩中间一条、人像的脸被切在边缘。
+/// 所以把「怎么显示」从代码里搬到数据上：
+///
+///   - `cover_ratio`   显示框的宽高比（1.6 = 16:10，默认值与旧行为一致）
+///   - `cover_zoom`    放大倍数（1 = 刚好填满，>1 = 往里推）
+///   - `cover_focus_x` 取景中心横向位置（-1 左 … 1 右）
+///   - `cover_focus_y` 取景中心纵向位置（-1 上 … 1 下）
+///
+/// 默认值刻意选成「和加这四列之前一模一样」，老库里所有笔记升级后
+/// 头图不会突然变样。
+const List<String> kCoverFrameStatements = <String>[
+  'ALTER TABLE notes ADD COLUMN cover_ratio REAL NOT NULL DEFAULT 1.6',
+  'ALTER TABLE notes ADD COLUMN cover_zoom REAL NOT NULL DEFAULT 1.0',
+  'ALTER TABLE notes ADD COLUMN cover_focus_x REAL NOT NULL DEFAULT 0',
+  'ALTER TABLE notes ADD COLUMN cover_focus_y REAL NOT NULL DEFAULT 0',
+];
 
 /// v8：按文件名规则排序用的键。
 ///
@@ -236,7 +264,14 @@ const List<String> kCreateStatements = <String>[
     -- 按文件名规则生成的排序键（见 windowsSortKey）
     sort_key     TEXT    NOT NULL DEFAULT '',
     -- 封面图（相对于图片根目录的路径）
-    cover_image  TEXT
+    cover_image  TEXT,
+    -- 封面怎么显示：宽高比、放大倍数、取景中心（见 kCoverFrameStatements）
+    cover_ratio   REAL NOT NULL DEFAULT 1.6,
+    cover_zoom    REAL NOT NULL DEFAULT 1.0,
+    cover_focus_x REAL NOT NULL DEFAULT 0,
+    cover_focus_y REAL NOT NULL DEFAULT 0,
+    -- 段落首行缩进两字（见 kIndentStatements）
+    indent_first_line INTEGER NOT NULL DEFAULT 0
   )
   ''',
 
@@ -476,4 +511,8 @@ const Map<int, List<String>> kMigrations = <int, List<String>>{
   // 没有它，中文两字词只能全表 LIKE 扫正文。有了它，`MATCH '"读 书"'`
   // 走 FTS 索引，短语语义天然等于子串语义。
   11: kSegmentIndexStatements,
+  // v11 → v12：头图可编辑（比例 / 放大 / 取景位置）
+  12: kCoverFrameStatements,
+  // v12 → v13：每篇笔记各自决定段落首行是否缩进两字
+  13: kIndentStatements,
 };

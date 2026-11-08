@@ -44,7 +44,10 @@ class AppDatabase {
     final root = Directory(rootPath);
     if (!root.existsSync()) root.createSync(recursive: true);
 
-    final instance = AppDatabase._(sqlite3.open(p.join(root.path, 'yuanworld.db')), root);
+    final instance = AppDatabase._(
+      sqlite3.open(p.join(root.path, 'yuanworld.db')),
+      root,
+    );
     instance._tune();
     instance._migrate();
     return instance;
@@ -52,7 +55,10 @@ class AppDatabase {
 
   /// 内存数据库，仅测试用。
   static AppDatabase inMemory() {
-    final instance = AppDatabase._(sqlite3.openInMemory(), Directory.systemTemp);
+    final instance = AppDatabase._(
+      sqlite3.openInMemory(),
+      Directory.systemTemp,
+    );
     instance._db.execute('PRAGMA foreign_keys = ON');
     // 自定义函数必须在这里也注册：内存库不走 _tune()，而迁移要用
     // search_segments() 回填 note_segments —— 漏了就是
@@ -139,8 +145,7 @@ class AppDatabase {
 
   void _migrate() {
     // PRAGMA 语句不支持 AS 别名，只能按下标取值
-    final current =
-        _db.select('PRAGMA user_version').first.columnAt(0) as int;
+    final current = _db.select('PRAGMA user_version').first.columnAt(0) as int;
 
     if (current == 0) {
       _db.execute('BEGIN');
@@ -173,7 +178,7 @@ class AppDatabase {
             );
           }
           for (final sql in steps) {
-            _db.execute(sql);
+            _runStep(sql);
           }
         }
         _db.execute('PRAGMA user_version = $kSchemaVersion');
@@ -198,6 +203,24 @@ class AppDatabase {
     _ensureColumn('notes', 'deleted_at', 'INTEGER');
     _ensureColumn('collections', 'deleted_at', 'INTEGER');
     _ensureColumn('notes', 'sort_key', "TEXT NOT NULL DEFAULT ''");
+  }
+
+  /// 跑一条迁移语句，**容忍"列已经存在"这类重复添加**。
+  ///
+  /// 为什么需要这个：`ALTER TABLE ... ADD COLUMN` 没有 `IF NOT EXISTS`，
+  /// 重复执行就报 `duplicate column name`。而这真的会发生 ——
+  ///   - 有人从备份里拿回一个"版本号被改小、列却已经是新的"的库；
+  ///   - 迁移中途断电，前半段的列建好了、版本号还没写。
+  /// 这种情况下整条迁移链会卡死在一个"其实已经做完了"的步骤上，
+  /// 启动直接失败。识别出这一种错误、跳过继续，其余错误照旧抛。
+  void _runStep(String sql) {
+    try {
+      _db.execute(sql);
+    } on SqliteException catch (e) {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('duplicate column name')) return;
+      rethrow;
+    }
   }
 
   /// 表里没有这一列就加上。已经有就什么都不做。

@@ -31,6 +31,69 @@ import java.io.File
 class MainActivity : FlutterActivity() {
 
     private val channelName = "com.yuanworld.yuan_world/files"
+    private val dragChannelName = "com.yuanworld.yuan_world/drop"
+    private var dragChannel: MethodChannel? = null
+
+    /**
+     * 拖放事件只在原生 View 上派发，Activity 本身没有 `dispatchDragEvent`
+     * （那是 `View` 的方法）。所以要挂到最外层的 decorView 上。
+     *
+     * **`ACTION_DRAG_STARTED` 必须返回 true** —— 否则系统认为这个窗口不接收
+     * 拖入，后面的 ENTERED / DROP 一个都不会来。
+     */
+    private fun installDragListener() {
+        // **必须把 desktop_drop 挂在 android.R.id.content 上的监听器摘掉。**
+        //
+        // 拖拽事件在 View 树里是从上往下派发的：decorView 先拿到，我返回 true
+        // 就到此为止；返回 false 系统会继续往子 View 递，于是落到 desktop_drop
+        // 的监听器上。它做的是「把 content:// URI 原样发给 Dart」—— 而 Dart 的
+        // dart:io 根本打不开 content://，最后表现成「拖进来了，但一个文件都没
+        // 识别到」。两个监听器抢同一个手势，只能留一个。
+        //
+        // 我们的做法比它靠谱（在这里就 requestDragAndDropPermissions 并把字节
+        // 拷成真实文件），所以摘它、留我们自己的。
+        (findViewById<android.view.ViewGroup>(android.R.id.content))
+            ?.setOnDragListener(null)
+
+        window.decorView.setOnDragListener { _, event ->
+            when (event.action) {
+                android.view.DragEvent.ACTION_DRAG_STARTED -> {
+                    dragChannel?.invokeMethod("onDragStarted", null)
+                    true
+                }
+                android.view.DragEvent.ACTION_DRAG_ENDED -> {
+                    dragChannel?.invokeMethod("onDragEnded", null)
+                    true
+                }
+                android.view.DragEvent.ACTION_DROP -> {
+                    // 吃掉这个事件，不管有没有读到文件。返回 false 会让它继续
+                    // 往下派发，被别的监听器再处理一次（重复导入或空列表）。
+                    handleDrop(event)
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        installDragListener()
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        // desktop_drop 是在 configureFlutterEngine 之后才挂到 android.R.id.content
+        // 上的，onCreate 那会儿它还不存在。这里每次恢复前台再摘一次，防止插件
+        // 在别处重新 attach 时又抢走拖拽事件。
+        (findViewById<android.view.ViewGroup>(android.R.id.content))
+            ?.setOnDragListener(null)
+    }
+
+    override fun onDestroy() {
+        dragChannel = null
+        super.onDestroy()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -98,6 +161,26 @@ class MainActivity : FlutterActivity() {
                     // 有了它才能像桌面端那样把数据放到任意文件夹。
                     "hasAllFilesAccess" -> {
                         result.success(hasAllFilesAccess())
+                    }
+
+                    "pickFolderAndCopy" -> {
+                        lastPickReason = null
+                        pickFolderAndCopy { r ->
+                            r.fold(
+                                onSuccess = { path -> result.success(path) },
+                                onFailure = { e ->
+                                    result.error(
+                                        "pick_failed",
+                                        e.message ?: e.toString(),
+                                        null
+                                    )
+                                },
+                            )
+                        }
+                    }
+
+                    "lastPickReason" -> {
+                        result.success(lastPickReason)
                     }
 
                     "requestAllFilesAccess" -> {
@@ -194,6 +277,307 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // 拖拽导入：Android 的拖放手势只到原生 View，Flutter 收不到。
+        // 这里把落下的文件先拷进应用的接收目录，再把路径报给 Dart。
+        dragChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, dragChannelName)
+    }
+
+    /// 拖进来待导入的文件放在这里，Dart 侧取走后会自己清。
+    private fun dropDir(): File = File(cacheDir, "drops").apply { mkdirs() }
+
+    /**
+     * Android 7+ 的拖放：从 ClipData 里把 `content://` 全拷到 [dropDir]。
+     *
+     * 为什么要拷：剪贴板 / 中转站 / 分屏另一侧给的 URI 授权只在这一刻有效，
+     * 松手之后随时可能失效，甚至原应用就退出了。不落盘就等于什么都没拿到。
+     *
+     * 只收文件、不收文本；目录（`vnd.android.document/directory`）也跳过 ——
+     * 递归遍历别家应用的树要通过 DocumentsContract，代价大且容易半途失败，
+     * 手机上用户真正想拖的是一两张图或一段视频。
+     */
+    private fun handleDrop(event: android.view.DragEvent): Boolean {
+        if (event.action != android.view.DragEvent.ACTION_DROP) return false
+        val clip = event.clipData ?: return false
+
+        // **必须先申请拖放授权。** 跨应用拖过来的 content:// URI，读权限只
+        // 在那一次手势里临时有效；不调这一句直接 openInputStream，抛
+        // SecurityException 或者读到空。这是 Android 文档里明写的步骤，
+        // 少了它整套东西看起来"能拖但是 0 字节"。
+        try {
+            requestDragAndDropPermissions(event)
+        } catch (_: Exception) {
+            // 同应用内拖拽不需要授权；失败也继续试一次
+        }
+
+        // 清掉**陈旧**残留，但别动刚才那次刚拷进来的。
+        //
+        // 以前这里是 `dropDir().listFiles()?.forEach { it.delete() }`，一次
+        // 全清。问题是 Android 对一次拖拽手势可能派发多次 ACTION_DROP，
+        // 第二次进来就把第一次刚拷好的文件删了，而 Dart 侧拿到的是第一批
+        // 路径 —— 复制时源文件已经没了，报"导入失败"。改成只删 10 分钟前的。
+        val staleBefore = System.currentTimeMillis() - 10 * 60 * 1000L
+        dropDir().listFiles()?.forEach { f ->
+            if (f.lastModified() < staleBefore) f.delete()
+        }
+
+        val saved = mutableListOf<String>()
+        val rejected = mutableListOf<String>()
+        val reasons = mutableListOf<String>()
+        val stamp = System.currentTimeMillis()
+
+        for (i in 0 until clip.itemCount) {
+            val uri = clip.getItemAt(i).uri ?: continue
+            val name = displayNameOf(uri) ?: "drop-$stamp-$i"
+            try {
+                if (isDirectoryUri(uri)) {
+                    // 拖进来的是文件夹：建一个以它命名的容器，把整棵子树拷进去。
+                    //
+                    // 容器本身作为 "path" 交给 Dart —— 那边认路径是不是目录，
+                    // 认出来就按「文集」处理（递归收文档、按相对路径还原文集
+                    // 层级）。所以这里要**保留目录结构**，不能拍平。
+                    //
+                    // **容器名固定，不 uniqueFile**：每次拖同一个文件夹都该得到
+                    // 同一个文集名，否则 Dart 侧会建出「小小说」「小小说-2」，
+                    // 而去重是按「标题 + 文集」判断的 —— 文集 id 一变就认不出
+                    // 是同一批文章，于是整批重复导入。
+                    val container = File(dropDir(), sanitize(name))
+                    if (container.exists()) container.deleteRecursively()
+                    container.mkdirs()
+                    val copied = copyTree(uri, container, reasons)
+                    if (copied == 0) {
+                        container.deleteRecursively()
+                        rejected.add(name)
+                        reasons.add("$name：这个文件夹里没有能读的文件")
+                    } else {
+                        saved.add(container.absolutePath)
+                    }
+                } else {
+                    val target = uniqueFile(dropDir(), sanitize(name))
+                    contentResolver.openInputStream(uri).use { input ->
+                        if (input == null) throw IllegalStateException("读不到内容")
+                        target.outputStream().use { out -> input.copyTo(out) }
+                    }
+                    if (target.length() == 0L) {
+                        target.delete()
+                        rejected.add(name)
+                        reasons.add("$name：读出来是 0 字节")
+                    } else {
+                        saved.add(target.absolutePath)
+                    }
+                }
+            } catch (e: Exception) {
+                // 以前只把名字塞进 rejected，异常本身扔了。用户看到的就是
+                // "导入失败：文件名"，完全不知道是权限、URI 还是磁盘。
+                rejected.add(name)
+                reasons.add("$name：${e.javaClass.simpleName} ${e.message ?: ""}".trim())
+            }
+        }
+
+        if (saved.isEmpty() && rejected.isEmpty()) return false
+        dragChannel?.invokeMethod(
+            "onDrop",
+            mapOf(
+                "paths" to saved,
+                "rejected" to rejected,
+                "reasons" to reasons,
+            ),
+        )
+        return true
+    }
+
+    /** 从 URI 猜一个带扩展名的文件名 —— 扩展名决定了它是图片还是视频。 */
+    private fun displayNameOf(uri: Uri): String? {
+        var name: String? = null
+        if (uri.scheme == "content") {
+            try {
+                contentResolver.query(uri, null, null, null, null)?.use { c ->
+                    val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0 && c.moveToFirst()) name = c.getString(idx)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        if (name.isNullOrEmpty()) name = uri.lastPathSegment?.substringAfterLast('/')
+        return name
+    }
+
+    /** 去掉路径分隔符之类会让写盘跑偏的字符。 */
+    private fun sanitize(name: String): String =
+        name.replace(Regex("""[\\/:*?"<>|]"""), "_").take(120).ifEmpty { "drop" }
+
+    private fun uniqueFile(dir: File, name: String): File {
+        val base = name.substringBeforeLast('.', name)
+        val ext = name.substringAfterLast('.', "")
+        var candidate = File(dir, name)
+        var n = 2
+        while (candidate.exists()) {
+            val suffix = if (ext.isEmpty()) "" else ".$ext"
+            candidate = File(dir, "$base-$n$suffix")
+            n++
+        }
+        return candidate
+    }
+
+    /**
+     * 拖进来的这一项是不是文件夹。
+     *
+     * 三种可能：`file://`（自应用内拖）、`content://` 的 document URI、
+     * `content://` 的 tree URI。前两种要问 MIME，tree URI 一定是目录。
+     */
+    private fun isDirectoryUri(uri: Uri): Boolean {
+        if (uri.scheme == "file") {
+            val path = uri.path ?: return false
+            return File(path).isDirectory
+        }
+        return try {
+            if (DocumentsContract.isTreeUri(uri)) return true
+            if (DocumentsContract.isDocumentUri(this, uri)) {
+                contentResolver.query(
+                    uri,
+                    arrayOf(DocumentsContract.Document.COLUMN_MIME_TYPE),
+                    null, null, null,
+                )?.use { c ->
+                    if (c.moveToFirst() && !c.isNull(0)) {
+                        return c.getString(0) == DocumentsContract.Document.MIME_TYPE_DIR
+                    }
+                }
+            }
+            contentResolver.getType(uri) == DocumentsContract.Document.MIME_TYPE_DIR
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 把一个目录 URI 的子项列出来：`(子 URI, 名字, MIME)`。
+     *
+     * [treeUri] 是用户当初选出来的那棵树。子项的 URI 一律用
+     * `buildDocumentUriUsingTree(treeUri, childDocId)` 构造 —— 它继承 tree
+     * 的授权。曾经这里拿子项的 docId 反过来拼 tree
+     *（`buildTreeDocumentUri(authority, docId)`），MIUI 的 provider 不认，
+     * query 返回空游标，于是子文件夹永远是空的（"多层结构没继承"）。
+     */
+    private fun childEntries(
+        uri: Uri,
+        treeUri: Uri,
+    ): List<Triple<Uri, String, String>>? {
+        val docId = try {
+            if (DocumentsContract.isTreeUri(uri)) {
+                DocumentsContract.getTreeDocumentId(uri)
+            } else {
+                DocumentsContract.getDocumentId(uri)
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        val tree = if (DocumentsContract.isTreeUri(uri)) uri else treeUri
+        val childrenUri = try {
+            DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
+        } catch (_: Exception) {
+            return null
+        }
+        val out = mutableListOf<Triple<Uri, String, String>>()
+        try {
+            contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                ),
+                null, null, null,
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getString(0) ?: continue
+                    val name = c.getString(1) ?: id.substringAfterLast('/')
+                    val mime = c.getString(2) ?: ""
+                    val childUri = try {
+                        DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                    } catch (_: Exception) {
+                        continue
+                    }
+                    out.add(Triple(childUri, name, mime))
+                }
+            }
+        } catch (_: Exception) {
+            return null
+        }
+        return out
+    }
+
+    /**
+     * 递归把目录 URI 里的内容拷进 [dest]，返回拷成功的文件数。
+     *
+     * [treeUri] 必须一路传下去 —— **不要拿子项的 docId 重新拼 tree URI**。
+     * MIUI 的 DocumentsProvider 不认那种"事后拼出来的"tree，query 直接返回
+     * 空游标，表现就是"只拷到了第一层，子文件夹全是空的"。子项一律用
+     * `buildDocumentUriUsingTree(原 treeUri, childDocId)` 构造，走的是同一条
+     * 已授权的树。
+     *
+     * 两个上限（`depth <= 8`、`files <= 500`）是防手滑：有人会把整个相册
+     * 拖进来，那会拷出几个 G 塞满缓存盘，而用户只是想导一篇文档。超限时
+     * 不报错，把已拷的交给上层 —— 能导入多少算多少。
+     */
+    private fun copyTree(
+        root: Uri,
+        dest: File,
+        reasons: MutableList<String>,
+        treeUri: Uri = root,
+        depth: Int = 0,
+        counter: IntArray = intArrayOf(0),
+    ): Int {
+        if (depth > 8) return counter[0]
+
+        if (root.scheme == "file") {
+            val src = root.path?.let { File(it) } ?: return counter[0]
+            if (!src.isDirectory) return counter[0]
+            src.listFiles()?.forEach { f ->
+                if (counter[0] >= 500) return@forEach
+                val target = File(dest, sanitize(f.name))
+                if (f.isDirectory) {
+                    target.mkdirs()
+                    copyTree(Uri.fromFile(f), target, reasons, depth = depth + 1, counter = counter)
+                } else {
+                    try {
+                        f.inputStream().use { i -> target.outputStream().use { i.copyTo(it) } }
+                        counter[0]++
+                    } catch (e: Exception) {
+                        reasons.add("${f.name}：${e.javaClass.simpleName}")
+                    }
+                }
+            }
+            return counter[0]
+        }
+
+        val children = childEntries(root, treeUri) ?: return counter[0]
+        for ((childUri, name, mime) in children) {
+            if (counter[0] >= 500) break
+            val safe = sanitize(name)
+            val target = File(dest, safe)
+            if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                target.mkdirs()
+                copyTree(
+                    childUri, target, reasons,
+                    treeUri = treeUri, depth = depth + 1, counter = counter,
+                )
+            } else {
+                try {
+                    contentResolver.openInputStream(childUri).use { input ->
+                        if (input == null) throw IllegalStateException("读不到内容")
+                        target.outputStream().use { out -> input.copyTo(out) }
+                    }
+                    if (target.length() == 0L) {
+                        target.delete()
+                    } else {
+                        counter[0]++
+                    }
+                } catch (e: Exception) {
+                    reasons.add("$safe：${e.javaClass.simpleName} ${e.message ?: ""}".trim())
+                }
+            }
+        }
+        return counter[0]
     }
 
     /** 用系统默认程序打开一个私有目录里的文件（content:// + 临时读授权）。 */
@@ -691,6 +1075,181 @@ class MainActivity : FlutterActivity() {
     private fun hasAllFilesAccess(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
         return Environment.isExternalStorageManager()
+    }
+
+    /**
+     * 让用户挑一个文件夹，把**里面的文件真拷出来**，返回本地目录路径。
+     *
+     * 为什么不直接用 file_picker 的 `getDirectoryPath`：它拿 SAF 的 tree URI
+     * 反推磁盘路径（`primary:<rel>` → `/storage/emulated/0/<rel>`），反推出来
+     * 的路径**不一定真的可读** —— SAF 授权是 URI 级别的，拿到裸路径去
+     * `listSync()` 要么 EACCES，要么返回空。真机上表现就是「选好了文件夹，
+     * 提示该文件夹下没有找到可以导入的文档」。
+     *
+     * 这里改用 ACTION_OPEN_DOCUMENT_TREE，拿到 tree URI 后**通过
+     * DocumentsContract 逐层读**，把文件拷进 cache，再把缓存目录交回去。
+     * 这样 Dart 侧拿到的永远是可读的真实文件，不管用户选的是主存储、
+     * SD 卡还是网盘目录。
+     */
+    private fun pickFolderAndCopy(callback: (Result<String?>) -> Unit) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try {
+            startActivityForResult(intent, REQ_PICK_FOLDER)
+        } catch (e: ActivityNotFoundException) {
+            callback(Result.failure(e))
+            return
+        }
+        pendingFolderCallback = callback
+    }
+
+    private var pendingFolderCallback: ((Result<String?>) -> Unit)? = null
+
+    @Deprecated("FlutterActivity 仍走这套回调")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_PICK_FOLDER) return
+        val cb = pendingFolderCallback ?: return
+        pendingFolderCallback = null
+
+        val tree = data?.data
+        if (resultCode != android.app.Activity.RESULT_OK || tree == null) {
+            cb(Result.success(null))
+            return
+        }
+        // 拿持久授权。**拿不到就直接停**，不要硬着头皮往下读 ——
+        // 持久授权失败意味着每次 query 子目录系统都要再弹一次确认框
+        //（用户看到的"一闪一闪的弹窗"就是这个），拷出来的结果也不可靠。
+        var granted = false
+        try {
+            contentResolver.takePersistableUriPermission(
+                tree, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            granted = true
+        } catch (_: Exception) {
+        }
+
+        try {
+            // **有「所有文件访问」时，根本不用走 SAF 读文件。**
+            //
+            // SAF 那套（DocumentsContract 递归 query + 逐个
+            // openInputStream）在 MIUI 上有三个躲不开的毛病：
+            //   1. 每次 query 子目录都可能触发系统授权框 —— 用户看到的
+            //      "一闪一闪的弹窗"；
+            //   2. 子项的 tree URI 得自己拼，MIUI 不认拼出来的树，递归到
+            //      第二层就返回空游标 —— "多层结构没继承"；
+            //   3. 慢，几百个文件要几百次跨进程调用。
+            //
+            // 我们本来就申请了 MANAGE_EXTERNAL_STORAGE（这个应用只从 GitHub
+            // 分发，不上架商店）。有它就能直接读磁盘真实路径，上面三条全没了。
+            // SAF 只用来**让用户挑一个文件夹**，挑完立刻换算成路径。
+            val docId = DocumentsContract.getTreeDocumentId(tree)
+            val picked = docId.substringAfter(':', missingDelimiterValue = docId)
+                .substringAfterLast('/')
+                .ifEmpty { "folder-${System.currentTimeMillis()}" }
+
+            val realDir = treeDocIdToPath(docId)
+            val sourceDir = realDir?.takeIf { it.isDirectory && it.canRead() }
+
+            if (sourceDir == null) {
+                // 没有权限或路径换算不出来 —— 退回 SAF 递归（慢，但能work）
+                val container = File(dropDir(), sanitize(picked))
+                if (container.exists()) container.deleteRecursively()
+                container.mkdirs()
+                val reasons = mutableListOf<String>()
+                val copied = copyTree(tree, container, reasons)
+                if (copied == 0) {
+                    container.deleteRecursively()
+                    cb(Result.success(""))
+                    lastPickReason = if (reasons.isEmpty()) {
+                        "这个文件夹里没有文件，或者系统没给我们读它的权限"
+                    } else {
+                        reasons.take(3).joinToString("；")
+                    }
+                } else {
+                    lastPickReason = null
+                    cb(Result.success(container.absolutePath))
+                }
+                return
+            }
+
+            // 直接拷真实目录。**保留相对结构** —— 导入时要按相对路径还原
+            // 「文集 → 子文集 → 文章」的层级。
+            //
+            // **容器名固定，不 uniqueFile。**
+            // 以前用 uniqueFile 建 `小小说` / `小小说-2` / `小小说-3`，每次导入
+            // 都换一个名字，于是 Dart 侧 p.basename(rootDir) 每次都不一样，
+            // 文集也跟着建出「小小说」「小小说-2」—— 而且因为 collection_id
+            // 变了，去重判断（标题 + 文集）匹配不上，同一批文章被重复导入。
+            // 改成每次先删掉同名旧目录再建，名字永远稳定。
+            val container = File(dropDir(), sanitize(picked))
+            if (container.exists()) container.deleteRecursively()
+            container.mkdirs()
+            var count = 0
+            sourceDir.walkTopDown().forEach { f ->
+                if (count >= 500) return@forEach
+                val rel = f.toRelativeString(sourceDir)
+                if (rel.isEmpty() || rel == ".") return@forEach
+                val target = File(container, rel)
+                if (f.isDirectory) {
+                    target.mkdirs()
+                } else {
+                    try {
+                        target.parentFile?.mkdirs()
+                        f.copyTo(target, overwrite = true)
+                        count++
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            if (count == 0) {
+                container.deleteRecursively()
+                cb(Result.success(""))
+                lastPickReason = "这个文件夹里没有文件"
+            } else {
+                lastPickReason = null
+                cb(Result.success(container.absolutePath))
+            }
+        } catch (e: Exception) {
+            cb(Result.failure(e))
+        }
+    }
+
+    /**
+     * SAF 的 tree docId 换算成磁盘真实路径。
+     *
+     * docId 的格式是 `<卷ID>:<相对路径>`：
+     *   - `primary:小小说`      → `/storage/emulated/0/小小说`
+     *   - `1A2B-3C4D:照片`      → `/storage/1A2B-3C4D/照片`
+     *   - `primary:`            → `/storage/emulated/0`（选了根）
+     *
+     * 换算不出来（比如网盘、下载 provider 的 `raw:`/`msf:` 形式）返回 null，
+     * 调用方退回 SAF 递归。
+     */
+    private fun treeDocIdToPath(docId: String): File? {
+        val idx = docId.indexOf(':')
+        if (idx < 0) return null
+        val volume = docId.substring(0, idx)
+        val rel = docId.substring(idx + 1)
+        if (volume.isEmpty() || rel.startsWith("raw:") || rel.startsWith("msf:")) {
+            return null
+        }
+        val base = if (volume.equals("primary", ignoreCase = true)) {
+            Environment.getExternalStorageDirectory()
+        } else {
+            File("/storage/$volume")
+        }
+        if (base == null || !base.exists()) return null
+        return if (rel.isEmpty()) base else File(base, rel)
+    }
+
+    /** 上一次挑文件夹失败的原因（成功时为 null），供 Dart 侧展示。 */
+    private var lastPickReason: String? = null
+
+    private companion object {
+        const val REQ_PICK_FOLDER = 0x9A01
     }
 
     /**

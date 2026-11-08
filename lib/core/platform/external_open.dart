@@ -195,6 +195,44 @@ Future<String?> requestAllFilesAccess() async {
   }
 }
 
+/// 让用户挑一个文件夹，把里面的文件拷到缓存，返回那个缓存目录。
+///
+/// 为什么不用 `FilePicker.getDirectoryPath`：它拿 SAF 的 tree URI 反推磁盘
+/// 路径（`primary:<rel>` → `/storage/emulated/0/<rel>`），反推出的路径不一定
+/// 真的可读 —— SAF 授权是 URI 级别的，拿裸路径 `listSync()` 会 EACCES 或
+/// 返回空。真机上的表现就是「选好了文件夹，提示没有找到可以导入的文档」。
+///
+/// 这里走原生：`ACTION_OPEN_DOCUMENT_TREE` 拿 tree URI，再用
+/// `DocumentsContract` 逐层读，拷成真实文件。用户选主存储、SD 卡还是网盘
+/// 目录都成立。
+///
+/// 返回 null 表示用户取消了；返回空串表示文件夹里没拷出任何文件。
+Future<String?> pickFolderAndCopy() async {
+  if (!needsFileProvider) return null;
+  try {
+    return await _channel.invokeMethod<String>('pickFolderAndCopy');
+  } on PlatformException catch (e) {
+    throw StateError(e.message ?? '选文件夹失败');
+  } on MissingPluginException {
+    return null;
+  }
+}
+
+/// 上一次 [pickFolderAndCopy] 一个文件都没拷出来时的原因。
+///
+/// 原生侧把「列不出目录」「子项全读不了」这类原因攒在这里，界面上要显示
+/// 出来 —— 否则用户只看到一句"没有找到文档"，开发者翻日志也什么都看不到。
+Future<String?> lastPickReason() async {
+  if (!needsFileProvider) return null;
+  try {
+    return await _channel.invokeMethod<String>('lastPickReason');
+  } on PlatformException {
+    return null;
+  } on MissingPluginException {
+    return null;
+  }
+}
+
 /// 这个路径是不是「应用私有目录」（`/data/user/0/<包名>/...`）。
 ///
 /// 外部私有目录是 `/storage/emulated/0/Android/data/<包名>/...`，

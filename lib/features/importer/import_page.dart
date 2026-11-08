@@ -16,9 +16,12 @@ import 'package:provider/provider.dart';
 
 import '../../app_state.dart';
 import '../../core/motion/app_motion.dart';
+import '../../core/platform/external_open.dart';
+import '../../core/platform/native_drop.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_menu.dart';
 import '../../data/importer/import_service.dart';
+import 'directory_picker_page.dart';
 
 class ImportPage extends StatefulWidget {
   const ImportPage({super.key});
@@ -88,7 +91,32 @@ class _ImportPageState extends State<ImportPage> {
   Future<void> _pickFolder() async {
     String? dir;
     try {
-      dir = await FilePicker.getDirectoryPath(dialogTitle: '选择文集文件夹');
+      // 手机上不能拿 FilePicker 反推出来的裸路径 —— SAF 授权是 URI 级的，
+      // 那个路径 listSync 出来是空的（真机表现：「选好了文件夹，提示该
+      // 文件夹下没有找到可以导入的文档」）。
+      //
+      // 系统 SAF 在 MIUI 上还有两个躲不开的毛病：Android 11+ 的 SAF 本身
+      // 就不显示 `Android/` 里的内容、也不让选外部存储根；MIUI 把自己的
+      // fileexplorer provider 塞进 DocumentsUI，它不按 AOSP 约定响应子目录
+      // query，递归到第二层就返回空游标。所以这里**不用 SAF**，直接开一个
+      // 自建的目录浏览器读文件系统（依赖「所有文件访问」，我们本来就申请了）。
+      if (needsFileProvider) {
+        if (!await hasAllFilesAccess()) {
+          if (!mounted) return;
+          final go = await _askAllFilesAccess();
+          if (!go) return;
+          final err = await requestAllFilesAccess();
+          if (!mounted) return;
+          _toast(
+            err ?? '去系统设置里打开「所有文件访问」，回来再点一次',
+          );
+          return;
+        }
+        if (!mounted) return;
+        dir = await pickDirectoryManually(context, title: '选择文集文件夹');
+      } else {
+        dir = await FilePicker.getDirectoryPath(dialogTitle: '选择文集文件夹');
+      }
     } catch (e) {
       _toast('打开文件夹选择器失败：$e');
       return;
@@ -108,6 +136,51 @@ class _ImportPageState extends State<ImportPage> {
       _folderRoot = dir;
       _summary = null;
     });
+  }
+
+  /// 问一句要不要去开「所有文件访问」。
+  Future<bool> _askAllFilesAccess() async {
+    final c = context.colors;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('需要「所有文件访问」权限'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '要从手机里挑一个文件夹导入，得先给这个权限。',
+              style: AppText.callout.copyWith(color: c.label, height: 1.6),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Android 从 11 开始把存储切成沙箱，不给这个权限的话应用只能看'
+              '自己那一小块地方 —— 系统自带的文件夹选择器在小米上还有别的'
+              '毛病，所以我们直接读文件系统。',
+              style:
+                  AppText.callout.copyWith(color: c.secondaryLabel, height: 1.6),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '系统设置里找「元世界」→「所有文件访问」，打开后回来再点一次。',
+              style: AppText.caption1.copyWith(color: c.tertiaryLabel),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('去开启'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
   }
 
   Future<void> _start() async {
@@ -186,11 +259,27 @@ class _ImportPageState extends State<ImportPage> {
     // 页面别的地方（介绍文字上、空白处）就毫无反应 —— 看上去就是
     // "拖入功能坏了"。而且导入过程中那段代码会把 DropTarget 整个
     // 从树里拿掉，期间也拖不了。
-    return DropTarget(
-      onDragEntered: (_) => setState(() => _dragging = true),
-      onDragExited: (_) => setState(() => _dragging = false),
-      onDragDone: _onDrop,
-      child: Scaffold(
+    //
+    // 手机上 `desktop_drop` 收不到事件（Android 的拖放只派发给原生
+    // View），所以外面再套一层 `NativeDrop`：原生把 `content://` 拷进
+    // 缓存目录，路径交给同一段 [_acceptPaths]。
+    return NativeDrop.host(
+      onDragStarted: () => setState(() => _dragging = true),
+      onDragEnded: () => setState(() => _dragging = false),
+      onDrop: (payload) async {
+        if (payload.paths.isEmpty && payload.rejected.isNotEmpty) {
+          // 原生侧一个都没读出来 —— 把原因说出来，否则只有一个文件名。
+          _toast('拖入的文件没读出来：${payload.summary}');
+          setState(() => _dragging = false);
+          return;
+        }
+        _acceptPaths(payload.paths);
+      },
+      child: DropTarget(
+        onDragEntered: (_) => setState(() => _dragging = true),
+        onDragExited: (_) => setState(() => _dragging = false),
+        onDragDone: _onDrop,
+        child: Scaffold(
         backgroundColor: c.groupedBackground,
         appBar: AppBar(
           backgroundColor: c.groupedBackground,
@@ -235,6 +324,7 @@ class _ImportPageState extends State<ImportPage> {
             // 拖拽时的整页蒙层：不遮住内容，只给一个明确的"松手就导入"
             if (_dragging) _dropOverlay(c),
           ],
+        ),
         ),
       ),
     );
@@ -373,6 +463,13 @@ class _ImportPageState extends State<ImportPage> {
   /// 文件夹会**递归**收集里面的 .docx/.txt/.md —— 拖一个文集目录进来
   /// 和点「选择文件夹」是同一件事，用户不该被迫分两步。
   void _onDrop(DropDoneDetails details) {
+    _acceptPaths(details.files.map((f) => f.path).toList(growable: false));
+  }
+
+  /// 拖入的路径统一从这里进 —— 桌面端来自 `desktop_drop`，手机来自
+  /// `NativeDrop`（原生把 `content://` 拷进缓存后给的就是普通路径），
+  /// 两边后面要做的事**完全一样**，所以只有这一份实现。
+  void _acceptPaths(List<String> paths) {
     setState(() => _dragging = false);
 
     final files = <File>[];
@@ -380,7 +477,13 @@ class _ImportPageState extends State<ImportPage> {
     String? folder;
     String? folderRoot;
 
-    for (final path in details.files.map((f) => f.path)) {
+    for (final path in paths) {
+      // Android 上 desktop_drop 也会触发，但它给的是 `content://` URI。
+      // Dart 的 dart:io 打不开这种路径（lengthSync/copySync 一律
+      // PathNotFoundException）。手机这条路已经由 NativeDrop 把内容拷成
+      // 真实文件再报上来，所以这里直接跳过，别让两条路互相踩。
+      if (path.startsWith('content://')) continue;
+
       final entity = FileSystemEntity.typeSync(path);
 
       if (entity == FileSystemEntityType.directory) {
@@ -428,7 +531,18 @@ class _ImportPageState extends State<ImportPage> {
   }
 
   Widget _buildPendingList(AppColors c) {
-    final totalMb = _pending.fold<int>(0, (s, f) => s + f.lengthSync()) / 1024 / 1024;
+    // 别让一个读不到的文件把整页构建炸掉：`lengthSync()` 对不存在或
+    // 打不开的路径会抛 PathNotFoundException，而这里是在 build 里。
+    int sizeOf(File f) {
+      try {
+        return f.lengthSync();
+      } catch (_) {
+        return 0;
+      }
+    }
+
+    final totalMb =
+        _pending.fold<int>(0, (s, f) => s + sizeOf(f)) / 1024 / 1024;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -473,7 +587,7 @@ class _ImportPageState extends State<ImportPage> {
                       ),
                     ),
                     Text(
-                      '${(_pending[i].lengthSync() / 1024 / 1024).toStringAsFixed(1)}M',
+                      '${(sizeOf(_pending[i]) / 1024 / 1024).toStringAsFixed(1)}M',
                       style: AppText.caption2.copyWith(color: c.quaternaryLabel),
                     ),
                   ],

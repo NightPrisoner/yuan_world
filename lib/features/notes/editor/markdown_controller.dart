@@ -19,10 +19,23 @@ import 'dart:ui' as ui;
 
 import '../../../core/theme/app_theme.dart';
 import 'markdown_styler.dart';
+import '../../../core/utils/paragraph_indent.dart';
 import 'markdown_editing.dart';
 
 class MarkdownEditingController extends TextEditingController {
   MarkdownEditingController({super.text});
+
+  /// 光标所在那一行有没有首行缩进（工具栏按钮的高亮用它）。
+  ///
+  /// 缩进是逐段的字符事实，不是整篇开关，所以每次都从正文现算。
+  bool get hasIndentAtCursor => MarkdownEditing.lineHasIndent(this);
+
+  /// 回车续写：**跟随光标所在段落**。
+  ///
+  /// 这一段有缩进，新段落也缩进；这一段没有，新段落也不缩 —— 用户不用
+  /// 反复点工具栏。以前这里是读一个整篇的布尔，于是"整篇要么都缩、
+  /// 要么都不缩"，和逐段缩进互相打架。
+  bool get _cursorLineIndented => hasIndentAtCursor;
 
   final Set<String> _typingMarks = <String>{};
   int? _runStart;
@@ -89,7 +102,11 @@ class MarkdownEditingController extends TextEditingController {
         selection: TextSelection.collapsed(offset: at + 1),
       );
     }
-    final continued = MarkdownEditing.continueLine(oldValue, next);
+    final continued = MarkdownEditing.continueLine(
+      oldValue,
+      next,
+      indent: _cursorLineIndented ? kIndentMark : '',
+    );
     final enter =
         oldValue.selection.isValid &&
         oldValue.selection.isCollapsed &&

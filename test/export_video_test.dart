@@ -137,7 +137,7 @@ void main() {
     );
   });
 
-  test('markdown 导出：视频用原始相对路径，解压后链接不断', () {
+  test('markdown 导出：媒体收进 <标题>.files，正文引用和包里逐字一致', () {
     final zip = NoteExporter.zipBytes(
       items: <({List<String> path, Note note})>[
         (path: <String>[], note: videoNote()),
@@ -150,12 +150,16 @@ void main() {
         if (f.isFile) f.name,
     ];
     expect(names, contains('带视频的笔记.md'));
-    expect(names, contains('7/clip.mp4'));
+    expect(names, contains('带视频的笔记.files/clip.mp4'));
     final md = entryText(ZipDecoder().decodeBytes(zip), '带视频的笔记.md');
-    expect(md, contains('![](7/clip.mp4)'));
+    expect(md, contains('![](带视频的笔记.files/clip.mp4)'));
   });
 
-  test('markdown 正文不写 .files 目录名（那是 docx 的约定）', () {
+  // 以前 markdown 正文写 `![](7/clip.mp4)`、包里也放 `7/clip.mp4`，
+  // 而那是个按笔记 id 起的目录 —— 解压出来一堆 `7/`、`82/`，
+  // 用户根本分不清哪张图属于哪篇。现在统一成 `<标题>.files/`，
+  // 和 docx/pdf 侧面那个文件夹同名，一套导出物只有一种结构。
+  test('markdown 正文里的引用必须指向包里真实存在的条目', () {
     final zip = NoteExporter.zipBytes(
       items: <({List<String> path, Note note})>[
         (path: <String>[], note: videoNote()),
@@ -163,8 +167,20 @@ void main() {
       format: ExportFormat.markdown,
       imageRoot: root.path,
     );
+    final files = <String>[
+      for (final f in ZipDecoder().decodeBytes(zip))
+        if (f.isFile) f.name,
+    ];
     final md = entryText(ZipDecoder().decodeBytes(zip), '带视频的笔记.md');
-    expect(md, isNot(contains('.files')));
+    final refs = <String>[
+      for (final m in RegExp(r'!\[[^\]]*\]\(([^)]+)\)').allMatches(md))
+        m.group(1)!.trim(),
+    ];
+    expect(refs, isNotEmpty, reason: '正文里应该有媒体引用');
+    for (final ref in refs) {
+      expect(files, contains(ref), reason: '正文引用了 $ref，包里没有：$files');
+    }
+    expect(refs.every((r) => r.startsWith('带视频的笔记.files/')), isTrue);
   });
 
   test('markdown 压缩包会带上正文引用的图片', () {
@@ -179,8 +195,9 @@ void main() {
       for (final f in ZipDecoder().decodeBytes(zip))
         if (f.isFile) f.name,
     ];
-    expect(names, contains('文集/7/shot.png'));
-    expect(names, contains('文集/7/clip.mp4'));
+    // 媒体跟着笔记落在同一个文集目录下，不是包根
+    expect(names, contains('文集/带视频的笔记.files/shot.png'));
+    expect(names, contains('文集/带视频的笔记.files/clip.mp4'));
   });
 
   test('单篇 markdown 导出会把图片和视频复制到相对路径下', () {
@@ -200,18 +217,6 @@ void main() {
       File(p.join(root.path, 'out', '7', 'clip.mp4')).existsSync(),
       isTrue,
     );
-  });
-
-  test('HTML 里视频走 <video>，不做 base64 内联', () {
-    final html = NoteExporter.render(
-      videoNote(),
-      ExportFormat.html,
-      imageRoot: root.path,
-    );
-    expect(html, contains('<video'));
-    expect(html, contains('src="7/clip.mp4"'));
-    // 图片仍然是内联的 data URI
-    expect(html, contains('data:image/png;base64,'));
   });
 
   test('纯文本里区分 [视频] 和 [图片]', () {

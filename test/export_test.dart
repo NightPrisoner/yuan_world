@@ -82,86 +82,6 @@ void main() {
     });
   });
 
-  group('HTML', () {
-    test('是一份完整的文档', () {
-      final id = add('网页标题', '正文');
-      final out = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-
-      expect(out, contains('<!DOCTYPE html>'));
-      expect(out, contains('<meta charset="utf-8">'));
-      expect(out, contains('<title>网页标题</title>'));
-      expect(out, contains('</html>'));
-    });
-
-    test('行内标记转成对应标签', () {
-      final id = add('t', '**粗** 和 *斜* 和 `码`');
-      final out = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-
-      expect(out, contains('<strong>粗</strong>'));
-      expect(out, contains('<em>斜</em>'));
-      expect(out, contains('<code>码</code>'));
-    });
-
-    test('HTML 特殊字符被转义，不会破坏页面', () {
-      final id = add('a<b>&"c"', '正文里有 <script> 和 & 符号');
-      final out = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-
-      expect(out, contains('&lt;script&gt;'), reason: '正文里的标签必须转义');
-      expect(out, contains('&amp;'));
-      // 标题里的 < > 也不能原样出现
-      expect(out.contains('<title>a<b>'), isFalse);
-    });
-
-    test('裸链接变成可点的 a 标签', () {
-      final id = add('t', '看这个 https://example.com/a 挺好');
-      final out = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-      expect(out, contains('<a href="https://example.com/a">'));
-    });
-
-    test('图片内嵌成 data URI，单个 html 文件自己就完整', () {
-      final dir = Directory.systemTemp.createTempSync('yw_html_');
-      final png = File('${dir.path}/1.png')
-        ..writeAsBytesSync(<int>[
-          0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-          0, 0, 0, 13,
-          ...utf8.encode('IHDR'),
-          0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
-        ]);
-      final id = add('t', '![](1.png)');
-      final out = NoteExporter.render(
-        repo.getNote(id)!,
-        ExportFormat.html,
-        imageRoot: dir.path,
-      );
-
-      // 必须是内嵌：html 导出最常见的用途就是"发出去"，
-      // 用 file:// 路径的话对方一打开全是裂图
-      expect(out, contains('src="data:image/png;base64,'));
-      expect(out.contains('file:///'), isFalse, reason: '不能退回本地绝对路径');
-      expect(png.existsSync(), isTrue);
-      dir.deleteSync(recursive: true);
-    });
-
-    test('图片文件缺失时退回原路径，不让导出崩掉', () {
-      final id = add('t', '![](9/没有这张.png)');
-      final out = NoteExporter.render(
-        repo.getNote(id)!,
-        ExportFormat.html,
-        imageRoot: Directory.systemTemp.path,
-      );
-      expect(out, contains('9/没有这张.png'));
-    });
-
-    test('各级标题用对应标签，并带 id 供站内锚点跳转', () {
-      final id = add('t', '# 一\n\n## 二\n\n### 三');
-      final out = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-      // id 不能省：笔记里自己写的 `[跳到某节](#某节)` 靠它落地
-      expect(out, contains('<h1 id="一">一</h1>'));
-      expect(out, contains('<h2 id="二">二</h2>'));
-      expect(out, contains('<h3 id="三">三</h3>'));
-    });
-  });
-
   group('导出不带正文目录', () {
     // 用户的原话：「笔记导出后目录不需要出现在正文上面」。
     // 导出的文档要和笔记本身长得一样 —— 第一行就是正文。
@@ -177,13 +97,6 @@ void main() {
       // 标题本身当然还在，只是不再有一份清单排在前面
       expect(md.indexOf('一号标题'), lessThan(md.indexOf('正文甲')));
       expect(md.indexOf('正文甲'), lessThan(md.indexOf('二号标题')));
-    });
-
-    test('HTML 里没有目录导航块', () {
-      final id = add('t', longDoc);
-      final html = NoteExporter.render(repo.getNote(id)!, ExportFormat.html);
-      expect(html.contains('<nav class="toc">'), isFalse);
-      expect(html.indexOf('正文甲'), lessThan(html.indexOf('二号标题')));
     });
 
     test('纯文本直接从正文开始', () {

@@ -31,6 +31,11 @@ void main() {
       expect(countChars('a b\nc\td'), 4);
       expect(countChars(''), 0);
       expect(countChars('标点，也要算。'), 7);
+      // 首行缩进用的就是行首两个全角空格（U+3000）。它是空白、不是标点，
+      // 不能算进字数 —— 否则每加一次缩进字数就 +2，和 Word 对不上
+      // （Word 的缩进是段落属性，一个字都不占）。用户 m280422-3。
+      expect(countChars('\u3000\u3000你好'), 2);
+      expect(countChars('\u3000\u3000甲段落。'), 4);
     });
 
     test('countWords 对中文逐字计数、英文按词计数', () {

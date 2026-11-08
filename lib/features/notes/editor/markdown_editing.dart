@@ -7,6 +7,9 @@ library;
 
 import 'package:flutter/widgets.dart';
 
+import '../../../core/utils/markdown_blocks.dart';
+import '../../../core/utils/paragraph_indent.dart';
+
 class MarkdownEditing {
   const MarkdownEditing._();
 
@@ -262,6 +265,179 @@ class MarkdownEditing {
     _applyRange(controller, text, lineStart, lineEnd, newBlock, selection: sel);
   }
 
+  /// 首行缩进两字：只作用于**选区覆盖的那几个段落**。
+  ///
+  /// 语义照 Word 定（用户 m272125「每个段落的第一行缩进 2 格，和 word 里
+  /// docx 的效果一样」+ m280060「看光标所在的段落或者框选一大片文字那几个
+  /// 段落起作用」+ m280341「仿照 word 改」）：
+  ///
+  ///   · **一个硬回车行 = 一个段落**。Word 里 Enter 插的是段落标记（`<w:p>`），
+  ///     每按一次就起一段并继承段落格式；只有 Shift+Enter 的软换行
+  ///     （`<w:br/>`）留在段内、不缩进。
+  ///   · 所以每个非空行都是它那一段的第一行，都该缩进；软换行折出来的行
+  ///     连字符都不是，当然不缩进。
+  ///
+  /// Word 那边缩进是段落属性（`w:ind/@w:firstLineChars`，单位「字符」= 当前
+  /// 字号下一个汉字的宽，200 就是两字），排版时把首行起点右移，正文里一个字
+  /// 都不多。我们存的是纯 markdown，没有段落属性可放，`TextField` 又塞不了
+  /// `WidgetSpan`（会让 `value.text` 与 TextPainter 的纯文本索引错开一个字符，
+  /// 光标/选区/输入法全歪，见 flutter#12255 / #161014）—— 所以用两个全角空格
+  /// 当段首标记，只在段首那一行有。
+  ///
+  /// 若选区里的段落**全都**已经缩进了，就统一摘掉（再点一次取消）。
+  static void toggleIndentFirstLine(TextEditingController controller) {
+    const pad = kIndentMark;
+    final text = controller.text;
+    final sel = _effectiveSelection(controller);
+    final lines = text.split('\n');
+
+    // 每一行在全文里的起始偏移，用来把光标/选区换算成行号。
+    final starts = <int>[];
+    var offset = 0;
+    for (final line in lines) {
+      starts.add(offset);
+      offset += line.length + 1;
+    }
+
+    int lineOf(int pos) {
+      final p = pos.clamp(0, text.length);
+      for (var i = lines.length - 1; i >= 0; i--) {
+        if (p >= starts[i]) return i;
+      }
+      return 0;
+    }
+
+    final first = lineOf(sel.start);
+    final last = lineOf(sel.end);
+
+    /// 这些行不参与缩进：空行没有"第一行"，标题/分隔线/整行图片本身是块，
+    /// 围栏里的代码更要原样保留。
+    bool eligible(int i) {
+      final line = lines[i];
+      if (line.trim().isEmpty) return false;
+      if (MdBlockSyntax.headingLine(line) != null ||
+          MdBlockSyntax.isDivider(line) ||
+          MdBlockSyntax.imageLine(line) != null) {
+        return false;
+      }
+      // 围栏：整块（含开口与收尾）都不动
+      MdFence? fence;
+      for (var j = 0; j < lines.length; j++) {
+        final l = lines[j];
+        if (fence != null) {
+          if (MdBlockSyntax.isFenceEnd(l, fence)) {
+            fence = null;
+            if (j == i) return false;
+            continue;
+          }
+          if (j == i) return false;
+          continue;
+        }
+        final opening = MdBlockSyntax.fenceStart(l);
+        if (opening != null) {
+          fence = opening;
+          if (j == i) return false;
+          continue;
+        }
+        if (j == i) return true;
+      }
+      return false;
+    }
+
+    final targets = <int>[
+      for (var i = first; i <= last && i < lines.length; i++)
+        if (eligible(i)) i,
+    ];
+    if (targets.isEmpty) return;
+    // 判"有没有缩进"只看两个全角空格（[hasIndentMark]），不看后面那个零宽
+    // 连接符：加它之前存下的老笔记行首只有两个空格，也得照样认得出来、
+    // 照样能摘掉，否则升级一次旧笔记的缩进就再也关不掉了。
+    final allHave = targets.every((i) => hasIndentMark(lines[i]));
+    // 每行被加了还是摘了 pad —— 光标要靠它自己挪，不能交给 _mapSelection：
+    // 那套映射的职责是"跳过新加的行首语法"（点了列表后光标停在文字前、
+    // 而不是停在 `- ` 后面），可全角空格是**正文内容**，光标得跟着往后挪两格，
+    // 否则加完缩进光标就落在原来那个字上，看起来"往前跳了两个字"。
+    final delta = List<int>.filled(lines.length, 0);
+    for (final i in targets) {
+      if (allHave) {
+        final before = lines[i].length;
+        lines[i] = stripIndentMark(lines[i]);
+        delta[i] = lines[i].length - before;
+      } else if (!hasIndentMark(lines[i])) {
+        lines[i] = '$pad${lines[i]}';
+        delta[i] = pad.length;
+      }
+    }
+    final newText = lines.join('\n');
+    if (newText == text) return;
+    // 只在整篇范围内替换受影响的几行，选区按行号映射回去。
+    final rangeStart = starts[first];
+    final rangeEnd = last + 1 < starts.length
+        ? starts[last + 1] - 1
+        : text.length;
+    final newBlock = lines.sublist(first, last + 1).join('\n');
+
+    int shift(int offset) {
+      final p = offset.clamp(0, text.length);
+      final line = lineOf(p);
+      var total = 0;
+      for (var i = 0; i < line; i++) {
+        total += delta[i];
+      }
+      // 光标在这一行里（含行首）：pad 是插在行首的，所以整行都跟着挪。
+      return p + total + delta[line];
+    }
+
+    final nextSelection = TextSelection(
+      baseOffset: shift(sel.start).clamp(0, newText.length),
+      extentOffset: shift(sel.end).clamp(0, newText.length),
+    );
+    _applyRange(
+      controller,
+      text,
+      rangeStart,
+      rangeEnd,
+      newBlock,
+      selection: nextSelection,
+      remap: false,
+    );
+  }
+
+  /// 光标所在**段落**有没有缩进。
+  ///
+  /// 工具栏按钮的高亮、以及回车续写都用它。
+  ///
+  /// **光标在空行上时要往前找最近的非空行**：空行本身不是段落，它夹在两段
+  /// 之间；在空行上敲回车得到的是下一段的第一行，该不该缩进要参照上一段。
+  /// 以前这里只看当前行，于是「在有缩进的段落后面回车得到空行、再回车」
+  /// 时新行就不缩进了，正文里出现"前几行缩进、后面突然顶格"的阶梯
+  /// （用户截图里那个现象）。
+  static bool lineHasIndent(TextEditingController controller) {
+    final text = controller.text;
+    final sel = _effectiveSelection(controller);
+    final caret = sel.start.clamp(0, text.length);
+    final lines = text.split('\n');
+
+    final starts = <int>[];
+    var offset = 0;
+    for (final line in lines) {
+      starts.add(offset);
+      offset += line.length + 1;
+    }
+    var i = lines.length - 1;
+    for (var k = lines.length - 1; k >= 0; k--) {
+      if (caret >= starts[k]) {
+        i = k;
+        break;
+      }
+    }
+    while (i >= 0 && lines[i].trim().isEmpty) {
+      i--;
+    }
+    if (i < 0) return false;
+    return hasIndentMark(lines[i]);
+  }
+
   /// 设置标题级别。`level = 0` 表示取消标题。
   ///
   /// 会先清掉已有的 `#`，避免出现 `####` 这种叠加。
@@ -386,10 +562,31 @@ class MarkdownEditing {
 
   /// Continue a list/quote only for a single committed Enter edit. Pasting
   /// multiline text and IME composition must not receive automatic prefixes.
+  /// 光标是不是落在围栏代码块里面（从头扫一遍数开口/收尾）。
+  ///
+  /// 代码块里的每一行都该原样保留，不能因为开了「首行缩进」就往前塞两个
+  /// 全角空格 —— 那会把代码缩进改坏，而且复制出去还带着看不见的字符。
+  static bool _insideFence(String text, int at) {
+    MdFence? open;
+    var pos = 0;
+    for (final line in text.split('\n')) {
+      if (pos > at) break;
+      if (open == null) {
+        final start = MdBlockSyntax.fenceStart(line);
+        if (start != null) open = start;
+      } else if (MdBlockSyntax.isFenceEnd(line, open)) {
+        open = null;
+      }
+      pos += line.length + 1;
+    }
+    return open != null;
+  }
+
   static TextEditingValue continueLine(
     TextEditingValue oldValue,
-    TextEditingValue next,
-  ) {
+    TextEditingValue next, {
+    String indent = '',
+  }) {
     if (!oldValue.selection.isValid ||
         !oldValue.selection.isCollapsed ||
         !next.selection.isValid ||
@@ -409,8 +606,37 @@ class MarkdownEditing {
     final match = RegExp(
       r'^(\s*)(?:(\d+)\.\s+|([-*+])\s+(?:\[([ xX])\]\s+)?|(>)\s?)(.*)$',
     ).firstMatch(line);
-    if (match == null ||
-        at < start + match.start + line.length - match.group(6)!.length) {
+    if (match == null) {
+      // 普通段落：敲回车 = 开一个新段落，所以新行的行首要补两个全角空格。
+      //
+      // 这里的关键是**分清"段落"和"行"**：硬回车（Enter）切出来的是段落，
+      // 一行排满之后的软换行只是折行，不是段落。Word 里也是这个规矩 ——
+      // 每按一次 Enter 起一段、段首都缩进；段内排满换行不缩进。
+      //
+      // 所以判据不是"这一行有没有字"，而是"这次回车有没有开出新段落"：
+      // 只要是硬回车，光标右边的内容（可能是空的）就是新段落的开头。
+      //
+      // 为什么用字符而不是布局缩进：`TextField` 外层的 Padding 是整段的，
+      // 续行会跟着一起右移；WidgetSpan 插在开头会让 `value.text` 与
+      // TextPainter 的纯文本索引错开一个字符，光标/选区/输入法全歪
+      // （Flutter 至今没有 text-indent，flutter#12255 / #161014）。
+      if (indent.isEmpty) return next;
+      // 刚从标题 / 分隔线 / 围栏 / 整行图片上回车，别急着缩进：这些行的
+      // 下一行多半还是同类块（尤其围栏里的代码），补两个空格只会碍事。
+      if (MdBlockSyntax.headingLine(line) != null ||
+          MdBlockSyntax.isDivider(line) ||
+          MdBlockSyntax.fenceStart(line) != null ||
+          MdBlockSyntax.imageLine(line) != null) {
+        return next;
+      }
+      // 光标在围栏代码块里面：整块都不该有首行缩进。
+      if (_insideFence(oldValue.text, at)) return next;
+      return TextEditingValue(
+        text: next.text.replaceRange(at + 1, at + 1, indent),
+        selection: TextSelection.collapsed(offset: at + 1 + indent.length),
+      );
+    }
+    if (at < start + match.start + line.length - match.group(6)!.length) {
       return next;
     }
     if (match.group(6)!.trim().isEmpty) {
@@ -439,6 +665,7 @@ class MarkdownEditing {
     int end,
     String replacement, {
     TextSelection? selection,
+    bool remap = true,
   }) {
     final newText = text.replaceRange(start, end, replacement);
     final nextSelection = selection == null
@@ -446,12 +673,9 @@ class MarkdownEditing {
             baseOffset: start,
             extentOffset: start + replacement.length,
           )
-        : _mapSelection(
-            text.substring(start, end),
-            replacement,
-            selection,
-            start,
-          );
+        : remap
+        ? _mapSelection(text.substring(start, end), replacement, selection, start)
+        : selection;
     controller.value = TextEditingValue(
       text: newText,
       selection: nextSelection,

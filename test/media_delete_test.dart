@@ -101,12 +101,20 @@ void main() {
   }
 
   /// 桌面端删除键只在悬停时露出，得先把鼠标移上去。
+  ///
+  /// **只数正文里的媒体**：编辑器顶部现在也有一块头图（`editor-cover`），
+  /// 它里面同样是一个 `LocalImage`，而头图往往就是正文第一张图派生的 ——
+  /// 按 `LocalImage` 数就会把第 0 个错认成正文里的图。
   Future<void> hoverMedia(WidgetTester tester, int index) async {
     final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
     await gesture.addPointer(location: Offset.zero);
     addTearDown(gesture.removePointer);
     await tester.pump();
-    await gesture.moveTo(tester.getCenter(find.byType(LocalImage).at(index)));
+    final body = find.descendant(
+      of: find.byKey(const ValueKey<String>('editor-body')),
+      matching: find.byType(LocalImage),
+    );
+    await gesture.moveTo(tester.getCenter(body.at(index)));
     await tester.pumpAndSettle();
   }
 
@@ -193,5 +201,59 @@ void main() {
 
     expect(repo.notesUsingCover(rel), contains(b));
     expect(repo.notesUsingCover('没人用.png'), isEmpty);
+  });
+
+  // ── 外部引用（设置里开了「只引用原文件」）──────────────────────────────
+  //
+  // 这里的说辞和内部文件**必须不一样**：软件从来没复制过这个文件，
+  // 所以删掉正文那一行时也不能删它。照抄"磁盘上的文件也一起删掉"
+  // 会让用户以为原件被毁了 —— 要么不敢删，要么删完去回收站找半天。
+
+  testWidgets('外部引用：弹窗说「不会被删除」，删完磁盘上的原文件还在', (tester) async {
+    final id = repo.insertNote(title: '外部图', content: '正文', excerpt: '正文');
+    // 软件目录**之外**的文件：模拟用户自己电脑上的素材
+    final outside = File(p.join(root.path, 'outside', '素材.png'));
+    outside.parent.createSync(recursive: true);
+    outside.writeAsBytesSync(_png);
+    repo.updateNote(id: id, content: '正文\n\n![](${outside.path})\n\n尾巴');
+    await state.refresh();
+
+    await pumpEditor(tester, id);
+
+    // 悬停露出删除键。**要数正文里的那个**：这篇的正文只有一张图，
+    // 而它同时被自动派生成头图，编辑器顶部也画了一个 LocalImage，
+    // 直接 `.first` 会悬停到头图上，正文的删除键永远不出现。
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+    await tester.pump();
+    final bodyImage = find.descendant(
+      of: find.byKey(const ValueKey<String>('editor-body')),
+      matching: find.byType(LocalImage),
+    );
+    await gesture.moveTo(tester.getCenter(bodyImage.first));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('删掉这个文件'));
+    await tester.pumpAndSettle();
+
+    // 说辞换成"引用"这一套
+    expect(find.text('从笔记里去掉这个引用？'), findsOneWidget);
+    expect(find.text('删掉这个文件？'), findsNothing);
+    expect(find.textContaining('你原来的那个文件不会被删除'), findsOneWidget);
+
+    await tester.tap(find.text('去掉引用'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    // 正文里那一行没了，但**磁盘上的原件一个字节都没动**
+    final note = repo.getNote(id)!;
+    expect(note.content.contains('素材.png'), isFalse, reason: '这一行要从正文里去掉');
+    expect(
+      outside.existsSync(),
+      isTrue,
+      reason: '外部文件是用户自己的，软件没资格删它',
+    );
   });
 }

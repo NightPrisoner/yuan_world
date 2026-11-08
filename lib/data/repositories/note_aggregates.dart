@@ -37,15 +37,13 @@ extension NoteAggregates on NoteRepository {
   /// v8 只是加了列（默认空串），老数据得回填一次 ——
   /// 否则按名称排序时所有笔记的键都是空串，顺序完全乱掉。
   int backfillSortKeys() {
-    final rows = _d.select(
-      "SELECT id, title FROM notes WHERE sort_key = ''",
-    );
+    final rows = _d.select("SELECT id, title FROM notes WHERE sort_key = ''");
     if (rows.isEmpty) return 0;
     for (final r in rows) {
-      _d.execute(
-        'UPDATE notes SET sort_key = ? WHERE id = ?',
-        <Object?>[windowsSortKey((r['title'] as String?) ?? ''), r['id']],
-      );
+      _d.execute('UPDATE notes SET sort_key = ? WHERE id = ?', <Object?>[
+        windowsSortKey((r['title'] as String?) ?? ''),
+        r['id'],
+      ]);
     }
     return rows.length;
   }
@@ -57,7 +55,9 @@ extension NoteAggregates on NoteRepository {
   List<int> notesUsingCover(String relPath) {
     if (relPath.isEmpty) return const <int>[];
     return _d
-        .select('SELECT id FROM notes WHERE cover_image = ?', <Object?>[relPath])
+        .select('SELECT id FROM notes WHERE cover_image = ?', <Object?>[
+          relPath,
+        ])
         .map((r) => r['id'] as int)
         .toList();
   }
@@ -75,10 +75,10 @@ extension NoteAggregates on NoteRepository {
     for (final r in rows) {
       final first = firstImageOf((r['content'] as String?) ?? '');
       if (first == null) continue;
-      _d.execute(
-        'UPDATE notes SET cover_image = ? WHERE id = ?',
-        <Object?>[first, r['id']],
-      );
+      _d.execute('UPDATE notes SET cover_image = ? WHERE id = ?', <Object?>[
+        first,
+        r['id'],
+      ]);
       fixed++;
     }
     return fixed;
@@ -102,10 +102,10 @@ extension NoteAggregates on NoteRepository {
     for (final r in rows) {
       final real = countNoteMedia((r['content'] as String?) ?? '').images;
       if (real == (r['image_count'] as int? ?? 0)) continue;
-      _d.execute(
-        'UPDATE notes SET image_count = ? WHERE id = ?',
-        <Object?>[real, r['id']],
-      );
+      _d.execute('UPDATE notes SET image_count = ? WHERE id = ?', <Object?>[
+        real,
+        r['id'],
+      ]);
       fixed++;
     }
     return fixed;
@@ -168,11 +168,13 @@ extension NoteAggregates on NoteRepository {
     ''');
     return rows
         .where((r) => r['bucket'] != null)
-        .map((r) => TrendPoint(
-              bucket: r['bucket'] as String,
-              count: r['cnt'] as int,
-              chars: r['chars'] as int,
-            ))
+        .map(
+          (r) => TrendPoint(
+            bucket: r['bucket'] as String,
+            count: r['cnt'] as int,
+            chars: r['chars'] as int,
+          ),
+        )
         .toList();
   }
 
@@ -187,12 +189,14 @@ extension NoteAggregates on NoteRepository {
       GROUP BY c.id ORDER BY cnt DESC
     ''');
     return rows
-        .map((r) => CollectionSlice(
-              name: r['name'] as String,
-              color: r['color'] as int,
-              count: r['cnt'] as int,
-              chars: r['chars'] as int,
-            ))
+        .map(
+          (r) => CollectionSlice(
+            name: r['name'] as String,
+            color: r['color'] as int,
+            count: r['cnt'] as int,
+            chars: r['chars'] as int,
+          ),
+        )
         .toList();
   }
 
@@ -214,6 +218,8 @@ extension NoteAggregates on NoteRepository {
       'SELECT n.id, n.title, n.excerpt, n.char_count, n.word_count, n.image_count, '
       'n.created_at, n.updated_at, n.published_at, n.collection_id, n.author, n.source_url, '
       'n.is_pinned, n.is_favorite, n.is_archived, n.is_hidden, n.sort_index, n.cover_image, '
+      'n.cover_ratio, n.cover_zoom, n.cover_focus_x, n.cover_focus_y, '
+      'n.indent_first_line, '
       'c.name AS collection_name, c.color AS collection_color '
       'FROM notes n LEFT JOIN collections c ON c.id = n.collection_id '
       'WHERE ${liveNote("n")} '

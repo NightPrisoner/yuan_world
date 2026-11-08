@@ -12,23 +12,54 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
 import '../../core/utils/text_stats.dart';
+import '../media/external_media.dart';
 import '../media/media_importer.dart';
 import '../models.dart';
 import 'note_times.dart';
+import 'pdf_exporter.dart';
+
+/// 用户在导出途中按了「取消」。
+///
+/// 单独一个类型是为了让界面能区分"用户主动取消"和"真出错了"：
+/// 后者要报原因，前者一句"已取消，没有留下半截文件"就够。
+class ExportCancelledException implements Exception {
+  const ExportCancelledException();
+
+  @override
+  String toString() => '导出已取消';
+}
 
 /// 支持的导出格式。
+///
+/// 只留四种：Markdown / 纯文本 / Word / PDF。它们都能维持「一篇一个文件、
+/// 文集一个目录」的结构，也都能被别的软件再打开或再导入（PDF 只能看，
+/// 见下）。
+///
+/// 曾经还有一个 HTML —— 首版脚手架里顺手加的，从没被真实需求驱动过。
+/// 它的毛病是单向的：导出去就回不来（导入只认 docx/txt/md），而且批量
+/// 导出会散成一堆互相独立的网页文件。2026-11 删掉。
 enum ExportFormat {
   markdown('Markdown', 'md'),
   text('纯文本', 'txt'),
   docx('Word 文档', 'docx'),
-  html('网页', 'html');
+
+  /// PDF 也是单向的（导入读不回来），但和 HTML 不一样：它是**定稿**
+  /// 格式 —— 发出去的样子就是你看到的样子，不会被对方机器上的字体、
+  /// 排版引擎改掉。做归档、发人看，这个特性是刚需，所以留着。
+  pdf('PDF', 'pdf');
 
   const ExportFormat(this.label, this.ext);
   final String label;
   final String ext;
 
   /// 是不是二进制格式（不能按字符串写文件）。
-  bool get isBinary => this == ExportFormat.docx;
+  bool get isBinary => this == ExportFormat.docx || this == ExportFormat.pdf;
+
+  /// 能不能**同步**渲染成字节。
+  ///
+  /// PDF 要 await（`Document.save()` 是异步的，字体嵌入要走一遍子集化），
+  /// 所以它不是"同步二进制格式"。凡是同步的导出路径都得先排除它。
+  bool get isSyncBinary => this == ExportFormat.docx;
 
   static ExportFormat? byExt(String e) {
     for (final f in values) {
@@ -83,6 +114,8 @@ class NoteExporter {
   /// 导出整个文集时把文集层级填进来，解压出来就和应用里看到的目录结构一致
   /// —— 这是"文件夹导出"和"批量导出"唯一的区别，所以合成一个函数，
   /// 免得两处各写一遍、然后有一处漏了层级。
+  /// **只支持同步渲染的格式**（md / txt / docx）。PDF 要走 [zipBytesAsync]
+  /// —— `Document.save()` 是异步的，塞不进同步函数。
   static Uint8List zipBytes({
     required List<({List<String> path, Note note})> items,
     ExportFormat format = ExportFormat.docx,
@@ -90,6 +123,311 @@ class NoteExporter {
 
     /// 单个视频进包的上限，默认 [kMaxPackedVideoBytes]。
     /// 测试里压到 1 字节就能造出"超大视频"的场景，不用真写几百 MB 的文件。
+    int? maxVideoBytes,
+  }) {
+    if (format == ExportFormat.pdf) {
+      throw ArgumentError('PDF 是异步渲染的，批量导出要用 zipBytesAsync');
+    }
+    return _zip(
+      items: items,
+      format: format,
+      imageRoot: imageRoot,
+      maxVideoBytes: maxVideoBytes,
+    );
+  }
+
+  /// 把多篇笔记打成**一个压缩包**（异步版，支持 PDF）。
+  ///
+  /// PDF 的 `Document.save()` 返回 Future、字体子集化要跑一遍，所以整个
+  /// 打包流程跟着变成异步。其它格式走同一条路径、结果与 [zipBytes] 完全一致。
+  static Future<Uint8List> zipBytesAsync({
+    required List<({List<String> path, Note note})> items,
+    ExportFormat format = ExportFormat.docx,
+    String? imageRoot,
+
+    /// PDF 用的内嵌中文字体。只有 [format] 是 [ExportFormat.pdf] 时才会用到，
+    /// 其它格式传 null 无所谓 —— 不想为了导个 txt 也去读 7 MB 的字体。
+    ByteData? pdfFont,
+
+    int? maxVideoBytes,
+  }) => zipBytesProgressive(
+    items: items,
+    format: format,
+    imageRoot: imageRoot,
+    pdfFont: pdfFont,
+    maxVideoBytes: maxVideoBytes,
+  );
+
+  /// 带进度回调与取消点的打包（「导出文件夹」「批量导出」用）。
+  ///
+  /// 产出的字节和 [zipBytes] / [zipBytesAsync] 完全一样，只多两件事：
+  /// 每处理完一篇回调一次 [onProgress]（0..1），每篇开始前问一次
+  /// [isCancelled]（为真就抛 [ExportCancelledException]）。
+  ///
+  /// **为什么每篇之间要让出事件循环**：整包是在一个 async 函数里一口气拼完的，
+  /// 中间不 await 的话进度对话框根本没机会重绘，用户看到的就是「点下去卡住
+  /// 很久，然后突然弹出保存框」—— 那和没有进度条一样。每篇之间交还一帧，
+  /// 进度才会真的往前走。
+  static Future<Uint8List> zipBytesProgressive({
+    required List<({List<String> path, Note note})> items,
+    ExportFormat format = ExportFormat.docx,
+    String? imageRoot,
+    ByteData? pdfFont,
+    int? maxVideoBytes,
+    void Function(double progress)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    if (format == ExportFormat.pdf && pdfFont == null) {
+      throw ArgumentError('导出 PDF 需要内嵌中文字体，pdfFont 不能为空');
+    }
+    final total = items.isEmpty ? 1 : items.length;
+    var done = 0;
+    void bump() {
+      done++;
+      onProgress?.call((done / total).clamp(0.0, 1.0));
+    }
+
+    void checkCancelled() {
+      if (isCancelled?.call() ?? false) throw const ExportCancelledException();
+    }
+
+    final videoLimit = maxVideoBytes ?? kMaxPackedVideoBytes;
+    final archive = Archive();
+    final used = <String>{};
+
+    for (final item in items) {
+      checkCancelled();
+      final note = item.note;
+      final layout = _layoutFor(item, format, used);
+
+      if (format == ExportFormat.pdf) {
+        // PDF 一篇要好几百毫秒（字体子集化 + 排版），进度得按篇走，
+        // 不然那么久的等待期间数字一动不动。
+        //
+        // 图片是嵌进 PDF 的，但**视频进不去**（PDF 没有视频容器）：
+        // 视频本体得跟着包走，否则用户拿到的 PDF 里只有一句
+        // "已随导出放入 xxx.files"，包里却没有那个文件夹。
+        final stem = p.posix.basenameWithoutExtension(layout.fileName);
+        final prepared = prepareExternal(
+          note,
+          format,
+          imageRoot: imageRoot,
+          videoLimit: videoLimit,
+          folderStem: stem,
+          dirs: layout.dirs,
+        );
+        final bytes = await PdfExporter.renderBytes(
+          note,
+          font: pdfFont!,
+          imageRoot: imageRoot,
+          mediaFolder: prepared.mediaFolder,
+        );
+        archive.addFile(
+          ArchiveFile(layout.fileName, bytes.length, bytes)
+            ..lastModTime = epochSecondsOf(note.updatedAt),
+        );
+        for (final extra in prepared.extras) {
+          if (!used.add(extra.target)) continue;
+          final data = await extra.source.readAsBytes();
+          archive.addFile(
+            ArchiveFile(extra.target, data.length, data)
+              ..lastModTime = epochSecondsOf(note.updatedAt),
+          );
+        }
+        bump();
+        await Future<void>.delayed(Duration.zero);
+        continue;
+      }
+
+      // 外部引用先改写成包内路径（包里没有 `C:\素材\a.png` 这种条目名，
+      // 换台机器那个路径也必然不存在）。
+      //
+      // 媒体文件夹跟着**最终**文件名走（含同名去重序号）并带上文集目录，
+      // 否则 `文集/无题 (2).docx` 会指向包里不存在的 `无题.files/`。
+      final stem = p.posix.basenameWithoutExtension(layout.fileName);
+      final prepared = prepareExternal(
+        note,
+        format,
+        imageRoot: imageRoot,
+        videoLimit: videoLimit,
+        folderStem: stem,
+        dirs: layout.dirs,
+      );
+      final Uint8List bytes;
+      if (format.isBinary) {
+        bytes = renderDocxBytes(
+          note,
+          imageRoot: imageRoot,
+          videoFolder: prepared.mediaFolder,
+          oversizedVideos: prepared.oversized,
+        );
+      } else {
+        bytes = Uint8List.fromList(
+          utf8.encode(renderWith(note, format, prepared.content)),
+        );
+      }
+      archive.addFile(
+        ArchiveFile(layout.fileName, bytes.length, bytes)
+          // 包内文件的时间 = 笔记最后修改时间，而不是打包那一刻。
+          ..lastModTime = epochSecondsOf(note.updatedAt),
+      );
+
+      // 视频本体跟着一起打包（docx 放 `<笔记名>.files/`，
+      // markdown 原地放，链接才不断）。
+      //
+      // 现在媒体统一由 `prepareExternal.extras` 收好了（内部文件与外部
+      // 引用一视同仁，条目名都是 `<标题>.files/<原名>`）——
+      // 这里不再单独遍历 `media.packed`，否则同一张图会进包两次。
+      for (final extra in prepared.extras) {
+        if (!used.add(extra.target)) continue;
+        final data = await extra.source.readAsBytes();
+        archive.addFile(
+          ArchiveFile(extra.target, data.length, data)
+            ..lastModTime = epochSecondsOf(note.updatedAt),
+        );
+      }
+
+      bump();
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    onProgress?.call(1.0);
+    return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
+  }
+
+  /// 一条媒体引用对应的磁盘文件。
+  ///
+  /// 正文里的引用可能带 `images/` 前缀（`![](images/7/a.png)`），而
+  /// [imageRoot] 指向的就是那个 images 目录，拼之前必须剥掉，
+  /// 否则会拼成 `.../images/images/7/a.png`。
+  /// 外部引用（绝对路径 / `file://`）原样用 —— 设置里开了
+  /// 「图片视频只引用原文件」之后，正文里存的就是绝对路径。
+  static File _fileFor(String? imageRoot, String rel) {
+    final bare = _bareRel(rel);
+    return imageRoot == null
+        ? File(ExternalMedia.localPath(bare))
+        : File(ExternalMedia.resolve(imageRoot, bare));
+  }
+
+  static final RegExp _imageLineRe = RegExp(r'^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$');
+
+  /// 这篇笔记的媒体文件夹名（包内条目名都是 `<笔记标题>.files/<原名>`）。
+  ///
+  /// **为什么跟随标题而不是原来的 `images/7/a.png`**：`7` 是笔记 id，
+  /// 用户在自己的文件夹里看到一堆 `7/`、`82/` 根本分不清哪张图属于哪篇；
+  /// 解压出来也不敢删。跟随标题后，一篇笔记的媒体全都躺在一个
+  /// 认得出来的文件夹里，删笔记就删那个文件夹。
+  static String mediaFolderOf(String stem) => '${_safeSegment(stem)}.files';
+
+  /// 导出前整理正文与随包媒体。
+  ///
+  /// 做两件事：
+  ///   1. 把正文里每条媒体引用的**源文件**收集进来（[extras]），统一改叫
+  ///      `<笔记标题>.files/<原名>`（重名加 `-2`）。内部文件（`images/7/a.png`）
+  ///      和外部引用（`C:\素材\a.png`，设置里开了「只引用原文件」）一视同仁 ——
+  ///      包内不该出现 id 目录，更不该出现别的机器的绝对路径。
+  ///   2. 文本格式（markdown / txt）把正文里的引用**同步改写**成包内路径，
+  ///      否则解压出来全是断链。docx / pdf 不改：图片已经嵌进文档，
+  ///      正文里那句说明由各自的渲染器按 [mediaFolder] 写。
+  ///
+  /// [includeImages] 决定要不要收图片：docx / pdf 会把图片嵌进文档，
+  /// 包外不用再放一份；markdown / txt 只有一行路径，文件必须跟着走。
+  static ({
+    String content,
+    List<({String target, File source})> extras,
+    List<String> oversized,
+    String mediaFolder,
+  })
+  prepareExternal(
+    Note note,
+    ExportFormat format, {
+    String? imageRoot,
+    int? videoLimit,
+    String? folderStem,
+    List<String> dirs = const <String>[],
+  }) {
+    final folder = mediaFolderOf(folderStem ?? suggestedName(note));
+    // 包内路径要带上笔记所在的文集目录：主文件是
+    // `文集/带视频的笔记.docx`，媒体就不能落在包根的
+    // `带视频的笔记.files/` —— 那样一解压就和文档分了家。
+    final prefix = <String>[
+      for (final seg in dirs)
+        if (_safeSegment(seg).isNotEmpty) _safeSegment(seg),
+    ];
+    final rewrite = !format.isBinary;
+    final wantImages = !format.isBinary;
+    final limit = videoLimit ?? kMaxPackedVideoBytes;
+    final extras = <({String target, File source})>[];
+    final oversized = <String>[];
+    final used = <String>{};
+    final out = <String>[];
+
+    for (final line in note.content.split('\n')) {
+      final m = _imageLineRe.firstMatch(line);
+      if (m == null) {
+        out.add(line);
+        continue;
+      }
+      var ref = m.group(2)!.trim();
+      final quoteAt = ref.indexOf(RegExp('''\\s+["']'''));
+      if (quoteAt > 0) ref = ref.substring(0, quoteAt).trim();
+      if (ref.isEmpty || ref.startsWith('http')) {
+        out.add(line);
+        continue;
+      }
+      final isVideo = MediaImporter.isVideoPath(ref);
+      if (!isVideo && !wantImages) {
+        out.add(line);
+        continue;
+      }
+      final src = _fileFor(imageRoot, ref);
+      // 源文件不在了就原样留着：改写成一个包里根本没有的条目更糟 ——
+      // 用户至少还能从这行路径知道自己原来指向哪里。
+      if (!src.existsSync()) {
+        out.add(line);
+        continue;
+      }
+      // 整包是在内存里拼出来的，一个几 GB 的视频会把内存吃光，
+      // 最后连整个导出都失败 —— 宁可这一条不打包并在正文里说明。
+      if (isVideo && src.lengthSync() > limit) {
+        oversized.add(_bareRel(ref));
+        out.add(line);
+        continue;
+      }
+      final bare = _mediaEntryName(folder, src.path, used);
+      final target = prefix.isEmpty
+          ? bare
+          : <String>[...prefix, bare].join('/');
+      extras.add((target: target, source: src));
+      out.add(rewrite ? '![${m.group(1) ?? ''}]($target)' : line);
+    }
+    return (
+      content: rewrite ? out.join('\n') : note.content,
+      extras: extras,
+      oversized: oversized,
+      mediaFolder: folder,
+    );
+  }
+
+  /// 媒体在包内的条目名（`<笔记标题>.files/<原名>`，重名加 `-2`）。
+  static String _mediaEntryName(String folder, String path, Set<String> used) {
+    final base = p.basename(path);
+    final ext = p.extension(base);
+    final stem = p.basenameWithoutExtension(base);
+    var name = p.posix.join(folder, base);
+    var n = 2;
+    while (!used.add(name)) {
+      name = p.posix.join(folder, '$stem-$n$ext');
+      n++;
+    }
+    return name;
+  }
+
+  /// 同步打包的公共实现（md / txt / docx）。
+  static Uint8List _zip({
+    required List<({List<String> path, Note note})> items,
+    required ExportFormat format,
+    String? imageRoot,
     int? maxVideoBytes,
   }) {
     final videoLimit = maxVideoBytes ?? kMaxPackedVideoBytes;
@@ -112,48 +450,38 @@ class NoteExporter {
         full = <String>[...dirs, '$base ($k).${format.ext}'].join('/');
         k++;
       }
-      // 视频目录名跟着**最终**文件名走（含去重后的序号），
-      // 否则 docx 正文里写的是 `笔记.files`、包里实际叫 `笔记 (2).files`。
-      final stem = full.substring(0, full.length - format.ext.length - 1);
-      final videoFolder = '$stem.files';
-
       // 先算出哪些视频能进包，再渲染正文 ——
       // 正文里那句"该文件已随导出放入 xxx.files"必须和包里真实存在的东西一致，
       // 否则就是在骗人（这正是之前"视频不见了"的同类问题）。
-      final packed = <String>[];
-      final oversized = <String>[];
-      final mediaRels = <String>[
-        ...videoRelsOf(note),
-        // Markdown keeps local image references as-is, so the image files
-        // must travel with the archive as well. HTML embeds images as data
-        // URIs; its external videos are already included by the first list.
-        if (format == ExportFormat.markdown) ...imageRelsOf(note),
-      ];
-      for (final rel in mediaRels) {
-        final file = imageRoot == null
-            ? File(rel)
-            : File(p.join(imageRoot, rel));
-        if (!file.existsSync()) continue;
-        // 整包是在内存里拼出来的（`ZipEncoder().encodeBytes`），
-        // 一个几 GB 的视频会把内存吃光，最后连整个导出都失败 ——
-        // 宁可这一条不打包并在正文里说明，也不要整个文件夹导不出来。
-        if (MediaImporter.isVideoPath(rel) && file.lengthSync() > videoLimit) {
-          oversized.add(rel);
-        } else {
-          packed.add(rel);
-        }
+      //
+      // 外部引用要先改写成包内路径：包里没有 `C:\素材\a.png` 这种条目名，
+      // 而且换台机器那个路径必然不存在。
+      //
+      // 文件夹名跟着**最终**文件名走（含同名去重后的序号），并带上文集目录：
+      // `文集/无题 (2).docx` 的媒体必须在 `文集/无题 (2).files/`，
+      // 否则正文里那行说明指向一个包里根本不存在的位置。
+      final stem = p.posix.basenameWithoutExtension(full);
+      final prepared = prepareExternal(
+        note,
+        format,
+        imageRoot: imageRoot,
+        videoLimit: videoLimit,
+        folderStem: stem,
+        dirs: dirs,
+      );
+      final Uint8List bytes;
+      if (format.isBinary) {
+        bytes = renderDocxBytes(
+          note,
+          imageRoot: imageRoot,
+          videoFolder: prepared.mediaFolder,
+          oversizedVideos: prepared.oversized,
+        );
+      } else {
+        bytes = Uint8List.fromList(
+          utf8.encode(renderWith(note, format, prepared.content)),
+        );
       }
-
-      final bytes = format.isBinary
-          ? renderDocxBytes(
-              note,
-              imageRoot: imageRoot,
-              videoFolder: videoFolder,
-              oversizedVideos: oversized,
-            )
-          : Uint8List.fromList(
-              utf8.encode(render(note, format, imageRoot: imageRoot)),
-            );
       archive.addFile(
         ArchiveFile(full, bytes.length, bytes)
           // 包内文件的时间 = 笔记最后修改时间，而不是打包那一刻。
@@ -161,20 +489,13 @@ class NoteExporter {
           ..lastModTime = epochSecondsOf(note.updatedAt),
       );
 
-      // 视频本体跟着一起打包。
-      // docx 放 `<笔记名>.files/`（和正文里那行说明对上）；
-      // markdown/html 里写的就是原始相对路径，所以原地放，链接才不断。
-      for (final rel in packed) {
-        final file = imageRoot == null
-            ? File(rel)
-            : File(p.join(imageRoot, rel));
-        final data = file.readAsBytesSync();
-        final target = format.isBinary
-            ? '$videoFolder/${p.basename(rel)}'
-            : <String>[...dirs, rel.replaceAll('\\', '/')].join('/');
-        if (!used.add(target)) continue;
+      // 媒体统一由 `prepareExternal.extras` 收好（内部文件与外部引用
+      // 一视同仁，条目名都是 `<标题>.files/<原名>`），这里只负责写进包。
+      for (final extra in prepared.extras) {
+        if (!used.add(extra.target)) continue;
+        final data = extra.source.readAsBytesSync();
         archive.addFile(
-          ArchiveFile(target, data.length, data)
+          ArchiveFile(extra.target, data.length, data)
             ..lastModTime = epochSecondsOf(note.updatedAt),
         );
       }
@@ -183,7 +504,30 @@ class NoteExporter {
     return Uint8List.fromList(ZipEncoder().encodeBytes(archive));
   }
 
-  /// 压缩包名。文集名可能带 `/ : *` 这些，直接当文件名会存不下来。
+  /// 算出这篇笔记在包里的最终文件名（含同名去重）与视频目录。
+  static ({String fileName, String videoFolder, List<String> dirs}) _layoutFor(
+    ({List<String> path, Note note}) item,
+    ExportFormat format,
+    Set<String> used,
+  ) {
+    final dirs = <String>[
+      for (final seg in item.path)
+        if (_safeSegment(seg).isNotEmpty) _safeSegment(seg),
+    ];
+    final base = suggestedName(item.note);
+    var full = <String>[...dirs, '$base.${format.ext}'].join('/');
+    // 同名笔记（比如两篇都叫「无题」）加序号，否则后面会把前面覆盖掉
+    var k = 2;
+    while (!used.add(full)) {
+      full = <String>[...dirs, '$base ($k).${format.ext}'].join('/');
+      k++;
+    }
+    // 视频目录名跟着**最终**文件名走（含去重后的序号），
+    // 否则 docx 正文里写的是 `笔记.files`、包里实际叫 `笔记 (2).files`。
+    final stem = full.substring(0, full.length - format.ext.length - 1);
+    return (fileName: full, videoFolder: '$stem.files', dirs: dirs);
+  }
+
   static String safeZipName(String raw) {
     final t = _safeSegment(raw);
     return t.isEmpty ? '元世界导出' : t;
@@ -203,15 +547,47 @@ class NoteExporter {
     return t.length > 80 ? t.substring(0, 80) : t;
   }
 
-  /// 渲染单篇。[imageRoot] 用于 HTML 里把图片写成绝对路径。
-  static String render(Note note, ExportFormat format, {String? imageRoot}) =>
-      switch (format) {
-        ExportFormat.markdown => _markdown(note),
-        ExportFormat.text => _plainText(note),
-        ExportFormat.html => _html(note, imageRoot),
-        // docx 是二进制，走 renderDocxBytes；这里给个占位避免漏判
-        ExportFormat.docx => _markdown(note),
-      };
+  /// 渲染单篇。
+  static String render(Note note, ExportFormat format) => switch (format) {
+    ExportFormat.markdown => _markdown(note),
+    ExportFormat.text => _plainText(note),
+    // 二进制格式走各自的 render*Bytes；这里给个占位避免漏判
+    ExportFormat.docx => _markdown(note),
+    ExportFormat.pdf => _markdown(note),
+  };
+
+  /// 用**替换过正文**的笔记渲染文本格式（批量导出时外部引用要先改写）。
+  ///
+  /// 不直接改 `note.content` 再调 [render]：`Note` 是不可变对象，
+  /// 而且调用方手里那份还要拿去渲染 docx（docx 走图片嵌入，不用改写）。
+  static String renderWith(Note note, ExportFormat format, String content) {
+    final patched = Note(
+      id: note.id,
+      title: note.title,
+      content: content,
+      excerpt: note.excerpt,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      collectionId: note.collectionId,
+      author: note.author,
+      sourceUrl: note.sourceUrl,
+      publishedAt: note.publishedAt,
+      coverImage: note.coverImage,
+      charCount: note.charCount,
+      wordCount: note.wordCount,
+      imageCount: note.imageCount,
+      isPinned: note.isPinned,
+      isFavorite: note.isFavorite,
+      isArchived: note.isArchived,
+      isHidden: note.isHidden,
+      deletedAt: note.deletedAt,
+      coverRatio: note.coverRatio,
+      coverZoom: note.coverZoom,
+      coverFocusX: note.coverFocusX,
+      coverFocusY: note.coverFocusY,
+    );
+    return render(patched, format);
+  }
 
   // ── Word（.docx） ────────────────────────────────────────────────────────
   //
@@ -242,7 +618,7 @@ class NoteExporter {
       if (rel.isEmpty) continue;
       if (MediaImporter.isVideoPath(rel)) continue;
 
-      final file = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+      final file = _fileFor(imageRoot, rel);
       if (!file.existsSync()) continue;
 
       final bytes = file.readAsBytesSync();
@@ -570,10 +946,15 @@ class NoteExporter {
           if (img == null) {
             // 图片文件找不到（可能被删了），退化成一行文字说明，
             // 总比整篇导出失败强
-            b.write(_para('[图片] $rel'));
+            b.write(_para('[图片] $rel${_captionSuffix(block.caption)}'));
           } else {
             imgIndex++;
             b.write(_imageXml(img, imgIndex));
+            // 图注排在图片下面一行、居中、灰字：它就是这张图的说明，
+            // 排版上不能和下一段正文混在一起
+            if (block.caption.isNotEmpty) {
+              b.write(_captionXml(block.caption));
+            }
           }
         }
       } else {
@@ -806,9 +1187,10 @@ class NoteExporter {
       case ContentBlockType.image:
         final rel = _imagePathOf(text);
         return _para(
-          MediaImporter.isVideoPath(rel)
-              ? '[视频] ${p.basename(rel)}'
-              : '[图片] $rel',
+          (MediaImporter.isVideoPath(rel)
+                  ? '[视频] ${p.basename(rel)}'
+                  : '[图片] $rel') +
+              _captionSuffix(block.caption),
         );
       case ContentBlockType.divider:
         return _para('————————');
@@ -853,6 +1235,16 @@ class NoteExporter {
   static String _para(String text) =>
       '<w:p><w:r><w:t xml:space="preserve">${_xesc(text)}</w:t></w:r></w:p>';
 
+  /// 图注追加到纯文字说明后面（`[图片] 7/a.png · 说明文字`）。
+  static String _captionSuffix(String caption) =>
+      caption.isEmpty ? '' : ' · ${stripInline(caption)}';
+
+  /// Word 里的图注段：居中、9pt、灰色。
+  static String _captionXml(String caption) => '<w:p><w:pPr><w:jc w:val="center"/>'
+      '</w:pPr><w:r><w:rPr><w:color w:val="8A8A8E"/><w:sz w:val="18"/>'
+      '</w:rPr><w:t xml:space="preserve">${_xesc(stripInline(caption))}</w:t>'
+      '</w:r></w:p>';
+
   /// XML 转义。控制字符也要去掉 —— Word 遇到会直接判定文件损坏。
   static String _xesc(String s) => s
       .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '')
@@ -872,16 +1264,6 @@ class NoteExporter {
   // Word 的导航窗格照常列出大纲并能跳；正文里想要目录就用「引用 → 目录」，
   // 那是 Word 的正确做法（标题改了会跟着更新，我们手写的那份是死的）。
   // 应用内的目录面板也还在，那是阅读时用的，和导出无关。
-
-  /// 标题文字 → HTML 锚点 id。
-  ///
-  /// 标题的 id 保留：用户自己在笔记里写 `[跳过去](#某标题)` 时要能落地。
-  static String _slug(String raw) =>
-      stripInline(raw)
-          .trim()
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^\w\u4e00-\u9fa5]+'), '-')
-          .replaceAll(RegExp(r'^-|-$'), '');
 
   // ── Markdown ────────────────────────────────────────────────────────────
 
@@ -923,7 +1305,10 @@ class NoteExporter {
           // 视频块和图片块在正文里是同一个 type，纯文本里也要分开写，
           // 否则导出后的 txt/html 会把 mp4 说成"图片"
           final rel = _imagePathOf(block.text.trim());
-          b.writeln(MediaImporter.isVideoPath(rel) ? '[视频] $rel' : '[图片] $rel');
+          b.writeln(
+            (MediaImporter.isVideoPath(rel) ? '[视频] $rel' : '[图片] $rel') +
+                _captionSuffix(block.caption),
+          );
         case ContentBlockType.divider:
           b.writeln('-' * 40);
         case ContentBlockType.heading:
@@ -949,177 +1334,6 @@ class NoteExporter {
     return '${b.toString().trimRight()}\n';
   }
 
-  // ── HTML ────────────────────────────────────────────────────────────────
-
-  static String _html(Note note, String? imageRoot) {
-    final b = StringBuffer()
-      ..writeln('<!DOCTYPE html>')
-      ..writeln('<html lang="zh-CN">')
-      ..writeln('<head>')
-      ..writeln('<meta charset="utf-8">')
-      ..writeln('<title>${_esc(note.title)}</title>')
-      ..writeln('<style>')
-      ..writeln(
-        'body{max-width:760px;margin:40px auto;padding:0 20px;'
-        'font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;'
-        'font-size:17px;line-height:1.85;color:#1c1c1e;}',
-      )
-      ..writeln('h1{font-size:28px;line-height:1.35;margin:0 0 8px;}')
-      ..writeln('h2{font-size:22px;margin:32px 0 12px;}')
-      ..writeln('h3{font-size:19px;margin:26px 0 10px;}')
-      ..writeln('p{margin:0 0 16px;}')
-      ..writeln(
-        'blockquote{margin:16px 0;padding:8px 16px;'
-        'border-left:3px solid #3b82f6;color:#6b7280;background:#f7f7fa;}',
-      )
-      ..writeln(
-        'img{max-width:100%;border-radius:12px;display:block;margin:18px 0;}',
-      )
-      ..writeln(
-        'code{background:#f2f2f7;padding:2px 5px;border-radius:4px;'
-        'font-family:Consolas,monospace;font-size:15px;}',
-      )
-      ..writeln('.meta{color:#8e8e93;font-size:14px;margin-bottom:28px;}')
-      ..writeln('hr{border:none;border-top:1px solid #e5e5ea;margin:28px 0;}')
-      ..writeln('a{color:#3b82f6;}')
-      ..writeln('</style>')
-      ..writeln('</head>')
-      ..writeln('<body>');
-
-    if (note.title.trim().isNotEmpty) {
-      b.writeln('<h1>${_esc(note.title.trim())}</h1>');
-    }
-    b.writeln('<div class="meta">${_esc(_metaLine(note))}</div>');
-
-    final blocks = parseContent(note.content);
-    // 连续的列表项要合进同一个 <ul>/<ol>：一个 <li> 包一个 <ul> 的话，
-    // 序号会各自从 1 重新开始，浏览器给的缩进也会乱
-    var i = 0;
-    while (i < blocks.length) {
-      final type = blocks[i].type;
-      if (type == ContentBlockType.bullet || type == ContentBlockType.ordered) {
-        final ordered = type == ContentBlockType.ordered;
-        final tag = ordered ? 'ol' : 'ul';
-        b.writeln('<$tag>');
-        while (i < blocks.length && blocks[i].type == type) {
-          b.writeln('<li>${_inline(blocks[i].text.trim())}</li>');
-          i++;
-        }
-        b.writeln('</$tag>');
-        continue;
-      }
-      b.writeln(_htmlBlock(blocks[i], imageRoot));
-      i++;
-    }
-
-    b
-      ..writeln('</body>')
-      ..writeln('</html>');
-    return b.toString();
-  }
-
-  static String _htmlBlock(ContentBlock block, String? imageRoot) {
-    final text = block.text.trim();
-    switch (block.type) {
-      case ContentBlockType.image:
-        final rel = _imagePathOf(text);
-        // 视频不能走 `_dataUri`：那是把文件 base64 塞进 HTML，
-        // 一段 mp4 能撑出几十 MB 的 html，而且 `<img>` 也放不出来。
-        // 交给浏览器原生播放器，src 用相对路径（视频文件随包一起导出）。
-        if (MediaImporter.isVideoPath(rel)) {
-          return '<video controls preload="metadata" src="${_esc(rel)}" '
-              'style="max-width:100%;border-radius:12px;"></video>';
-        }
-        return '<img src="${_esc(_dataUri(rel, imageRoot))}" alt="">';
-      case ContentBlockType.divider:
-        return '<hr>';
-      case ContentBlockType.heading:
-        final level = block.level.clamp(1, 6);
-        // 带 id 才能被目录里的锚点跳到
-        return '<h$level id="${_slug(text)}">${_inline(text)}</h$level>';
-      case ContentBlockType.bullet:
-      case ContentBlockType.ordered:
-        // 列表项在 _html 里成组合并，这里只是单个 block 的兜底
-        return '<p>${_inline(text)}</p>';
-      case ContentBlockType.quote:
-        return '<blockquote>${_inline(text)}</blockquote>';
-      case ContentBlockType.code:
-        return '<p><code>${_esc(text)}</code></p>';
-      case ContentBlockType.paragraph:
-        return '<p>${_inline(text)}</p>';
-    }
-  }
-
-  /// 行内标记 → HTML。
-  static String _inline(String s) {
-    var out = _esc(s);
-    // 顺序要紧：先处理 ** 再处理 *，否则加粗会被拆成两个斜体
-    out = out.replaceAllMapped(
-      RegExp(r'\*\*([^*]+)\*\*'),
-      (m) => '<strong>${m.group(1)}</strong>',
-    );
-    out = out.replaceAllMapped(
-      RegExp(r'\*([^*]+)\*'),
-      (m) => '<em>${m.group(1)}</em>',
-    );
-    out = out.replaceAllMapped(
-      RegExp(r'`([^`]+)`'),
-      (m) => '<code>${m.group(1)}</code>',
-    );
-    // 删除线（要在 ** 之后处理，否则 ~~ 里的内容会被当普通文字）
-    out = out.replaceAllMapped(
-      RegExp(r'~~([^~]+)~~'),
-      (m) => '<del>${m.group(1)}</del>',
-    );
-    // 链接：先标记转换，再处理裸链接
-    out = out.replaceAllMapped(
-      RegExp(r'\[([^\]]+)\]\((https?://[^)]+)\)'),
-      (m) => '<a href="${m.group(2)}">${m.group(1)}</a>',
-    );
-    out = out.replaceAllMapped(
-      RegExp(r'(?<!["=>])(https?://[^\s<>()（）【】]+)'),
-      (m) => '<a href="${m.group(1)}">${m.group(1)}</a>',
-    );
-    return out;
-  }
-
-  /// 图片内嵌成 data URI。
-  ///
-  /// **必须内嵌**：导出的是一个单独的 .html 文件，用 `file://` 绝对路径的话，
-  /// 文件一挪到别的机器、或者发给别人，图片就全断了 ——
-  /// 而 html 导出最常见的用途恰恰就是"发出去"。
-  ///
-  /// 超过 4MB 的单图退回路径引用：内嵌会让 html 膨胀成几十兆，
-  /// 浏览器打开会卡死，那比图裂更糟。
-  static String _dataUri(String rel, String? imageRoot) {
-    if (imageRoot == null || rel.isEmpty) return rel;
-    final file = File(p.join(imageRoot, rel));
-    if (!file.existsSync()) return rel;
-    try {
-      final bytes = file.readAsBytesSync();
-      if (bytes.length > 4 * 1024 * 1024) {
-        return Uri.file(file.path).toString();
-      }
-      final ext = rel.contains('.') ? rel.split('.').last.toLowerCase() : 'png';
-      return 'data:${_mimeOf(ext)};base64,${base64.encode(bytes)}';
-    } catch (_) {
-      return rel;
-    }
-  }
-
-  static String _metaLine(Note note) {
-    final d = note.displayTime;
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${d.year}-${two(d.month)}-${two(d.day)} '
-        '${two(d.hour)}:${two(d.minute)} · ${note.charCount} 字';
-  }
-
-  static String _esc(String s) => s
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;');
-
   /// 从图片 block 里取路径。
   ///
   /// `parseContent` 对图片 block 给出的 text **可能已经是纯路径**、
@@ -1129,6 +1343,12 @@ class NoteExporter {
     var path = (m?.group(1) ?? line).trim();
     if (path.startsWith('images/')) path = path.substring('images/'.length);
     return path;
+  }
+
+  /// 相对 imageRoot 的那一段路径（剥掉 `images/` 前缀）。
+  static String _bareRel(String ref) {
+    final rel = ExternalMedia.localPath(ref);
+    return rel.startsWith('images/') ? rel.substring('images/'.length) : rel;
   }
 
   // ── 视频 ────────────────────────────────────────────────────────────────
@@ -1160,9 +1380,12 @@ class NoteExporter {
   }
 
   /// 正文里引用到的所有视频文件（相对路径，去重、保持出现顺序）。
-  static List<String> videoRelsOf(Note note) {
+  static List<String> videoRelsOf(Note note) => videoRelsIn(note.content);
+
+  /// 同 [videoRelsOf]，但作用在**任意正文**上（导出前改写过的那种）。
+  static List<String> videoRelsIn(String content) {
     final out = <String>[];
-    for (final block in parseContent(note.content)) {
+    for (final block in parseContent(content)) {
       if (block.type != ContentBlockType.image) continue;
       final rel = _imagePathOf(block.text.trim());
       if (rel.isEmpty || !MediaImporter.isVideoPath(rel)) continue;
@@ -1175,9 +1398,12 @@ class NoteExporter {
   ///
   /// Markdown 导出保留原始 `![](path)`，因此压缩包必须把图片放到
   /// 笔记所在目录下，否则笔记移出压缩包后链接会断。
-  static List<String> imageRelsOf(Note note) {
+  static List<String> imageRelsOf(Note note) => imageRelsIn(note.content);
+
+  /// 同 [imageRelsOf]，但作用在**任意正文**上（导出前改写过的那种）。
+  static List<String> imageRelsIn(String content) {
     final out = <String>[];
-    for (final block in parseContent(note.content)) {
+    for (final block in parseContent(content)) {
       if (block.type != ContentBlockType.image) continue;
       final rel = _imagePathOf(block.text.trim());
       if (rel.isEmpty || !MediaImporter.isImagePath(rel)) continue;
@@ -1197,10 +1423,10 @@ class NoteExporter {
     final dir = Directory(p.join(p.dirname(docxPath), '$savedBase.files'));
     var count = 0;
     for (final rel in videoRelsOf(note)) {
-      final src = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+      final src = _fileFor(imageRoot, rel);
       if (!src.existsSync()) continue;
       dir.createSync(recursive: true);
-      src.copySync(p.join(dir.path, p.basename(rel)));
+      src.copySync(p.join(dir.path, p.basename(src.path)));
       count++;
     }
     return count;
@@ -1223,11 +1449,36 @@ class NoteExporter {
     };
     var count = 0;
     for (final rel in rels) {
-      final src = imageRoot == null ? File(rel) : File(p.join(imageRoot, rel));
+      // 外部引用不在这里拷：单篇导出会先把正文改写成 `外部文件/<原名>`，
+      // 再由 [copyExtrasNextTo] 把文件拷到旁边 —— 这样导出的 .md
+      // 换台机器也能打开，而不是指着一个本机绝对路径。
+      if (ExternalMedia.isExternal(rel)) continue;
+      final src = _fileFor(imageRoot, rel);
       if (!src.existsSync()) continue;
       final target = File(p.join(p.dirname(savedPath), rel));
       target.parent.createSync(recursive: true);
       src.copySync(target.path);
+      count++;
+    }
+    return count;
+  }
+
+  /// 把外部引用的原文件拷到导出文件旁边（`外部文件/<原名>`）。
+  ///
+  /// 配合 [prepareExternal] 用：正文里那些绝对路径已经被改写成
+  /// `外部文件/a.png`，这里把文件真拷过去，导出的 .md 才是自包含的。
+  static int copyExtrasNextTo(
+    String savedPath,
+    List<({String target, File source})> extras,
+  ) {
+    var count = 0;
+    for (final extra in extras) {
+      if (!extra.source.existsSync()) continue;
+      final target = File(
+        p.join(p.dirname(savedPath), p.posix.joinAll(p.split(extra.target))),
+      );
+      target.parent.createSync(recursive: true);
+      extra.source.copySync(target.path);
       count++;
     }
     return count;
@@ -1256,7 +1507,7 @@ class NoteExporter {
       );
     } else {
       file.writeAsStringSync(
-        render(note, format, imageRoot: imageRoot),
+        render(note, format),
         flush: true,
       );
     }
@@ -1294,7 +1545,7 @@ class NoteExporter {
           );
         } else {
           file.writeAsStringSync(
-            render(note, format, imageRoot: imageRoot),
+            render(note, format),
             flush: true,
           );
         }

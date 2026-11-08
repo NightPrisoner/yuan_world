@@ -35,7 +35,11 @@ extension NoteQueries on NoteRepository {
   /// 实现是 `content LIKE`：正文里可能写 `[[标题]]` 也可能写
   /// `[[标题|显示名]]`，所以用 `[[标题` 前缀匹配再交给
   /// `parseWikiLinks` 复核（避免"标题是别人前缀"的误命中）。
-  List<Note> backlinksOf(int noteId, {int limit = 50, bool hiddenOnly = false}) {
+  List<Note> backlinksOf(
+    int noteId, {
+    int limit = 50,
+    bool hiddenOnly = false,
+  }) {
     final target = getNote(noteId);
     if (target == null) return const <Note>[];
     final name = target.title.trim();
@@ -53,9 +57,7 @@ extension NoteQueries on NoteRepository {
     final notes = rows.map((r) => Note.fromRow(r)).toList();
     _attachTags(notes);
     // LIKE 只是粗筛（`[[标题` 也能命中 `[[标题B]]`），这里精确复核
-    return notes
-        .where((n) => wikiTargetsIn(n.content).contains(name))
-        .toList();
+    return notes.where((n) => wikiTargetsIn(n.content).contains(name)).toList();
   }
 
   /// 把筛选条件翻译成 SQL 片段。
@@ -80,7 +82,10 @@ extension NoteQueries on NoteRepository {
     if (f.collectionId != null) {
       if (f.includeDescendants) {
         // 带上子文件夹：用户点开一个分类，预期是"这个分类下的全部内容"
-        final ids = [f.collectionId!, ...descendantCollectionIds(f.collectionId!)];
+        final ids = [
+          f.collectionId!,
+          ...descendantCollectionIds(f.collectionId!),
+        ];
         where.add('n.collection_id IN (${ids.join(',')})');
       } else {
         where.add('n.collection_id = ?');
@@ -94,8 +99,10 @@ extension NoteQueries on NoteRepository {
       where.add('n.is_favorite = 1');
     }
     if (f.tag != null && f.tag!.isNotEmpty) {
-      where.add('n.id IN (SELECT nt.note_id FROM note_tags nt '
-          'JOIN tags t ON t.id = nt.tag_id WHERE t.name = ?)');
+      where.add(
+        'n.id IN (SELECT nt.note_id FROM note_tags nt '
+        'JOIN tags t ON t.id = nt.tag_id WHERE t.name = ?)',
+      );
       args.add(f.tag);
     }
 
@@ -236,6 +243,11 @@ extension NoteQueries on NoteRepository {
     deletedAt: n.deletedAt,
     sortIndex: n.sortIndex,
     coverImage: n.coverImage,
+    coverRatio: n.coverRatio,
+    coverZoom: n.coverZoom,
+    coverFocusX: n.coverFocusX,
+    coverFocusY: n.coverFocusY,
+    indentFirstLine: n.indentFirstLine,
     collectionName: n.collectionName,
     collectionColor: n.collectionColor,
     tags: tags,
@@ -256,7 +268,10 @@ extension NoteQueries on NoteRepository {
     if (ids != null) {
       wanted.addAll(ids);
     } else if (collectionId != null) {
-      final scope = <int>[collectionId, ...descendantCollectionIds(collectionId)];
+      final scope = <int>[
+        collectionId,
+        ...descendantCollectionIds(collectionId),
+      ];
       for (final row in _d.select(
         'SELECT id FROM notes WHERE collection_id IN '
         '(${List.filled(scope.length, '?').join(',')}) '
@@ -303,7 +318,9 @@ extension NoteQueries on NoteRepository {
       'n.published_at, n.created_at, n.updated_at, n.char_count, n.word_count, '
       'n.image_count, n.is_pinned, n.is_favorite, n.is_archived, n.is_hidden, '
       'n.sort_index, '
-      'n.cover_image, c.name AS collection_name, c.color AS collection_color '
+      'n.cover_image, n.cover_ratio, n.cover_zoom, n.cover_focus_x, n.cover_focus_y, '
+      'n.indent_first_line, '
+      'c.name AS collection_name, c.color AS collection_color '
       'FROM notes n LEFT JOIN collections c ON c.id = n.collection_id WHERE n.id = ?',
       [id],
     );
@@ -321,10 +338,10 @@ extension NoteQueries on NoteRepository {
 
   /// 全文检索，返回带高亮片段的命中。
   List<Note> search(String q, {int limit = 100, int offset = 0}) => listNotes(
-        NoteFilter(query: q, sort: NoteSort.updatedDesc),
-        limit: limit,
-        offset: offset,
-      );
+    NoteFilter(query: q, sort: NoteSort.updatedDesc),
+    limit: limit,
+    offset: offset,
+  );
 
   /// 全文检索的一页结果 + 命中总数。
   ///

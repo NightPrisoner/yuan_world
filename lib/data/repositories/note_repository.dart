@@ -228,7 +228,9 @@ class NoteRepository {
       'n.published_at, n.created_at, n.updated_at, n.char_count, n.word_count, '
       'n.image_count, n.is_pinned, n.is_favorite, n.is_archived, n.is_hidden, '
       'n.deleted_at, n.sort_index, '
-      'n.cover_image, c.name AS collection_name, c.color AS collection_color ';
+      'n.cover_image, n.cover_ratio, n.cover_zoom, n.cover_focus_x, n.cover_focus_y, '
+      'n.indent_first_line, '
+      'c.name AS collection_name, c.color AS collection_color ';
 
   // ── 查询 ────────────────────────────────────────────────────────────────
 

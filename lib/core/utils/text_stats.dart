@@ -16,8 +16,13 @@ bool isCjk(int codeUnit) {
 }
 
 /// 中文标点。Word 把它们**算进字数**，所以这里也要算。
+///
+/// 但 `U+3000`（表意空格，就是全角空格）**不算** —— 它是空白，不是标点。
+/// 这一条很要紧：首行缩进就是靠行首两个全角空格实现的，如果把它算进字数，
+/// 每加一次缩进字数就 +2，和 Word 对不上（Word 的缩进是段落属性，
+/// 一个字都不占）。
 bool isCjkPunctuation(int r) {
-  return (r >= 0x3000 && r <= 0x303F) || // 。、《》「」…
+  return (r >= 0x3001 && r <= 0x303F) || // 。、《》「」…（不含 3000 空格）
       (r >= 0xFF00 && r <= 0xFFEF) || // 全角形式：，！？（）
       r == 0x00B7; // 间隔号 ·
 }
@@ -210,6 +215,7 @@ class ContentBlock {
     this.listNumber,
     this.isTodo = false,
     this.checked = false,
+    this.caption = '',
   });
 
   final ContentBlockType type;
@@ -218,6 +224,13 @@ class ContentBlock {
   final int? listNumber;
   final bool isTodo;
   final bool checked;
+
+  /// 图注：只有 [ContentBlockType.image] 用得上。
+  ///
+  /// 图注在 Markdown 里就是图片的 alt 文字（`![说明](路径)`）——
+  /// 和路径写在同一行，所以拖动、上下移动、删除永远作用于整条，
+  /// 不会出现"图走了、说明留在原地"。
+  final String caption;
 }
 
 enum ContentBlockType {
@@ -246,7 +259,12 @@ List<ContentBlock> parseContent(String markdown) {
     blocks.add(
       ContentBlock(
         type: ContentBlockType.paragraph,
-        text: buffer.join('\n').trim(),
+        // **只削行尾空白，不能 trim 行首。**
+        //
+        // 行首那两个全角空格是"首行缩进"的唯一凭据（见
+        // `RichParagraph.kIndentPad`），而 `\u3000` 在 Unicode 里算空白、
+        // `String.trim()` 会把它一起吃掉 —— 一 trim，缩进就全没了。
+        text: buffer.join('\n').trimRight(),
       ),
     );
     buffer.clear();
@@ -263,7 +281,13 @@ List<ContentBlock> parseContent(String markdown) {
     final img = MdBlockSyntax.imageLine(line);
     if (img != null) {
       flush();
-      blocks.add(ContentBlock(type: ContentBlockType.image, text: img));
+      blocks.add(
+        ContentBlock(
+          type: ContentBlockType.image,
+          text: img,
+          caption: MdBlockSyntax.imageCaption(line).trim(),
+        ),
+      );
       continue;
     }
 

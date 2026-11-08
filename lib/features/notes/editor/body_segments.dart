@@ -39,6 +39,13 @@ class ImageSegment extends BodySegment {
   /// 相对图片根目录的路径，渲染用。
   final String path;
 
+  /// 图注：`![](path)` 里中括号那一段。
+  ///
+  /// 图注写在 alt 里是 Markdown 的标准写法，好处是**它和媒体是同一行** ——
+  /// 上下移动、复制、导出全都天然带着走，不需要再维护一份"谁配谁"的关系。
+  /// 空串表示没写图注。
+  String get caption => imageAltOf(raw);
+
   @override
   bool operator ==(Object other) =>
       other is ImageSegment && other.raw == raw && other.path == path;
@@ -47,8 +54,31 @@ class ImageSegment extends BodySegment {
   int get hashCode => Object.hash(raw, path);
 }
 
+/// 从一整行里取出图注（alt）。不是图片行、或没写图注时返回空串。
+///
+/// 只认 `![...](...)` 这一种形态，和 [imagePathOf] 用的是同一条正则 ——
+/// 两个字段必须来自同一次匹配，否则用户改一处会让另一处对不上。
+String imageAltOf(String line) {
+  final m = _imageLine.firstMatch(line);
+  if (m == null) return '';
+  return m.group(1)!.trim();
+}
+
+/// 生成一行图片，带图注。
+///
+/// [caption] 里的 `]` 会把语法弄坏（正则到那里就收尾了），所以换成全角 `］`；
+/// 换行同理换成空格 —— 图注本来就只能占一行，不然 [splitBodySegments] 会把
+/// 下半截当成普通段落，图片和说明就散了。
+String imageLineOf(String path, String caption) {
+  final text = caption.replaceAll(']', '］').replaceAll('\n', ' ').trim();
+  return '![$text]($path)';
+}
+
 /// 整行图片的正则：允许前后空白。
-final RegExp _imageLine = RegExp(r'^\s*!\[[^\]]*\]\(([^)]+)\)\s*$');
+///
+/// 两个捕获组：**1 = 图注（alt），2 = 路径**。图注和路径必须来自同一次匹配，
+/// 分成两条正则改一处就会对不上。
+final RegExp _imageLine = RegExp(r'^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$');
 
 bool isImageLine(String line) => _imageLine.hasMatch(line);
 
@@ -58,7 +88,7 @@ bool isImageLine(String line) => _imageLine.hasMatch(line);
 String? imagePathOf(String line) {
   final m = _imageLine.firstMatch(line);
   if (m == null) return null;
-  var path = m.group(1)!.trim();
+  var path = m.group(2)!.trim();
   if (path.isEmpty || path.startsWith('http')) return null;
   // Markdown 允许 `![说明](a.png "标题")`，标题不属于路径
   final quoteAt = path.indexOf(RegExp('''\\s+["']'''));
@@ -128,6 +158,26 @@ int imageIndexOf(List<BodySegment> segments, int segmentIndex) {
 
 int imageCountOf(List<BodySegment> segments) =>
     segments.whereType<ImageSegment>().length;
+
+/// 这一段正文占几行。
+///
+/// 每个 `BodySegment` 在拼回时后面都会跟一个换行（最后一段除外），
+/// 所以"第几行"就是前面各段行数之和。图片段永远只占一行，
+/// 文字段按自身有几个换行来算。
+///
+/// 单独写成函数（而不是在编辑器里 `split('\n')`）是为了让"正文按行切"
+/// 这件事只有一个实现 —— 编辑器的上下移动、目录跳转都要用同一套行号，
+/// 两边各写一遍迟早会差一行。
+int lineCountOf(BodySegment segment) => switch (segment) {
+  ImageSegment() => 1,
+  TextSegment(:final text) => linesOf(text).length,
+};
+
+/// 正文按行切。
+List<String> linesOf(String body) => body.split('\n');
+
+/// 行按正文拼回（与 [linesOf] 互逆）。
+String joinLines(List<String> lines) => lines.join('\n');
 
 /// 正文里所有媒体的数量（图片 + 动图 + 视频）。
 ///

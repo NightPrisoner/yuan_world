@@ -8,7 +8,7 @@ library;
 
 import 'dart:io';
 
-import 'package:path/path.dart' as p;
+import 'media/external_media.dart';
 
 /// 文集（小米笔记里叫「文件夹」）。支持嵌套：`parentId` 非空即为子文件夹。
 /// 「用户明确不要头图」的标记。
@@ -42,10 +42,14 @@ bool isCoverDisabled(String? cover) => cover == kCoverNone;
 /// 在不在，`LocalImage` 拿不到图就退回底色，于是阅读页标题上方顶着
 /// 一整块灰色矩形：看着像"图片加载失败"，可图上什么也没有，删又删不掉。
 /// 与其画一个说不清意思的灰块，不如当它没设过头图。
+///
+/// 头图也可以是**软件之外的绝对路径**（设置里开了「引用原文件」之后，
+/// 把一张外部图设为头图）。这种情况 `p.join(imageRoot, rel)` 本来就会
+/// 放行，但 `file://` 形态它处理不了，所以走 `ExternalMedia.resolve`。
 String? displayCover(String? cover, String? imageRoot) {
   final rel = effectiveCover(cover);
   if (rel == null || imageRoot == null || imageRoot.isEmpty) return null;
-  final file = File(p.join(imageRoot, rel));
+  final file = File(ExternalMedia.resolve(imageRoot, rel));
   return file.existsSync() ? rel : null;
 }
 
@@ -162,10 +166,35 @@ class Note {
     this.deletedAt,
     this.sortIndex = 0,
     this.coverImage,
+    this.coverRatio = defaultCoverRatio,
+    this.coverZoom = 1,
+    this.coverFocusX = 0,
+    this.coverFocusY = 0,
+    this.indentFirstLine = false,
     this.collectionName,
     this.collectionColor,
     this.tags = const <String>[],
   });
+
+  /// 头图默认宽高比：16:10。
+  ///
+  /// 这个值必须和「加可编辑头图之前」写死的那个比例一致 —— 老库升级后
+  /// 头图不该突然变样。
+  static const double defaultCoverRatio = 1.6;
+
+  /// 头图比例的可选档位（宽/高）。
+  ///
+  /// 放成固定几档而不是连续滑块：连续调的时候用户其实不知道自己要什么，
+  /// 只会一直拖；几档之间一眼能选出来，也保证「恢复默认」有意义。
+  static const List<double> coverRatioPresets = <double>[
+    2.4, // 21:9 电影感
+    1.7778, // 16:9
+    1.6, // 16:10（默认）
+    1.3333, // 4:3
+    1.0, // 1:1
+    0.75, // 3:4 竖构图
+    0.5625, // 9:16 手机全屏竖图
+  ];
 
   final int id;
   final String title;
@@ -193,6 +222,32 @@ class Note {
   final int sortIndex;
   final String? coverImage;
 
+  /// 头图显示框的宽高比（宽 / 高）。默认 1.6 = 16:10。
+  final double coverRatio;
+
+  /// 头图放大倍数。1 = 刚好填满显示框，大于 1 = 往里推（裁掉更多）。
+  final double coverZoom;
+
+  /// 取景中心在图片上的归一化位置，-1 = 最左/最上，1 = 最右/最下。
+  ///
+  /// 用 `BoxFit.cover` 时图片总有一边被裁掉，这两个值决定裁掉的是哪边。
+  final double coverFocusX;
+  final double coverFocusY;
+
+  /// 这套头图参数是否还是默认值（用来决定「恢复默认」按钮要不要亮）。
+  bool get coverFrameIsDefault =>
+      (coverRatio - Note.defaultCoverRatio).abs() < 0.001 &&
+      (coverZoom - 1).abs() < 0.001 &&
+      coverFocusX.abs() < 0.001 &&
+      coverFocusY.abs() < 0.001;
+
+  /// 正文段落是否首行缩进两个字。
+  ///
+  /// 只对中文长文有意义（网文、读书笔记习惯每段空两格），所以做成
+  /// 每篇笔记各自的开关而不是全局设置：同一台机器上写代码笔记和写
+  /// 小说的人，对这件事的预期完全相反。
+  final bool indentFirstLine;
+
   /// 查询时联表带出的文集名与颜色。
   final String? collectionName;
   final int? collectionColor;
@@ -203,41 +258,53 @@ class Note {
   /// 用于时间线展示的时间：优先原文发布时间，否则用本地创建时间。
   DateTime get displayTime => publishedAt ?? createdAt;
 
-  factory Note.fromRow(Map<String, Object?> r, {List<String> tags = const []}) =>
-      Note(
-        id: r['id'] as int,
-        title: (r['title'] as String?) ?? '',
-        content: (r['content'] as String?) ?? '',
-        excerpt: (r['excerpt'] as String?) ?? '',
-        author: (r['author'] as String?) ?? '',
-        sourceUrl: (r['source_url'] as String?) ?? '',
-        collectionId: r['collection_id'] as int?,
-        publishedAt: r['published_at'] == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(r['published_at'] as int),
-        createdAt: DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
-        updatedAt: DateTime.fromMillisecondsSinceEpoch(r['updated_at'] as int),
-        charCount: (r['char_count'] as int?) ?? 0,
-        wordCount: (r['word_count'] as int?) ?? 0,
-        imageCount: (r['image_count'] as int?) ?? 0,
-        isPinned: ((r['is_pinned'] as int?) ?? 0) != 0,
-        isFavorite: ((r['is_favorite'] as int?) ?? 0) != 0,
-        isArchived: ((r['is_archived'] as int?) ?? 0) != 0,
-        isHidden: ((r['is_hidden'] as int?) ?? 0) != 0,
-        deletedAt: r['deleted_at'] == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(r['deleted_at'] as int),
-        sortIndex: (r['sort_index'] as int?) ?? 0,
-        coverImage: r['cover_image'] as String?,
-        collectionName: r['collection_name'] as String?,
-        collectionColor: r['collection_color'] as int?,
-        tags: tags,
-      );
+  factory Note.fromRow(
+    Map<String, Object?> r, {
+    List<String> tags = const [],
+  }) => Note(
+    id: r['id'] as int,
+    title: (r['title'] as String?) ?? '',
+    content: (r['content'] as String?) ?? '',
+    excerpt: (r['excerpt'] as String?) ?? '',
+    author: (r['author'] as String?) ?? '',
+    sourceUrl: (r['source_url'] as String?) ?? '',
+    collectionId: r['collection_id'] as int?,
+    publishedAt: r['published_at'] == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(r['published_at'] as int),
+    createdAt: DateTime.fromMillisecondsSinceEpoch(r['created_at'] as int),
+    updatedAt: DateTime.fromMillisecondsSinceEpoch(r['updated_at'] as int),
+    charCount: (r['char_count'] as int?) ?? 0,
+    wordCount: (r['word_count'] as int?) ?? 0,
+    imageCount: (r['image_count'] as int?) ?? 0,
+    isPinned: ((r['is_pinned'] as int?) ?? 0) != 0,
+    isFavorite: ((r['is_favorite'] as int?) ?? 0) != 0,
+    isArchived: ((r['is_archived'] as int?) ?? 0) != 0,
+    isHidden: ((r['is_hidden'] as int?) ?? 0) != 0,
+    deletedAt: r['deleted_at'] == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(r['deleted_at'] as int),
+    sortIndex: (r['sort_index'] as int?) ?? 0,
+    coverImage: r['cover_image'] as String?,
+    coverRatio: (r['cover_ratio'] as num?)?.toDouble() ?? defaultCoverRatio,
+    coverZoom: (r['cover_zoom'] as num?)?.toDouble() ?? 1,
+    coverFocusX: (r['cover_focus_x'] as num?)?.toDouble() ?? 0,
+    coverFocusY: (r['cover_focus_y'] as num?)?.toDouble() ?? 0,
+    indentFirstLine: ((r['indent_first_line'] as int?) ?? 0) != 0,
+    collectionName: r['collection_name'] as String?,
+    collectionColor: r['collection_color'] as int?,
+    tags: tags,
+  );
 }
 
 /// 标签及其使用次数。
 class TagStat {
-  const TagStat({required this.id, required this.name, required this.color, required this.count});
+  const TagStat({
+    required this.id,
+    required this.name,
+    required this.color,
+    required this.count,
+  });
 
   final int id;
   final String name;

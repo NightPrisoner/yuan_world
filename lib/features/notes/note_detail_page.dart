@@ -8,7 +8,6 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../../app_state.dart';
@@ -17,12 +16,14 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/toc.dart';
 import '../../core/widgets/app_menu.dart';
-import '../../core/widgets/local_image.dart';
+import '../../data/media/external_media.dart';
 import '../../data/models.dart';
 import '../tags/tag_sheets.dart';
 import 'editor/body_segments.dart';
 import 'editor/note_editor_page.dart';
 import 'widgets/content_view.dart';
+import 'widgets/cover_frame.dart';
+import 'widgets/cover_picker.dart';
 import 'widgets/toc_panel.dart';
 import 'widgets/field_blocks.dart';
 import 'widgets/note_actions.dart';
@@ -35,6 +36,7 @@ class NoteDetailPage extends StatefulWidget {
     required this.noteId,
     this.embedded = false,
     this.onRequestEdit,
+    this.onEditAtLine,
     this.onClose,
     this.fullscreen = false,
     this.onToggleFullscreen,
@@ -51,6 +53,13 @@ class NoteDetailPage extends StatefulWidget {
 
   /// 嵌入模式下由外部接管「去编辑」，而不是 push 一个新路由。
   final VoidCallback? onRequestEdit;
+
+  /// 嵌入模式下要「从当前读到的那一行开始编辑」时用这个。
+  ///
+  /// [onRequestEdit] 只告诉外层"切成编辑器"，带不出行号 —— 三栏布局里
+  /// 编辑器是同一棵子树换内容，拿不到行号就会从头开始，长文里等于
+  /// 每次点编辑都把人扔回标题。传了本回调时优先用它。
+  final ValueChanged<int?>? onEditAtLine;
 
   /// 嵌入三栏布局时，点右上角的 × 收起正文栏。
   /// 为空则不显示关闭按钮（比如手机上是整页，没有"收起"的概念）。
@@ -207,7 +216,15 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
   }
 
   Future<void> _openEditor() async {
-    // 嵌入模式下交给外层面板切换内容，不要 push 新页面盖住整个三栏布局
+    // 从哪儿进来的就从哪儿接着改：把当前读到的那一行交给编辑器。
+    final startLine = _currentLine();
+    // 嵌入模式下交给外层面板切换内容，不要 push 新页面盖住整个三栏布局。
+    // 行号也要一起交出去：只切内容不传行号，编辑器就会从开头显示。
+    final atLine = widget.onEditAtLine;
+    if (atLine != null) {
+      atLine(startLine);
+      return;
+    }
     final external = widget.onRequestEdit;
     if (external != null) {
       external();
@@ -215,14 +232,48 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     }
     final route = MediaQuery.sizeOf(context).width < 1000
         ? EditorPageRoute<void>(
-            pageBuilder: (_) => NoteEditorPage(noteId: widget.noteId),
+            pageBuilder: (_) =>
+                NoteEditorPage(noteId: widget.noteId, initialLine: startLine),
           )
         : ApplePageRoute<void>(
-            pageBuilder: (_) => NoteEditorPage(noteId: widget.noteId),
+            pageBuilder: (_) =>
+                NoteEditorPage(noteId: widget.noteId, initialLine: startLine),
           );
     await Navigator.of(context).push(route);
     // 编辑器里会自动保存，回来后重新读一遍
     if (mounted) setState(_load);
+  }
+
+  /// 当前读到正文的第几行。
+  ///
+  /// 先试"视口上方最近的那个标题"—— 标题在正文里的位置是稳定的，
+  /// 用它反查行号不会随字体大小、图片高度漂移；没有标题的纯文字笔记，
+  /// 退化成按滚动比例估算（够用了：它的每一行高度都差不多）。
+  int? _currentLine() {
+    if (!_scroll.hasClients) return null;
+    final lines = _content.split('\n');
+    if (lines.isEmpty) return null;
+
+    TocEntry? above;
+    for (final e in _toc) {
+      final box = _blockKeys[e.blockIndex]?.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) continue;
+      // 距离屏幕顶部还有一点点余量的都算"已经滚过去了"
+      if (box.localToGlobal(Offset.zero).dy <= 120) above = e;
+    }
+    if (above != null) {
+      final target = above.text.trim();
+      final isHeading = RegExp(r'^\s{0,3}#{1,6}\s');
+      for (var i = 0; i < lines.length; i++) {
+        if (!isHeading.hasMatch(lines[i])) continue;
+        if (lines[i].replaceFirst(isHeading, '').trim() == target) return i;
+      }
+    }
+
+    final max = _scroll.position.maxScrollExtent;
+    if (max <= 0) return 0;
+    final ratio = (_scroll.offset / max).clamp(0.0, 1.0);
+    return (ratio * (lines.length - 1)).round();
   }
 
   @override
@@ -279,7 +330,12 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
         ),
         slivers: <Widget>[
           SliverAppBar(
-            pinned: true,
+            // 顶栏不再钉死：往下读时让位给正文，往上滑才回来。
+            //
+            // 长文里一直压着一条 96 高的栏，等于每屏少两行；而"往回滑"
+            // 本身就是"我要找操作"的信号，那时候再出现刚刚好。
+            floating: true,
+            snap: true,
             expandedHeight: _expanded,
             backgroundColor: c.background.withValues(alpha: 0.92),
             surfaceTintColor: Colors.transparent,
@@ -309,6 +365,26 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
               ),
             ),
             actions: [
+              // 编辑是这一页的主操作，放顶栏第一位。
+              // 以前它在标题下方，得先滑过标题、封面才看得见 —— 长文里
+              // 想改一句就得先往回滚。
+              //
+              // 图标按钮和标签/收藏长得一模一样时，用户会以为它们同等级。
+              // 主操作要一眼看出来：实心强调色 + 白图标 + 比旁边大一圈。
+              if (widget.onRequestEdit != null ||
+                  widget.onEditAtLine != null ||
+                  !widget.embedded) ...[
+                GlassIconButton(
+                  icon: Icons.edit_rounded,
+                  tooltip: '编辑',
+                  color: Colors.white,
+                  background: c.tint,
+                  size: 34,
+                  iconSize: 18,
+                  onTap: _openEditor,
+                ),
+                const SizedBox(width: 6),
+              ],
               // 标签：以前界面上完全没有入口，标签功能等于不存在
               GlassIconButton(
                 icon: Icons.label_outline_rounded,
@@ -403,7 +479,7 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 6, 20, 18),
-                child: _coverBanner(c, imageRoot, cover, note.id),
+                child: _coverBanner(c, imageRoot, cover, note),
               ),
             ),
 
@@ -418,54 +494,6 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
                     style: AppText.title1.copyWith(color: c.label, height: 1.3),
                   ),
                   const SizedBox(height: 12),
-                  // 编辑是正文页的主操作，单独放在标题下方，避免和标签、
-                  // 收藏、更多等次要动作挤在窄屏顶栏里。
-                  if (widget.onRequestEdit != null || !widget.embedded)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Tooltip(
-                        message: '编辑',
-                        child: Pressable(
-                          onTap: _openEditor,
-                          scale: 0.98,
-                          child: Container(
-                            height: 38,
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            decoration: BoxDecoration(
-                              color: c.tint,
-                              borderRadius: BorderRadius.circular(11),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: c.tint.withValues(alpha: 0.24),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 3),
-                                ),
-                              ],
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.edit_rounded,
-                                  size: 16,
-                                  color: Colors.white,
-                                ),
-                                SizedBox(width: 7),
-                                Text(
-                                  '编辑笔记',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 10),
                   Text(
                     metaLine,
                     style: AppText.footnote.copyWith(color: c.tertiaryLabel),
@@ -637,28 +665,108 @@ class _NoteDetailPageState extends State<NoteDetailPage> {
     await revealTocTarget(controller: _scroll, key: key);
   }
 
-  Widget _coverBanner(AppColors c, String imageRoot, String cover, int noteId) {
-    final image = ClipRRect(
+  Widget _coverBanner(AppColors c, String imageRoot, String cover, Note note) {
+    // 比例 / 放大 / 取景都来自这一篇自己的设置。
+    //
+    // 以前这里写死 16:10 + 居中裁切，用户没法救一张竖构图或者长图；
+    // 现在同一个 CoverFrame 也在编辑面板的预览里用，所见即所得。
+    final image = CoverFrame(
+      key: const ValueKey<String>('detail-cover'),
+      path: ExternalMedia.resolve(imageRoot, cover),
+      ratio: note.coverRatio,
+      zoom: note.coverZoom,
+      focusX: note.coverFocusX,
+      focusY: note.coverFocusY,
       borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
-      child: AspectRatio(
-        aspectRatio: 16 / 10,
-        child: LocalImage(
-          path: p.join(imageRoot, cover),
-          fit: BoxFit.cover,
-          fallbackColor: c.fill,
-          fadeIn: false,
+      fallbackColor: c.fill,
+      // **不要在这里钉死解码宽度。**
+      //
+      // 以前是 `decodeWidth: 1600` —— 听着合理（详情页的头图确实可能有
+      // 那么宽），但它从**起飞第一帧**就生效：Hero 飞行时画的是目的地的
+      // CoverFrame，那会儿框只有 66×66，却要按 1600 宽去解码一张本地大图。
+      // 首次打开时这张 1600 的图还没进图片缓存，于是头几帧是空的、露出
+      // 兜底色 —— 就是用户说的"第一次点开会闪一下"。第二次解码结果已经在
+      // 缓存里，所以只有第一次看得到。
+      //
+      // 交给 LocalImage 按实际显示宽度算 cacheWidth（起飞时小、落定后大），
+      // 再配合 gaplessPlayback：落定后换成大图时旧帧继续显示，不会闪。
+      // 放大过 2 倍以上时按 2 倍解就够（再往上只是浪费内存）。
+      decodeScale: note.coverZoom.clamp(1.0, 2.0),
+    );
+
+    // 点一下头图就能调比例和取景。
+    //
+    // 以前唯一的入口藏在「⋯ → 设置头图」里，改一个显示比例要翻两层菜单；
+    // 而"这张图怎么显示"恰恰是看着它的时候最想改的东西。
+    final editable = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () async {
+        final state = context.read<AppState>();
+        final full = state.repo.getNote(note.id);
+        if (full == null || !mounted) return;
+        final changed = await showCoverPicker(context, full);
+        if (!mounted) return;
+        if (changed) {
+          // **必须重新读一遍这篇笔记**。
+          //
+          // 以前这里只调了 `refreshListOnly()` —— 它刷新的是列表里的
+          // 那些 Note 对象，而详情页手里的 `_note` 还是打开时读的那一份，
+          // 比例、放大、取景全都留在旧值上。表现就是"保存成功了，
+          // 可头图一点没变"，用户会以为保存没生效。
+          state.refreshListOnly();
+          setState(_load);
+        }
+      },
+      // **Hero 的直接子节点必须是头图本身。**
+      //
+      // Hero 飞行时会把目的地的子树塞进一个**紧约束**的盒子里。以前
+      // Stack 整个在 Hero 里，而 Stack 给非定位子节点的是**松约束**，
+      // 里面的 AspectRatio 就按宽度把高度算成 宽/比例 —— 起飞第一帧那
+      // 66×66 的方框里，头图被压成 66×41 再一路长回去，用户看到的就是
+      // "点开瞬间跳一下"。角标挪到 Hero 外面以后，紧约束直接落到
+      // AspectRatio 上，首末帧都和静止时一模一样。
+      child: image,
+    );
+
+    final badge = Positioned(
+      right: 8,
+      bottom: 8,
+      child: IgnorePointer(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.38),
+            borderRadius: BorderRadius.circular(7),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.crop_rounded, size: 12, color: Colors.white),
+              const SizedBox(width: 4),
+              Text(
+                '调整',
+                style: AppText.caption2.copyWith(color: Colors.white),
+              ),
+            ],
+          ),
         ),
       ),
     );
+
     // 嵌入桌面栏不走 Hero（列表和正文同处一个路由）；独立详情页保留
     // 原来的 Hero，让移动端卡片展开和桌面独立页的封面过渡保持连续。
     if (!widget.embedded) {
-      return Hero(
-        key: widget.coverKey,
-        tag: 'note-cover-$noteId',
-        child: image,
+      return Stack(
+        children: [
+          Hero(
+            key: widget.coverKey,
+            tag: 'note-cover-${note.id}',
+            child: editable,
+          ),
+          badge,
+        ],
       );
     }
-    return image;
+    return Stack(children: [editable, badge]);
   }
 }

@@ -39,6 +39,7 @@ class LocalImage extends StatelessWidget {
     super.key,
     required this.path,
     this.fit = BoxFit.cover,
+    this.alignment = Alignment.center,
     this.fallbackColor,
     this.emptyBuilder,
     this.errorBuilder,
@@ -54,6 +55,12 @@ class LocalImage extends StatelessWidget {
   final String path;
 
   final BoxFit fit;
+
+  /// 图片在框里的对齐方式。
+  ///
+  /// `BoxFit.cover` 时它决定**裁掉的是哪一边** —— 头图取景（cover_focus_x/y）
+  /// 就是靠它实现的。
+  final AlignmentGeometry alignment;
 
   /// 文件不存在时的兜底底色（默认透明）。
   ///
@@ -100,6 +107,7 @@ class LocalImage extends StatelessWidget {
       return Image.file(
         file,
         fit: fit,
+        alignment: alignment,
         gaplessPlayback: gaplessPlayback,
         filterQuality: filterQuality,
         frameBuilder: _frame,
@@ -134,6 +142,7 @@ class LocalImage extends StatelessWidget {
   Widget _image(File file, int? cacheWidth, BuildContext context) => Image.file(
     file,
     fit: fit,
+    alignment: alignment,
     cacheWidth: cacheWidth,
     gaplessPlayback: gaplessPlayback,
     filterQuality: filterQuality,

@@ -21,7 +21,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 生成的 versionName / build，所以改版本只改这一行。
 # 格式 `<name>+<build>`：Android 的 versionName / versionCode、Windows 的
 # 文件版本都从它派生。发布前改这里就行：未发布期间一直是 1.0.0。
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.13.3
@@ -76,6 +76,10 @@ dependencies:
   # 直接用 SetFileTime 设置 Windows 上导出的"创建时间"（Dart 没有对应 API）。
   # 只用到 toNativeUtf16 / calloc，体量很小。
   ffi: ^2.1.4
+  pdf: ^3.13.1
+  # 注意：不要加 printing。它是带原生代码的插件，会让 Windows 构建要求
+  # 开发者模式（symlink 支持），而我们只用 pdf 的纯 Dart 渲染 ——
+  # 生成字节后交给 file_picker 的 saveFile 落盘，用不上系统打印对话框。
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -105,6 +109,12 @@ flutter:
   assets:
     - assets/egg/
     - assets/branding/
+    # 导出 PDF 时内嵌的中文字体。PDF 不像网页那样能"借用系统字体"——
+    # 用到的字形必须嵌进文件里，否则换台机器打开就是一排方框。
+    # 这份是 Noto Sans SC 的 GBK 子集（SIL OFL 授权，见同目录 OFL.txt）：
+    # 只保留 GBK 能表示的 21791 个字 + 常用西文/标点，7.4 MB；完整字重
+    # 有 17.7 MB，且是可变字体，pdf 包不认 fvar。
+    - assets/fonts/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

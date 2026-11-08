@@ -63,16 +63,59 @@ class MediaImporter {
     final others = <String>[];
     for (final path in paths) {
       if (path.isEmpty) continue;
-      // 文件夹在笔记里放不了，归到"其它"
+      // 文件夹本身不能放进笔记，但**要递归找它里面的图片视频**。
+      //
+      // 手机上从文件管理器/相册拖一个文件夹进来是很自然的操作（尤其是
+      // 「Screenshots」这种整目录），以前一律归到 others、只提示"只能拖
+      // 图片或视频"，等于白拖。现在按扩展名递归收一层。
       if (FileSystemEntity.typeSync(path) == FileSystemEntityType.directory) {
-        others.add(path);
-      } else if (isMediaPath(path)) {
+        final found = mediaInDirectory(path);
+        if (found.isEmpty) {
+          others.add(path);
+        } else {
+          media.addAll(found);
+        }
+        continue;
+      }
+      if (isMediaPath(path)) {
         media.add(path);
       } else {
         others.add(path);
       }
     }
     return (media: media, others: others);
+  }
+
+  /// 递归收集一个目录下的图片与视频（最多 8 层、500 个文件）。
+  ///
+  /// 上限跟原生侧 `copyTree` 保持一致：拖整个相册进来会拷出几个 G 塞满缓存，
+  /// 而用户通常只想导几张图。超限不报错，能收多少算多少。
+  static List<String> mediaInDirectory(
+    String root, {
+    int maxDepth = 8,
+    int maxFiles = 500,
+  }) {
+    final out = <String>[];
+    void walk(Directory dir, int depth) {
+      if (depth > maxDepth || out.length >= maxFiles) return;
+      late final List<FileSystemEntity> entries;
+      try {
+        entries = dir.listSync(followLinks: false);
+      } catch (_) {
+        return;
+      }
+      for (final e in entries) {
+        if (out.length >= maxFiles) return;
+        if (e is Directory) {
+          walk(e, depth + 1);
+        } else if (e is File && isMediaPath(e.path)) {
+          out.add(e.path);
+        }
+      }
+    }
+
+    walk(Directory(root), 0);
+    return out;
   }
 
   /// 把 [source] 复制进 `<imageRoot>/<noteId>/`，返回**相对 imageRoot 的路径**。

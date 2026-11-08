@@ -811,6 +811,20 @@ class _NotesPageState extends State<NotesPage> {
     final columns = context.read<AppState>().gridColumns.clamp(1, 6);
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      // **列表内容一变，就把整个瀑布流当成新的一堵墙重建。**
+      //
+      // `SliverMasonryGrid` 把每一格落在哪一列记在 parentData 里，
+      // 而 sliver 的子节点是**按下标**复用的 —— 编辑完一篇笔记，它因为
+      // `updated_at` 变了跳到最前面，后面每个下标都换成了另一篇笔记，
+      // 但"第 i 个孩子在第几列、上次多高"还是旧的。包库不会因为
+      // 顺序变了就从头重排，于是左列越堆越高、右列顶上留出一大片空。
+      //
+      // 换 key 会新建 element，从第一格重新贪心排一遍。代价是整堵墙
+      // 重画一次 —— 只在笔记集合本身变化时发生（增删、改名、编辑后
+      // 排序变动），滚动时不会触发。
+      key: ValueKey<String>(
+        'masonry-${notes.map((n) => n.id).join(',')}',
+      ),
       sliver: SliverMasonryGrid.count(
         crossAxisCount: columns,
         mainAxisSpacing: AppMetrics.rowGap,

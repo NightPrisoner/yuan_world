@@ -69,7 +69,7 @@ class MdBlockSyntax {
   // 缩进约定：标题 / 分隔线 / 引用允许 0~3 个前导空格（CommonMark 也这样）；
   // 4 个空格在本 App 里不是"缩进代码块"，就老老实实当普通段落，
   // 免得"看着是分隔线、读出来是文字"。
-  static final RegExp _image = RegExp(r'^\s*!\[[^\]]*\]\(([^)]+)\)\s*$');
+  static final RegExp _image = RegExp(r'^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$');
   static final RegExp _heading = RegExp(r'^(\s{0,3})(#{1,6})\s+(.*)$');
   static final RegExp _divider = RegExp(r'^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$');
   static final RegExp _quote = RegExp(r'^(\s{0,3}>\s?)(.*)$');
@@ -82,8 +82,19 @@ class MdBlockSyntax {
   static String? imageLine(String line) {
     final m = _image.firstMatch(line);
     if (m == null) return null;
-    final path = m.group(1)!.trim();
+    final path = m.group(2)!.trim();
     return path.isEmpty ? null : path;
+  }
+
+  /// 整行图片的图注（`![]` 中括号里那一段）。没有就是空串。
+  ///
+  /// 图注写在 alt 里而不是另起一行：它是 Markdown 的标准位置，好处是
+  /// **和媒体在同一行** —— 上下移动、复制、导出天然一起走，不用再维护
+  /// 一份"谁配谁"的关系，也就不会出现"图挪了、注释留在原地"。
+  static String imageCaption(String line) {
+    final m = _image.firstMatch(line);
+    if (m == null) return '';
+    return m.group(1)!.trim();
   }
 
   static MdHeading? headingLine(String line) {

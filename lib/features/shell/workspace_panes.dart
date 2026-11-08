@@ -218,6 +218,7 @@ extension _WsPanes on _DesktopWorkspaceState {
         icon: Icons.article_rounded,
         child: _NoteListRow(
           note: notes[i],
+          imageRoot: context.read<AppState>().db.imageRoot.path,
           // 显示的时间跟着当前排序字段走
           displayTime: context.read<AppState>().filter.sort.field.timeOf(
             notes[i],
@@ -302,6 +303,8 @@ extension _WsPanes on _DesktopWorkspaceState {
           key: ValueKey<String>('edit-$id'),
           noteId: id,
           embedded: true,
+          // 阅读页点编辑时把"读到第几行"传进来；新建/切换笔记时是 null
+          initialLine: _editingStartLine,
           fullscreen: fullscreen,
           // 「占满页面」：只收起三栏，**不碰窗口**
           // 走 _setEditorFullscreen 而不是直接翻 bool：布局要跟着
@@ -335,6 +338,12 @@ extension _WsPanes on _DesktopWorkspaceState {
         },
         windowFullscreen: _windowFullscreen,
         onRequestEdit: () => _setState(() => _editing = true),
+        // 阅读页把"当前读到第几行"交出来，编辑器就从那儿接着显示。
+        // 只走 onRequestEdit 的话行号会丢，长文里点编辑会跳回开头。
+        onEditAtLine: (line) => _setState(() {
+          _editingStartLine = line;
+          _editing = true;
+        }),
         onClose: () {
           _exitAllFullscreen();
           _closeDetail();

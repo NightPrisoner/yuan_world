@@ -45,6 +45,7 @@ class MediaCard extends StatefulWidget {
     required this.path,
     required this.relPath,
     this.index,
+    this.external = false,
   });
 
   /// 绝对路径。
@@ -55,6 +56,12 @@ class MediaCard extends StatefulWidget {
 
   /// 在正文里的序号，可空。
   final int? index;
+
+  /// 这条是不是「只引用原文件」—— 文件不在软件目录里，是用户自己的。
+  ///
+  /// 只影响一句文案：外部文件丢了不能说"文件已删除"（软件没删它，
+  /// 也可能是移动了、U 盘拔了），只能如实说"这个位置现在没有文件"。
+  final bool external;
 
   /// 首帧图的名字：`x.mp4` → `x_first_frame.png`。
   ///
@@ -221,8 +228,12 @@ class _MediaCardState extends State<MediaCard>
       return _shell(
         c,
         icon: Icons.videocam_off_outlined,
-        title: '视频找不到了',
-        subtitle: '${widget.relPath}（文件已删除）',
+        title: widget.external ? '原文件找不到了' : '视频找不到了',
+        // 外部引用是用户自己的文件：软件没复制过它，也不能替他判断"谁删的"，
+        // 只能说清楚"这个路径下现在没有东西"。
+        subtitle: widget.external
+            ? '${widget.relPath}（这个位置现在没有文件）'
+            : '${widget.relPath}（文件已删除）',
         onTap: null,
       );
     }

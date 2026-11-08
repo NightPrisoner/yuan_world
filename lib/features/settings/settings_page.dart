@@ -67,7 +67,17 @@ String _fullBackupHint(AppState state) {
   }
   if (files.isEmpty) return '还没有自动完整备份，本周内会做第一份。';
   final last = state.lastFullBackupAt ?? files.first.statSync().modified;
-  final mb = files.fold<int>(0, (s, f) => s + f.lengthSync()) / 1024 / 1024;
+  // 备份目录可能是用户自己挑的地方，文件随时可能被挪走/删掉；
+  // 这里要算总占用，读不到就当 0，别让整个设置页的 build 抛异常。
+  int sizeOf(File f) {
+    try {
+      return f.lengthSync();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  final mb = files.fold<int>(0, (s, f) => s + sizeOf(f)) / 1024 / 1024;
   return '最近一次自动完整备份：${_stamp(last)}，共 ${files.length} 份，'
       '占 ${mb.toStringAsFixed(0)} MB。';
 }
@@ -1269,7 +1279,7 @@ class SettingsPage extends StatelessWidget {
                 _NavRow(
                   icon: Icons.download_rounded,
                   iconColor: c.functionalPalette[0],
-                  label: '导入 .docx 文集',
+                  label: '导入文集',
                   subtitle: '支持整个文件夹批量导入',
                   onTap: () => Navigator.of(context).push(
                     ApplePageRoute<void>(
@@ -1277,6 +1287,27 @@ class SettingsPage extends StatelessWidget {
                       fullscreenDialog: true,
                     ),
                   ),
+                ),
+                _RowDivider(),
+                // 插入图片/视频时是"复制进来"还是"只记路径"。
+                //
+                // 默认复制 —— 这是安全的那个方向：整个 data 目录拷走就是
+                // 完整备份，素材被挪走也不会断。但素材库本来整理得好好的
+                // 人（几百兆的视频、一整柜参考图）不想再存一份副本，
+                // 改一张也不用重新插一次。
+                //
+                // 开关做成全局而不是每篇一个：同一个素材库被十几篇引用，
+                // 逐篇设一次没人受得了。
+                _SwitchRow(
+                  icon: Icons.link_rounded,
+                  iconColor: c.functionalPalette[2],
+                  label: '图片视频只引用原文件',
+                  subtitle: '插入时不复制进软件，只记下路径。'
+                      '好处是不占第二份空间、改原文件立即生效；'
+                      '代价是原文件被移动或删除后，笔记里只剩一行提示。'
+                      '备份和导出仍会把它们一起打包。',
+                  value: state.linkMediaInPlace,
+                  onChanged: state.setLinkMediaInPlace,
                 ),
               ],
             ),

@@ -180,6 +180,7 @@ class CardExpandPageRoute<T> extends PageRouteBuilder<T> {
   final bool verticalOnly;
   final Rect? Function()? sourceRectBuilder;
   final Rect? Function()? sourceCoverRectBuilder;
+
   final GlobalKey? coverKey;
 }
 
@@ -327,10 +328,38 @@ class _CardExpandTransitionState extends State<_CardExpandTransition> {
               rect = rect.expandToInclude(flight).intersect(fullRect);
             }
             final radius = (16 * (1 - progress)).clamp(0.0, 16.0);
+            // 页面在裁剪面里淡入 —— 这就是"叠化"。
+            //
+            // 裁剪面在 progress = 0 时正好等于卡片大小，里面装的却是整页
+            // 内容。不淡入的话，展开的第一帧就是"卡片那一小片突然变成
+            // 笔记正文，然后再扩散开"；返回时反过来，整页被压进卡片那一
+            // 小片，最后一帧又换回卡片。两头都在同一片区域换了内容，看着
+            // 就是跳变。
+            //
+            // 淡入期间裁剪面基本透明，露出来的是下层还在绘制的列表页
+            // （路由动画未完成时 overlay 的 opaque 是 false）—— 那张卡片
+            // 本来就是真的、已经在屏幕上、不用重新解码。于是观感成了
+            // "卡片原地不动，正文在同一片区域慢慢显影出来"，两头都对得上。
+            //
+            // 别再叠一层"卡片副本"来淡出：副本要重新解码封面，第一帧是
+            // 空的，反而会在开头闪一下（试过，更糟）。
+            const double fadeEnd = 0.5;
+            final fade = (progress / fadeEnd).clamp(0.0, 1.0);
+            // **始终**包着这层 Opacity，哪怕已经淡到 1.0 也不拆。
+            //
+            // 拆掉会让整棵页面子树被重新挂载（Opacity 这个 Element 消失，
+            // 下面的 child 跟着 deactivate → 重建），图片于是重新解码：
+            // 第一次点开时正好还没缓存好，就"闪一下"；后面缓存热了才看不出。
+            // 保持结构稳定，Opacity 到 1.0 时 RenderOpacity 会直接跳过图层，
+            // 开销可以忽略。
             return ClipPath(
               key: const ValueKey('note-expand-surface'),
               clipper: _CardExpandClipper(rect, radius),
-              child: page,
+              child: Opacity(
+                key: const ValueKey('note-expand-fade'),
+                opacity: fade,
+                child: page,
+              ),
             );
           },
         );

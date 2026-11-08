@@ -903,23 +903,27 @@ class _NoteGridCardState extends State<_NoteGridCard> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (hasCover)
-                      AspectRatio(
-                        aspectRatio: 16 / 11,
-                        child: ClipRect(
-                          // 封面缓慢放大（比整卡的抬起慢一点）：
-                          // 像镜头轻轻推近，是"活气"最省力的一招
-                          child: AnimatedScale(
-                            scale: _hover ? 1.04 : 1.0,
-                            duration: AppMotion.respecting(context, AppMotion.normal),
-                            curve: AppMotion.enter,
-                            child: LocalImage(
-                              path: p.join(
-                                widget.imageRoot,
-                                cover,
-                              ),
-                              fit: BoxFit.cover,
-                              fallbackColor: c.fill,
-                            ),
+                      ClipRect(
+                        // 封面缓慢放大（比整卡的抬起慢一点）：
+                        // 像镜头轻轻推近，是"活气"最省力的一招
+                        child: AnimatedScale(
+                          scale: _hover ? 1.04 : 1.0,
+                          duration: AppMotion.respecting(
+                            context,
+                            AppMotion.normal,
+                          ),
+                          curve: AppMotion.enter,
+                          child: CoverFrame(
+                            path: p.join(widget.imageRoot, cover),
+                            // 卡片沿用笔记自己的头图比例：用户把一篇设成
+                            // 竖构图，墙上那张卡就该是竖的 —— 否则"设置"
+                            // 只在阅读页生效，列表里还是老样子，等于没设。
+                            ratio: n.coverRatio,
+                            zoom: n.coverZoom,
+                            focusX: n.coverFocusX,
+                            focusY: n.coverFocusY,
+                            fallbackColor: c.fill,
+                            animate: false,
                           ),
                         ),
                       ),
@@ -1072,6 +1076,7 @@ class _FadePopInState extends State<_FadePopIn>
 class _NoteListRow extends StatefulWidget {
   const _NoteListRow({
     required this.note,
+    required this.imageRoot,
     required this.selected,
     required this.onTap,
     required this.onActions,
@@ -1079,6 +1084,10 @@ class _NoteListRow extends StatefulWidget {
   });
 
   final Note note;
+
+  /// 媒体根目录，用来拼头图的绝对路径。
+  final String imageRoot;
+
   final bool selected;
   final VoidCallback onTap;
   final void Function(AppMenuAnchor anchor) onActions;
@@ -1097,6 +1106,9 @@ class _NoteListRowState extends State<_NoteListRow> {
   Widget build(BuildContext context) {
     final c = context.colors;
     final n = widget.note;
+    // `displayCover`：既排掉「明确不要头图」的 `__none__`，也排掉文件
+    // 已经不在的路径 —— 否则行尾会留一块空白的灰方块。
+    final cover = displayCover(n.coverImage, widget.imageRoot);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -1254,6 +1266,24 @@ class _NoteListRowState extends State<_NoteListRow> {
                     ],
                   ),
                 ),
+                // 列表行右侧也要有头图。
+                //
+                // 桌面三栏的中间栏默认是**列表**，以前这里一张图都不画 ——
+                // 用户在瀑布流里调好头图，切回列表就什么都看不到。用的是
+                // 同一份取景参数（比例/放大/位置），所以两种视图看到的是
+                // 同一张画。
+                if (cover != null) ...[
+                  const SizedBox(width: 10),
+                  NoteCoverThumb(
+                    path: ExternalMedia.resolve(widget.imageRoot, cover),
+                    ratio: n.coverRatio,
+                    zoom: n.coverZoom,
+                    focusX: n.coverFocusX,
+                    focusY: n.coverFocusY,
+                    size: 44,
+                    color: c.fill,
+                  ),
+                ],
               ],
             ),
           ),

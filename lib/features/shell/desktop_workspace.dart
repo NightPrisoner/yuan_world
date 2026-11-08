@@ -36,13 +36,14 @@ import '../../core/motion/apple_page_route.dart';
 import '../../core/shortcuts/app_shortcuts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_menu.dart';
-import '../../core/widgets/local_image.dart';
+import '../../data/media/external_media.dart';
 import '../../data/models.dart';
 import '../../data/repositories/note_repository.dart';
 import '../collections/collection_sheets.dart';
 import '../importer/import_page.dart';
 import '../notes/editor/note_editor_page.dart';
 import '../notes/note_detail_page.dart';
+import '../notes/widgets/cover_frame.dart';
 import '../notes/widgets/note_actions.dart';
 import '../notes/widgets/note_card.dart' show formatRelative;
 import '../privacy/privacy_transition.dart';
@@ -89,6 +90,12 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
   int _sectionDir = 1;
   int? _selectedNoteId;
   bool _editing = false;
+
+  /// 进编辑器时该停在第几行（null = 从头开始）。
+  ///
+  /// 阅读面板算好当前读到哪一行交给这里，编辑器首次构建时用它定位。
+  /// 换笔记、新建笔记都要清掉，否则上一篇的行号会被套到下一篇上。
+  int? _editingStartLine;
 
   /// 是否处于"占满页面"（三栏收起，阅读/编辑共用）。
   bool _editorFullscreen = false;
@@ -260,6 +267,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
       setState(() {
         _selectedNoteId = null;
         _editing = false;
+        _editingStartLine = null;
         _detailMounted = false;
       });
     }
@@ -422,6 +430,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
     setState(() {
       _selectedNoteId = id;
       _editing = false;
+      _editingStartLine = null;
       _editorFullscreen = false;
       _detailOpen = true;
       _detailMounted = true;
@@ -527,6 +536,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
       _section = s;
       if (s != _Section.notes) {
         _editing = false;
+        _editingStartLine = null;
         _exitAllFullscreen();
       }
     });
@@ -563,6 +573,7 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
           setState(() {
             _selectedNoteId = null;
             _editing = false;
+            _editingStartLine = null;
             _editorFullscreen = false;
           });
           _syncFullscreenAnim();
@@ -957,6 +968,8 @@ class _DesktopWorkspaceState extends State<DesktopWorkspace>
       _section = _Section.notes;
       _selectedNoteId = id;
       _editing = true;
+      // 新建的笔记是空的，没有"上次读到第几行"可接
+      _editingStartLine = null;
       _editorFullscreen = false;
       // 新建必然要把正文栏拉出来，否则用户看不到自己刚建的东西
       _detailOpen = true;

@@ -87,14 +87,6 @@ void main() {
       expect(doc, isNot(contains('<w:ind w:left="240"/>')));
     });
 
-    test('空格数不规则的缩进也能分层（Tab 算两级）', () {
-      final html = NoteExporter.render(
-        noteOf('- 甲\n\t- 乙'),
-        ExportFormat.html,
-      );
-      // Tab → 2 空格宽度 → 1 级；HTML 里靠嵌套 ul 表达
-      expect(html, contains('<ul>'));
-    });
   });
 
   group('docx 行内格式', () {
@@ -132,26 +124,7 @@ void main() {
     });
   });
 
-  group('HTML 与纯文本也保持一致', () {
-    test('列表是 ul/ol，连续的项合进同一个列表', () {
-      final html = NoteExporter.render(
-        noteOf('- 甲\n- 乙\n\n中间一段\n\n1. 一\n2. 二'),
-        ExportFormat.html,
-      );
-      expect(html, contains('<ul>'));
-      expect(html, contains('<li>甲</li>'));
-      expect(html, contains('<li>乙</li>'));
-      expect(html, contains('</ul>'));
-      expect(html, contains('<ol>'));
-      expect(html, contains('<li>一</li>'));
-      expect(html.contains('<li>· '), isFalse);
-    });
-
-    test('删除线是 del', () {
-      final html = NoteExporter.render(noteOf('~~不要了~~'), ExportFormat.html);
-      expect(html, contains('<del>不要了</del>'));
-    });
-
+  group('纯文本', () {
     test('纯文本保留有序列表的序号', () {
       final txt = NoteExporter.render(
         noteOf('1. 第一步\n2. 第二步\n3. 第三步'),

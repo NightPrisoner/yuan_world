@@ -665,8 +665,14 @@ void main() {
       expect(find.byTooltip('导出为压缩包'), findsOneWidget);
       await tester.tap(find.byTooltip('导出为压缩包'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('.docx'), findsWidgets,
+      // Markdown / 纯文本 / Word 三种都保留 —— 都能维持目录结构。
+      expect(find.textContaining('.md'), findsWidgets,
           reason: '应该弹出格式选择，说明入口是通的（真正保存要走系统文件框）');
+      expect(find.textContaining('.txt'), findsWidgets);
+      expect(find.textContaining('.docx'), findsWidgets,
+          reason: 'Word 要保留：文件结构不能散');
+      expect(find.textContaining('.html'), findsNothing,
+          reason: '文集导出不该有 HTML —— 会散成一堆独立文件');
     });
 
     testWidgets('文集空的时候会说清楚，而不是弹格式菜单', (tester) async {

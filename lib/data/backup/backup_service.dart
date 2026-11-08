@@ -37,6 +37,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../db/app_database.dart';
 import '../db/schema.dart';
+import '../media/external_media.dart';
 
 /// 备份清单，压在包里的 `backup.json`，恢复前先认一下是不是我们的包。
 class BackupManifest {
@@ -126,7 +127,8 @@ class BackupService {
   static const String manifestEntryName = 'backup.json';
 
   /// 数据库在默认位置的快照目录（回默认时用）。
-  Directory get defaultSnapshotDir => Directory(p.join(db.rootDir.path, 'snapshots'));
+  Directory get defaultSnapshotDir =>
+      Directory(p.join(db.rootDir.path, 'snapshots'));
 
   /// 数据库在默认位置的完整备份目录。
   Directory get defaultFullBackupDir =>
@@ -136,7 +138,8 @@ class BackupService {
   Directory get snapshotDir => _ensure(snapshotDirPath, defaultSnapshotDir);
 
   /// 完整备份目录：用户指定了就写那儿，否则 `<root>/backups/`。
-  Directory get fullBackupDir => _ensure(fullBackupDirPath, defaultFullBackupDir);
+  Directory get fullBackupDir =>
+      _ensure(fullBackupDirPath, defaultFullBackupDir);
 
   /// 指定的目录优先；没指定（或指定了个空串）就用默认的。
   ///
@@ -174,6 +177,48 @@ class BackupService {
 
   int get _schemaVersion =>
       (db.db.select('PRAGMA user_version').first.columnAt(0) as int?) ?? 0;
+
+  /// 正文里引用到的外部文件（包内路径 → 磁盘文件）。
+  ///
+  /// 设置里开了「图片视频只引用原文件」之后，这些文件压根不在
+  /// `data/images/` 里，光备份数据库和 images 会把它们漏掉 ——
+  /// 恢复完打开笔记只剩一行"原文件找不到了"，而备份的承诺正是
+  /// "换台机器也还在"。
+  ///
+  /// 包内统一放 `external/<序号>-<原名>`：原路径可能是
+  /// `C:\素材\a.png`，压缩包里不能有盘符，而且两台机器上的
+  /// `a.png` 很可能不是同一张。
+  Map<String, File> _externalFiles() {
+    final out = <String, File>{};
+    try {
+      final rows = db.db.select(
+        'SELECT content FROM notes WHERE content LIKE ?',
+        <Object?>['%![%'],
+      );
+      var seq = 0;
+      for (final row in rows) {
+        final content = (row['content'] as String?) ?? '';
+        for (final ref in ExternalMedia.refsIn(content)) {
+          final file = File(ExternalMedia.localPath(ref));
+          if (!file.existsSync()) continue;
+          seq++;
+          final base = p.basename(file.path);
+          final ext = p.extension(base);
+          final stem = p.basenameWithoutExtension(base);
+          var name = 'external/$seq-$stem$ext';
+          var n = 2;
+          while (out.containsKey(name)) {
+            name = 'external/$seq-$stem-$n$ext';
+            n++;
+          }
+          out[name] = file;
+        }
+      }
+    } catch (_) {
+      // 读不出来就当没有外部文件 —— 备份主体（数据库 + images）不能因此失败
+    }
+    return out;
+  }
 
   /// 全量备份：数据库 + 全部媒体，打成一个 zip，**返回整包字节**。
   ///
@@ -256,6 +301,17 @@ class BackupService {
           media[rel] = f;
         }
       }
+      // 正文里引用到的**外部文件**（设置里开了「只引用原文件」之后，
+      // 那些图/视频根本不在 data/images 里）。不打包的话，恢复完打开笔记
+      // 会发现一片"原文件找不到了"—— 而备份的承诺正是"换台机器也在"。
+      //
+      // 包内目录固定 `external/`，与数据目录里的任何东西都不重名；
+      // 恢复时按同一条规则还原到新数据目录下，正文里的绝对路径改写不了
+      // （那是用户自己选的路径），但至少文件本身没丢。
+      for (final entry in _externalFiles().entries) {
+        if (p.equals(entry.value.path, target.path)) continue;
+        media[entry.key] = entry.value;
+      }
 
       final manifestJson = const JsonEncoder.withIndent('  ').convert(
         BackupManifest(
@@ -304,9 +360,7 @@ class BackupService {
           }
         }
         checkCancelled();
-        encoder.addArchiveFile(
-          ArchiveFile.string('backup.json', manifestJson),
-        );
+        encoder.addArchiveFile(ArchiveFile.string('backup.json', manifestJson));
         bump();
       } finally {
         encoder.closeSync();
@@ -397,8 +451,7 @@ class BackupService {
     return files;
   }
 
-  File? lastFullBackup() =>
-      fullBackups().isEmpty ? null : fullBackups().first;
+  File? lastFullBackup() => fullBackups().isEmpty ? null : fullBackups().first;
 
   /// 是否需要再做一次完整备份（默认一周一次）。
   bool fullBackupDue({Duration every = const Duration(days: 7)}) {
@@ -469,6 +522,10 @@ class BackupService {
     try {
       final File incoming;
       List<File> media = const <File>[];
+      // 备份里带出来的外部文件（`external/` 目录）。恢复时无法写回
+      // 用户原来那个绝对路径（换台机器就没了），统一落到新数据目录的
+      // `external/` 下 —— 文件不丢，用户按原名还能找回来。
+      List<File> externalFiles = const <File>[];
       if (backup.path.toLowerCase().endsWith('.zip')) {
         final archive = ZipDecoder().decodeBytes(backup.readAsBytesSync());
         File? dbEntry;
@@ -492,6 +549,17 @@ class BackupService {
         if (mediaDir.existsSync()) {
           media = mediaDir.listSync(recursive: true).whereType<File>().toList();
         }
+        // 正文引用的外部文件（`external/` 目录）。它们原本在用户的
+        // 某个绝对路径下，恢复时无法写回原处（那可能是另一台机器），
+        // 统一落到 `<数据目录>/external/` 下 —— 文件不丢，用户按
+        // 包里的原名还能找回来。
+        final externalDir = Directory(p.join(tmp.path, 'external'));
+        if (externalDir.existsSync()) {
+          externalFiles = externalDir
+              .listSync(recursive: true)
+              .whereType<File>()
+              .toList();
+        }
       } else {
         incoming = File(p.join(tmp.path, 'incoming.db'))
           ..writeAsBytesSync(backup.readAsBytesSync());
@@ -514,7 +582,8 @@ class BackupService {
         staged.db.select(
           'SELECT title, content, excerpt, collection_id, '
           'char_count, word_count, image_count, is_hidden, is_archived, '
-          'is_pinned, is_favorite, updated_at, created_at, cover_image '
+          'is_pinned, is_favorite, updated_at, created_at, cover_image, '
+          'cover_ratio, cover_zoom, cover_focus_x, cover_focus_y, indent_first_line '
           'FROM notes LIMIT 0',
         );
         staged.db.select(
@@ -572,6 +641,20 @@ class BackupService {
           changedMedia.add(target.path);
           f.copySync(target.path);
           copied++;
+        }
+        // 外部文件落到 `<数据目录>/external/`：正文里的绝对路径改写不了
+        // （那是用户自己选的路径），但至少文件本身跟着数据走，
+        // 不会被恢复过程丢掉。
+        if (externalFiles.isNotEmpty) {
+          final root = Directory(p.join(db.rootDir.path, 'external'));
+          root.createSync(recursive: true);
+          for (final f in externalFiles) {
+            final rel = p.relative(f.path, from: p.join(tmp.path, 'external'));
+            final target = File(p.join(root.path, rel));
+            target.parent.createSync(recursive: true);
+            f.copySync(target.path);
+            copied++;
+          }
         }
       } catch (_) {
         db.closeForRestore();

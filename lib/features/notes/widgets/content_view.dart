@@ -18,13 +18,16 @@ import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/motion/apple_page_route.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/paragraph_indent.dart';
 import '../../../core/utils/wiki_links.dart';
 import '../../../core/widgets/local_image.dart';
+import '../../../data/media/external_media.dart';
 import '../../../data/media/media_importer.dart';
 import 'media_card.dart';
 import '../../../core/utils/text_stats.dart';
 import '../../../data/repositories/note_repository.dart';
 import '../note_detail_page.dart';
+
 
 class ContentView extends StatelessWidget {
   const ContentView({
@@ -56,7 +59,7 @@ class ContentView extends StatelessWidget {
       for (final b in blocks)
         if (b.type == ContentBlockType.image &&
             !MediaImporter.isVideoPath(b.text.trim()))
-          p.join(imageRoot, b.text.trim()),
+          ExternalMedia.resolve(imageRoot, b.text.trim()),
     ];
 
     return SliverPadding(
@@ -106,7 +109,7 @@ class ContentViewBox extends StatelessWidget {
       for (final b in blocks)
         if (b.type == ContentBlockType.image &&
             !MediaImporter.isVideoPath(b.text.trim()))
-          p.join(imageRoot, b.text.trim()),
+          ExternalMedia.resolve(imageRoot, b.text.trim()),
     ];
     return Padding(
       padding: padding,
@@ -169,9 +172,10 @@ class ContentBlockView extends StatelessWidget {
         );
 
       case ContentBlockType.paragraph:
+        final paraStyle = AppText.reading.copyWith(color: c.label);
         return Padding(
           padding: const EdgeInsets.only(bottom: 14),
-          child: RichParagraph(text: block.text),
+          child: RichParagraph(text: block.text, base: paraStyle),
         );
 
       case ContentBlockType.quote:
@@ -270,40 +274,124 @@ class ContentBlockView extends StatelessWidget {
         );
 
       case ContentBlockType.image:
-        final full = p.join(imageRoot, block.text);
+        // 绝对路径 = 引用软件之外的原文件（设置里的「引用原文件」开关）。
+        // `p.join` 遇到绝对路径本来就会放行，所以显示、播放都不用另写一套，
+        // 只有"文件不见了"这件事需要单独说清楚 —— 内部文件丢了是异常，
+        // 外部文件被挪走是常态，用户得知道该去哪找。
+        final external = ExternalMedia.isExternal(block.text);
+        final full = external
+            ? ExternalMedia.localPath(block.text)
+            : p.join(imageRoot, block.text);
         final file = File(full);
         // 视频在正文里也写成 `![](路径)`，但按扩展名走播放卡片 ——
         // 丢给 Image.file 只会得到一个加载失败的灰块
         if (MediaImporter.isVideoPath(block.text)) {
           // key 见编辑器那边的说明：列表重建时把播放器保住，
           // 否则视频会被销毁重建、回到 00:00 暂停
-          return MediaCard(
-            key: ValueKey<String>('media-${block.text}'),
-            path: full,
-            relPath: block.text,
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (external) _externalHint(c, block.text),
+              MediaCard(
+                key: ValueKey<String>('media-${block.text}'),
+                path: full,
+                relPath: block.text,
+                // 外部文件丢了不能说"文件已删除" —— 软件没删它
+                external: external,
+              ),
+              if (block.caption.isNotEmpty) _caption(c, block.caption),
+            ],
           );
         }
         return Padding(
           padding: const EdgeInsets.only(bottom: 18),
-          child: Pressable(
-            scale: 0.985,
-            onTap: () => onImageTap(full),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
-              child: file.existsSync()
-                  ? LocalImage(
-                      path: full,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_) => _brokenImage(c),
-                    )
-                  : _brokenImage(c),
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (external) _externalHint(c, block.text),
+              Pressable(
+                scale: 0.985,
+                onTap: () => onImageTap(full),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
+                  child: file.existsSync()
+                      ? LocalImage(
+                          path: full,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_) => _brokenImage(c, external: external),
+                        )
+                      : _brokenImage(c, external: external),
+                ),
+              ),
+              // 图注紧贴在图片下面：它是这张图的说明，不能因为
+              // 中间隔了个 Padding 就看起来像下一段的开头
+              if (block.caption.isNotEmpty) _caption(c, block.caption),
+            ],
           ),
         );
     }
   }
 
-  Widget _brokenImage(AppColors c) => Container(
+  /// 外部引用的一行小字：让用户一眼看出"这张图不在软件里"。
+  ///
+  /// 不做成显眼的警告 —— 正常情况下它就是正常工作的一张图，
+  /// 只是路径指向别处。真正需要提示的是文件已经不在了，那种情况
+  /// 文案会变成红一点的「原文件找不到了」。
+  Widget _externalHint(AppColors c, String ref) {
+    final missing = !ExternalMedia.exists(ref);
+    final path = ExternalMedia.localPath(ref);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Icon(
+            missing
+                ? Icons.link_off_rounded
+                : Icons.link_rounded,
+            size: 12,
+            color: missing ? c.functionalPalette[3] : c.quaternaryLabel,
+          ),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Text(
+              missing ? '原文件找不到了：$path' : '外部文件：$path',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.caption2.copyWith(
+                color: missing
+                    ? c.functionalPalette[3]
+                    : c.quaternaryLabel,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 图片画不出来时的占位。
+  ///
+  /// [external] 为真时说明这是用户自己的文件、软件没存过副本，
+  /// 图标也换成"链接断了"—— 让用户想到去原来的位置找，而不是以为
+  /// 软件把图弄丢了。
+  /// 图注：媒体正下方那行说明。
+  ///
+  /// 居中、淡一点、字号比正文小一档 —— 它的身份是"这张图的注释"，
+  /// 不是又一段正文。B 站专栏里那种"图下面一行灰字"就是这个意思。
+  Widget _caption(AppColors c, String text) => Padding(
+    padding: const EdgeInsets.only(top: 8, bottom: 4),
+    child: Text(
+      text,
+      textAlign: TextAlign.center,
+      style: AppText.caption1.copyWith(
+        color: c.tertiaryLabel,
+        height: 1.45,
+      ),
+    ),
+  );
+
+  Widget _brokenImage(AppColors c, {bool external = false}) => Container(
     height: 120,
     decoration: BoxDecoration(
       color: c.fill,
@@ -311,7 +399,9 @@ class ContentBlockView extends StatelessWidget {
     ),
     child: Center(
       child: Icon(
-        Icons.image_not_supported_outlined,
+        external
+            ? Icons.link_off_rounded
+            : Icons.image_not_supported_outlined,
         color: c.tertiaryLabel,
         size: 22,
       ),
@@ -329,11 +419,45 @@ class RichParagraph extends StatelessWidget {
   final String text;
   final TextStyle? base;
 
+  /// 行首那两个全角空格是**段落自己的**属性，不是整篇的属性。
+  ///
+  /// 所以这里不读任何"整篇缩进开关"，只认字符事实：某一行行首带了
+  /// `\u3000\u3000`，这一行就是缩进段 —— 把这两个字符换成等宽的占位盒子
+  /// （`WidgetSpan` 只占第一行，软换行的续行自然顶格，正是 CSS
+  /// `text-indent` 的语义；Flutter 至今没有这个属性，flutter#12255 /
+  /// #161014）。
+  ///
+  /// 以前这里读 `note.indentFirstLine`，结果是"开了就整篇都缩、关了就
+  /// 整篇都不缩"，而用户要的是**光标/选区所在的那几段**缩。
+  static const String kIndentPad = kIndentMark;
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     final style = base ?? AppText.reading.copyWith(color: c.label);
-    final spans = _parseInline(context, text, style, c);
+    if (text.trim().isEmpty) {
+      final spans = _parseInline(context, text, style, c);
+      return Text.rich(TextSpan(children: spans), style: style);
+    }
+    final width = paragraphIndentWidth(context, style);
+    final spans = <InlineSpan>[];
+    final lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      if (i > 0) spans.add(const TextSpan(text: '\n'));
+      final line = lines[i];
+      if (line.trim().isEmpty) continue;
+      final indented = hasIndentMark(line);
+      final bare = indented ? stripIndentMark(line) : line;
+      if (indented) {
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.middle,
+            child: SizedBox(width: width, height: 1),
+          ),
+        );
+      }
+      spans.addAll(_parseInline(context, bare, style, c));
+    }
     // 这里**只画文字**，不套 `SelectionArea`。
     //
     // 之前每个段落各套一个（为了能选中复制，同时让 `Text.rich` 收得到点击）——

@@ -73,6 +73,12 @@ extension NoteMutations on NoteRepository {
     int? wordCount,
     int? imageCount,
     String? coverImage,
+    double? coverRatio,
+    double? coverZoom,
+    double? coverFocusX,
+    double? coverFocusY,
+    bool resetCoverFrame = false,
+    bool? indentFirstLine,
     List<String>? tags,
     bool touch = true,
   }) {
@@ -111,11 +117,7 @@ extension NoteMutations on NoteRepository {
           // 旧正文覆盖回去 —— 自引用双链就这么断了。
           nextContent = rewriteWikiLinks(content, from: oldTitle, to: title);
           if (excerpt != null) {
-            nextExcerpt = rewriteWikiLinks(
-              excerpt,
-              from: oldTitle,
-              to: title,
-            );
+            nextExcerpt = rewriteWikiLinks(excerpt, from: oldTitle, to: title);
           }
           linkRewritten = nextContent != content;
           _cascadeLinkRename(oldTitle, title, skipId: id);
@@ -166,6 +168,34 @@ extension NoteMutations on NoteRepository {
         if (first != null) set('cover_image', first);
       }
     }
+    // 头图怎么显示（比例 / 放大 / 取景位置）。
+    //
+    // 以前这些是写死的 16:10 + 居中裁切，竖构图被裁掉一大半、人像的脸
+    // 被切在边缘都没法救。现在存到行上，四个值各自可空 —— 不传就不动，
+    // 这样只改比例的调用不会顺手把放大倍数重置回 1。
+    if (resetCoverFrame) {
+      set('cover_ratio', Note.defaultCoverRatio);
+      set('cover_zoom', 1.0);
+      set('cover_focus_x', 0.0);
+      set('cover_focus_y', 0.0);
+    } else {
+      // 比例放宽到 0.2…6：9:16 竖屏（0.5625）要留空间，超长条图
+      // 也需要一个"我就想这样"的余地。
+      if (coverRatio != null) set('cover_ratio', coverRatio.clamp(0.2, 6.0));
+      // 缩放 0.1…10：0.1 够把一张长图整张塞进扁框，10 够在一张远景
+      // 截图里放大到认出一张脸。
+      if (coverZoom != null) set('cover_zoom', coverZoom.clamp(0.1, 10.0));
+      if (coverFocusX != null) {
+        set('cover_focus_x', coverFocusX.clamp(-1.0, 1.0));
+      }
+      if (coverFocusY != null) {
+        set('cover_focus_y', coverFocusY.clamp(-1.0, 1.0));
+      }
+    }
+    // 每篇各自的段落首行缩进开关。不传就不动。
+    if (indentFirstLine != null) {
+      set('indent_first_line', indentFirstLine ? 1 : 0);
+    }
     // 导入流程会紧跟着 insertNote 回写一次正文，那次**不能碰修改时间** ——
     // 否则刚按"文件修改时间"设好的值会被冲成"现在"，
     // 「最后编辑」排序又变回一堆挤在同一秒的记录。
@@ -178,14 +208,20 @@ extension NoteMutations on NoteRepository {
     if (touch) logEvent(id, 'edit');
   }
 
-  void setPinned(int id, bool value) =>
-      _d.execute('UPDATE notes SET is_pinned = ? WHERE id = ?', [value ? 1 : 0, id]);
+  void setPinned(int id, bool value) => _d.execute(
+    'UPDATE notes SET is_pinned = ? WHERE id = ?',
+    [value ? 1 : 0, id],
+  );
 
-  void setFavorite(int id, bool value) => _d
-      .execute('UPDATE notes SET is_favorite = ? WHERE id = ?', [value ? 1 : 0, id]);
+  void setFavorite(int id, bool value) => _d.execute(
+    'UPDATE notes SET is_favorite = ? WHERE id = ?',
+    [value ? 1 : 0, id],
+  );
 
-  void setArchived(int id, bool value) => _d
-      .execute('UPDATE notes SET is_archived = ? WHERE id = ?', [value ? 1 : 0, id]);
+  void setArchived(int id, bool value) => _d.execute(
+    'UPDATE notes SET is_archived = ? WHERE id = ?',
+    [value ? 1 : 0, id],
+  );
 
   // ── 批量操作 ────────────────────────────────────────────────────────────
   //

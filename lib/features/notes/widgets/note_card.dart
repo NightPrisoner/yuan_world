@@ -8,13 +8,13 @@
 library;
 
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as p;
 
 import '../../../core/motion/app_motion.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_menu.dart';
-import '../../../core/widgets/local_image.dart';
+import '../../../data/media/external_media.dart';
 import '../../../data/models.dart';
+import 'cover_frame.dart';
 
 class NoteCard extends StatefulWidget {
   const NoteCard({
@@ -27,6 +27,7 @@ class NoteCard extends StatefulWidget {
     this.onMore,
     this.compact = false,
     this.enableHero = true,
+    this.fadeInCover,
     this.displayTime,
   });
   final Note note;
@@ -50,6 +51,14 @@ class NoteCard extends StatefulWidget {
 
   /// 三栏布局里列表和详情在同一个路由，Hero tag 会撞车，所以那边要关掉。
   final bool enableHero;
+
+  /// 封面是否淡入。为空时按 [enableHero] 推：有 Hero 就不淡（飞行本身
+  /// 就是过渡），没有就淡。
+  ///
+  /// 转场期间用来复刻"源卡片"的那份副本必须显式关掉淡入 —— 它是在动画
+  /// 第一帧才第一次构建的，`LocalImage` 的淡入会让封面比卡片其它部分慢
+  /// 半拍显出来，用户看到的就是"点的时候图片闪一下"。
+  final bool? fadeInCover;
 
   @override
   State<NoteCard> createState() => _NoteCardState();
@@ -165,10 +174,15 @@ class _NoteCardState extends State<NoteCard> {
           if (hasCover) ...[
             const SizedBox(width: 12),
             _maybeHero(
-              _Thumb(
-                path: p.join(imageRoot, _cover!),
+              NoteCoverThumb(
+                path: ExternalMedia.resolve(imageRoot, _cover!),
+                ratio: note.coverRatio,
+                zoom: note.coverZoom,
+                focusX: note.coverFocusX,
+                focusY: note.coverFocusY,
                 size: 66,
-                fadeIn: !widget.enableHero,
+                color: c.fill,
+                fadeIn: widget.fadeInCover ?? !widget.enableHero,
               ),
             ),
           ],
@@ -186,10 +200,17 @@ class _NoteCardState extends State<NoteCard> {
       children: [
         if (hasCover)
           _maybeHero(
-            _Cover(
-              path: p.join(imageRoot, _cover!),
-              color: c.fill,
-              fadeIn: !widget.enableHero,
+            CoverFrame(
+              path: ExternalMedia.resolve(imageRoot, _cover!),
+              ratio: note.coverRatio,
+              zoom: note.coverZoom,
+              focusX: note.coverFocusX,
+              focusY: note.coverFocusY,
+              fallbackColor: c.fill,
+              fadeIn: widget.fadeInCover ?? !widget.enableHero,
+              // 卡片在滚动列表里，每帧插值白费电；比例切换本来也只在
+              // 编辑面板里发生，列表下次重建就能直接是新值。
+              animate: false,
             ),
           ),
         Padding(
@@ -334,73 +355,6 @@ class _MoreButton extends StatelessWidget {
           size: 16,
           color: c.secondaryLabel,
         ),
-      ),
-    );
-  }
-}
-
-/// 圆角缩略图，带从模糊到清晰的渐显。
-class _Thumb extends StatelessWidget {
-  const _Thumb({required this.path, required this.size, this.fadeIn = true});
-  final String path;
-  final double size;
-  final bool fadeIn;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: _LocalImage(path: path, color: c.fill, fadeIn: fadeIn),
-      ),
-    );
-  }
-}
-
-/// 卡片顶部封面图。
-class _Cover extends StatelessWidget {
-  const _Cover({required this.path, required this.color, this.fadeIn = true});
-  final String path;
-  final Color color;
-  final bool fadeIn;
-
-  @override
-  Widget build(BuildContext context) {
-    return AspectRatio(
-      aspectRatio: 16 / 10,
-      child: _LocalImage(path: path, color: color, fadeIn: fadeIn),
-    );
-  }
-}
-
-/// 本地图片加载：带淡入 + 失败兜底。
-///
-/// 用 [LocalImage] 而不是裸 `Image.file`：同一个组件在列表里当 96px 的
-/// 缩略图、在卡片里当 300px 的封面，解码尺寸得跟着显示尺寸走 ——
-/// 不然一张 9MB 的图会被整张解码进内存（见 local_image.dart 的说明）。
-class _LocalImage extends StatelessWidget {
-  const _LocalImage({
-    required this.path,
-    required this.color,
-    this.fadeIn = true,
-  });
-  final String path;
-  final Color color;
-  final bool fadeIn;
-
-  @override
-  Widget build(BuildContext context) {
-    return LocalImage(
-      path: path,
-      fit: BoxFit.cover,
-      fallbackColor: color,
-      fadeIn: fadeIn,
-      errorBuilder: (context) => ColoredBox(
-        color: color,
-        child: const Center(child: Icon(Icons.broken_image_outlined, size: 18)),
       ),
     );
   }

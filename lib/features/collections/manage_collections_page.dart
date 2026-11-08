@@ -208,54 +208,90 @@ class _ManageCollectionsPageState extends State<ManageCollectionsPage> {
                 ),
               ),
             )
-          : ReorderableListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
-              physics: const BouncingScrollPhysics(),
-              itemCount: tree.length,
-              // 拖动时保留阴影，但代理本身必须是透明材质：
-              // 默认代理会再画一块不透明 Material，手机上就像卡片外又套了一层白框。
-              proxyDecorator: (child, index, animation) => AnimatedBuilder(
-                animation: animation,
-                builder: (context, child) {
-                  final t = Curves.easeInOut.transform(animation.value);
-                  return Material(
-                    type: MaterialType.transparency,
-                    elevation: 6 * t,
-                    shadowColor: Colors.black54,
-                    child: child,
-                  );
-                },
-                child: child,
-              ),
-              // onReorderItem 的 newIndex 已经处理过"移除后下标偏移"
-              onReorderItem: (oldIndex, newIndex) =>
-                  _reorderVisible(state, tree, oldIndex, newIndex),
-              itemBuilder: (context, i) {
-                final (col, depth) = tree[i];
-                return FolderTreeReveal(
-                  key: ValueKey<int>(col.id),
-                  order: _revealOrder[col.id],
-                  exiting: collapsingRows.contains(col.id),
-                  child: _CollectionTile(
-                    col: col,
-                    index: i,
-                    depth: depth,
-                    hasChildren: list.any((x) => x.parentId == col.id),
-                    collapsed:
-                        _collapsed.contains(col.id) ||
-                        _collapsing.contains(col.id),
-                    onToggleCollapse: () => _toggleFolderCollapsed(col, list),
-                    pinned: col.isPinned,
-                    onEdit: () => showCollectionEditor(context, existing: col),
-                    onMenu: (anchorContext) =>
-                        _showCollectionMenu(anchorContext, state, col),
-                    // 导出整个文集：**手机上唯一的入口**。
-                    // 桌面是在文件夹上点右键，手机没有右键，所以放在这一页。
-                    onExport: () => exportCollection(context, col),
-                    onDelete: () => _confirmDelete(context, state, col),
+          : Column(
+              children: [
+                // 长按拖动这件事在手机上没有任何视觉提示 —— 不给一句话，
+                // 没人会去长按文件夹试试能不能拖。
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.touch_app_outlined,
+                        size: 15,
+                        color: c.quaternaryLabel,
+                      ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          '长按任意一行可以拖动排序；'
+                          '拖到别的文件夹上会变成它的子文件夹',
+                          style: AppText.caption1.copyWith(
+                            color: c.tertiaryLabel,
+                            height: 1.5,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                );
-              },
+                ),
+                Expanded(
+                  child: ReorderableListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: tree.length,
+                    // 拖动时保留阴影，但代理本身必须是透明材质：
+                    // 默认代理会再画一块不透明 Material，手机上就像卡片外又套了一层白框。
+                    proxyDecorator: (child, index, animation) =>
+                        AnimatedBuilder(
+                          animation: animation,
+                          builder: (context, child) {
+                            final t = Curves.easeInOut.transform(
+                              animation.value,
+                            );
+                            return Material(
+                              type: MaterialType.transparency,
+                              elevation: 6 * t,
+                              shadowColor: Colors.black54,
+                              child: child,
+                            );
+                          },
+                          child: child,
+                        ),
+                    // onReorderItem 的 newIndex 已经处理过"移除后下标偏移"
+                    onReorderItem: (oldIndex, newIndex) =>
+                        _reorderVisible(state, tree, oldIndex, newIndex),
+                    itemBuilder: (context, i) {
+                      final (col, depth) = tree[i];
+                      return FolderTreeReveal(
+                        key: ValueKey<int>(col.id),
+                        order: _revealOrder[col.id],
+                        exiting: collapsingRows.contains(col.id),
+                        child: _CollectionTile(
+                          col: col,
+                          index: i,
+                          depth: depth,
+                          hasChildren: list.any((x) => x.parentId == col.id),
+                          collapsed:
+                              _collapsed.contains(col.id) ||
+                              _collapsing.contains(col.id),
+                          onToggleCollapse: () =>
+                              _toggleFolderCollapsed(col, list),
+                          pinned: col.isPinned,
+                          onEdit: () =>
+                              showCollectionEditor(context, existing: col),
+                          onMenu: (anchorContext) =>
+                              _showCollectionMenu(anchorContext, state, col),
+                          // 导出整个文集：**手机上唯一的入口**。
+                          // 桌面是在文件夹上点右键，手机没有右键，所以放在这一页。
+                          onExport: () => exportCollection(context, col),
+                          onDelete: () => _confirmDelete(context, state, col),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
     );
   }
@@ -451,147 +487,138 @@ class _CollectionTile extends StatelessWidget {
     return Padding(
       // 子文件夹缩进 + 一层"树线"的感觉（左边一条浅竖线）
       padding: EdgeInsets.only(bottom: 8, left: depth * 18.0),
-      child: Dismissible(
-        key: ValueKey<String>('dismiss-${col.id}'),
-        direction: DismissDirection.endToStart,
-        background: Container(
-          alignment: Alignment.centerRight,
-          padding: const EdgeInsets.only(right: 20),
-          decoration: BoxDecoration(
-            color: c.destructive,
-            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-          ),
-          child: const Icon(
-            Icons.delete_outline_rounded,
-            color: Colors.white,
-            size: 20,
+      child: Container(
+        decoration: BoxDecoration(
+          color: c.secondaryBackground,
+          borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
+          border: Border.all(
+            color: c.isDark
+                ? c.separator.withValues(alpha: 0.4)
+                : const Color(0x0F000000),
+            width: 0.5,
           ),
         ),
-        confirmDismiss: (_) async {
-          onDelete();
-          return false; // 交给确认框处理，Dismissible 自己不动
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: c.secondaryBackground,
-            borderRadius: BorderRadius.circular(AppMetrics.radiusMd),
-            border: Border.all(
-              color: c.isDark
-                  ? c.separator.withValues(alpha: 0.4)
-                  : const Color(0x0F000000),
-              width: 0.5,
-            ),
-          ),
-          child: ReorderableDelayedDragStartListener(
-            index: index,
-            child: Pressable(
-              onTap: onEdit,
-              scale: 0.99,
-              opacity: 0.7,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 13, 10, 13),
-                child: Row(
-                  children: [
-                    if (hasChildren)
-                      _MobileCollapseToggle(
-                        collapsed: collapsed,
-                        color: c.tertiaryLabel,
-                        onTap: onToggleCollapse,
-                      )
-                    else
-                      const SizedBox(width: 22),
-                    Container(
-                      width: 30,
-                      height: 30,
-                      decoration: BoxDecoration(
-                        color: Color(col.color).withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: Icon(
-                        Icons.folder_rounded,
-                        size: 17,
-                        color: Color(col.color),
-                      ),
+        // 整行都是拖拽把手（长按任意位置就能拖），所以不再单独画那六个点。
+        // 以前右边那个 drag_indicator 只是"看起来能拖"，实际是装饰。
+        child: ReorderableDelayedDragStartListener(
+          index: index,
+          child: Pressable(
+            onTap: onEdit,
+            scale: 0.99,
+            opacity: 0.7,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 13, 6, 13),
+              child: Row(
+                children: [
+                  if (hasChildren)
+                    _MobileCollapseToggle(
+                      collapsed: collapsed,
+                      color: c.tertiaryLabel,
+                      onTap: onToggleCollapse,
+                    )
+                  else
+                    const SizedBox(width: 22),
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: Color(col.color).withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(9),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  col.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: AppText.callout.copyWith(
-                                    color: c.label,
-                                  ),
+                    child: Icon(
+                      Icons.folder_rounded,
+                      size: 17,
+                      color: Color(col.color),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                col.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppText.callout.copyWith(color: c.label),
+                              ),
+                            ),
+                            if (pinned)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 4),
+                                child: Icon(
+                                  Icons.push_pin_rounded,
+                                  size: 12,
+                                  color: c.tint,
                                 ),
                               ),
-                              if (pinned)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 4),
-                                  child: Icon(
-                                    Icons.push_pin_rounded,
-                                    size: 12,
-                                    color: c.tint,
-                                  ),
-                                ),
-                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${col.noteCount} 篇笔记',
+                          style: AppText.caption1.copyWith(
+                            color: c.tertiaryLabel,
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${col.noteCount} 篇笔记',
-                            style: AppText.caption1.copyWith(
-                              color: c.tertiaryLabel,
-                            ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (onExport != null)
+                    Pressable(
+                      onTap: onExport,
+                      scale: 0.9,
+                      child: Tooltip(
+                        message: '导出为压缩包',
+                        child: Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Icon(
+                            Icons.download_rounded,
+                            size: 18,
+                            color: c.tint,
                           ),
-                        ],
+                        ),
                       ),
                     ),
-                    if (onExport != null)
-                      Pressable(
-                        onTap: onExport,
+                  // 删除按钮。以前只有左滑才删得掉，手机上不好发现、还容易误触
+                  //（滑到一半又缩回去）。放一个明摆着的按钮更直接。
+                  Pressable(
+                    onTap: onDelete,
+                    scale: 0.9,
+                    child: Tooltip(
+                      message: '删除文件夹',
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(
+                          Icons.delete_outline_rounded,
+                          size: 18,
+                          color: c.destructive,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (onMenu != null)
+                    Builder(
+                      builder: (anchorContext) => Pressable(
+                        onTap: () => onMenu!(anchorContext),
                         scale: 0.9,
                         child: Tooltip(
-                          message: '导出为压缩包',
+                          message: '更多操作',
                           child: Padding(
                             padding: const EdgeInsets.all(6),
                             child: Icon(
-                              Icons.download_rounded,
+                              Icons.more_horiz_rounded,
                               size: 18,
-                              color: c.tint,
+                              color: c.tertiaryLabel,
                             ),
                           ),
                         ),
                       ),
-                    if (onMenu != null)
-                      Builder(
-                        builder: (anchorContext) => Pressable(
-                          onTap: () => onMenu!(anchorContext),
-                          scale: 0.9,
-                          child: Tooltip(
-                            message: '更多操作',
-                            child: Padding(
-                              padding: const EdgeInsets.all(6),
-                              child: Icon(
-                                Icons.more_horiz_rounded,
-                                size: 18,
-                                color: c.tertiaryLabel,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    Icon(
-                      Icons.drag_indicator_rounded,
-                      size: 18,
-                      color: c.quaternaryLabel,
                     ),
-                  ],
-                ),
+                ],
               ),
             ),
           ),

@@ -18,6 +18,7 @@ import 'dart:math' as math;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:path/path.dart' as p;
@@ -25,6 +26,7 @@ import 'package:provider/provider.dart';
 
 import '../../../app_state.dart';
 import '../../../core/motion/app_motion.dart';
+import '../../../core/platform/native_drop.dart';
 import '../../../core/shortcuts/app_shortcuts.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/text_stats.dart';
@@ -32,11 +34,14 @@ import '../../../core/utils/toc.dart';
 import '../../../core/widgets/app_menu.dart';
 import '../../../core/widgets/local_image.dart';
 import '../../../data/media/media_counts.dart';
+import '../../../data/media/external_media.dart';
 import '../../../data/media/media_importer.dart';
 import '../../../data/models.dart';
 import 'body_segments.dart';
 import 'markdown_controller.dart';
 import 'markdown_editing.dart';
+import '../widgets/cover_frame.dart';
+import '../widgets/cover_picker.dart';
 import '../widgets/field_blocks.dart';
 import '../widgets/media_card.dart';
 import '../widgets/note_link_picker.dart';
@@ -81,17 +86,31 @@ class _MediaHoverState extends State<_MediaHover> {
   }
 }
 
-/// 媒体块右上角的删除键（毛玻璃小圆钮）。
-class _MediaDeleteButton extends StatelessWidget {
-  const _MediaDeleteButton({required this.onTap});
+/// 媒体块右上角的小圆钮（毛玻璃）。
+///
+/// 删除键和上下移键长得一样、只在图标与颜色上区分 —— 一排三个按钮如果
+/// 各用一套尺寸/阴影，看起来像从不同界面拼过来的。
+class _MediaChipButton extends StatelessWidget {
+  const _MediaChipButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.color,
+  });
 
-  final VoidCallback onTap;
+  final IconData icon;
+  final String tooltip;
+
+  /// 为空表示这一下按不了（第一张没有"上移"）。
+  final VoidCallback? onTap;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    final enabled = onTap != null;
     return Tooltip(
-      message: '删掉这个文件',
+      message: tooltip,
       child: Pressable(
         onTap: onTap,
         scale: 0.9,
@@ -100,17 +119,36 @@ class _MediaDeleteButton extends StatelessWidget {
           height: 30,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: c.secondaryBackground.withValues(alpha: 0.92),
+            color: c.secondaryBackground.withValues(alpha: enabled ? 0.92 : 0.6),
             shape: BoxShape.circle,
             border: Border.all(color: c.separator, width: 0.5),
           ),
           child: Icon(
-            Icons.delete_outline_rounded,
+            icon,
             size: 17,
-            color: c.destructive,
+            color: enabled
+                ? (color ?? c.secondaryLabel)
+                : c.quaternaryLabel.withValues(alpha: 0.5),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 媒体块右上角的删除键（毛玻璃小圆钮）。
+class _MediaDeleteButton extends StatelessWidget {
+  const _MediaDeleteButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return _MediaChipButton(
+      icon: Icons.delete_outline_rounded,
+      tooltip: '删掉这个文件',
+      onTap: onTap,
+      color: context.colors.destructive,
     );
   }
 }
@@ -125,6 +163,7 @@ class NoteEditorPage extends StatefulWidget {
     this.onToggleFullscreen,
     this.windowFullscreen = false,
     this.onToggleWindowFullscreen,
+    this.initialLine,
   });
 
   final int noteId;
@@ -155,6 +194,12 @@ class NoteEditorPage extends StatefulWidget {
   /// 切换窗口全屏。为空则不显示 ⛶ 按钮。
   final VoidCallback? onToggleWindowFullscreen;
 
+  /// 打开后从正文第几行开始（0 起）。
+  ///
+  /// 从阅读页点「编辑」时传当前读到的那一行，实现"接着看的地方接着改" ——
+  /// 以前不管读到哪儿，进编辑器都回到第一篇的开头，长文里很恼人。
+  final int? initialLine;
+
   @override
   State<NoteEditorPage> createState() => _NoteEditorPageState();
 }
@@ -162,6 +207,7 @@ class NoteEditorPage extends StatefulWidget {
 class _NoteEditorPageState extends State<NoteEditorPage> {
   final GlobalKey _headingButtonKey = GlobalKey();
   final GlobalKey _linkButtonKey = GlobalKey();
+  final GlobalKey _indentButtonKey = GlobalKey();
   late final AppState _appState;
   final TextEditingController _title = TextEditingController();
   // 用带实时样式的控制器：**加粗**、# 标题、`代码` 输入即生效
@@ -380,6 +426,17 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_shortcutFocus.hasFocus) _shortcutFocus.requestFocus();
     });
+
+    // 从阅读页带着"读到哪了"进来的：滚过去接着改。
+    //
+    // 放在 postFrame 之后：分段列表是懒构建的，帧没画出来之前
+    // `_segKeys[i].currentContext` 还是空的，`_revealLine` 会直接返回。
+    final startLine = widget.initialLine;
+    if (startLine != null && startLine > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_revealLine(startLine));
+      });
+    }
   }
 
   @override
@@ -880,19 +937,31 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   /// 用户的感受就是"弄进去了但什么都没出现"。
   ({int ok, List<String> failed}) _importAndInsert(List<String> paths) {
     final state = context.read<AppState>();
+    final linkInPlace = state.linkMediaInPlace;
     var ok = 0;
     final failed = <String>[];
     for (final path in paths) {
       try {
-        final rel = MediaImporter.import(
-          source: File(path),
-          noteId: widget.noteId,
-          imageRoot: state.db.imageRoot.path,
-        );
+        // 「引用原文件」模式下不复制，直接把绝对路径写进正文。
+        // 渲染那边本来就按绝对路径读（`p.join` 遇到绝对路径会放行），
+        // 所以显示、播放、导出全都不用另外改。
+        final rel = linkInPlace
+            ? p.normalize(p.absolute(path))
+            : MediaImporter.import(
+                source: File(path),
+                noteId: widget.noteId,
+                imageRoot: state.db.imageRoot.path,
+              );
         _withBody(() => MarkdownEditing.insertBlock(_activeBody, '![]($rel)'));
         ok++;
-      } catch (_) {
-        failed.add(p.basename(path));
+      } catch (e) {
+        // 以前这里是 `catch (_)`，用户只看到"导入失败：文件名"，
+        // 到底卡在复制、建目录还是插入正文一概不知道。带上原因。
+        final why = e.toString();
+        debugPrint('[drop] 导入 ${p.basename(path)} 失败：$why');
+        failed.add(
+          '${p.basename(path)}（${why.length > 100 ? '${why.substring(0, 100)}…' : why}）',
+        );
       }
     }
     // insertBlock 改的是文字，而图片/视频段是**另外渲染**的，
@@ -911,6 +980,9 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     required String key,
     required VoidCallback onDelete,
     required Widget child,
+    bool external = false,
+    VoidCallback? onMoveUp,
+    VoidCallback? onMoveDown,
   }) {
     return _MediaHover(
       key: ValueKey<String>('wrap-$key'),
@@ -923,8 +995,30 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
             Positioned(
               top: 6,
               right: 6,
-              child: _MediaDeleteButton(
-                onTap: () => _confirmDeleteMedia(onDelete),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  // 上下移只对**这一段**生效：正文里的媒体是一行一行的，
+                  // 调顺序就是把这两行换一下，旁边的文字跟着挪。
+                  // 用不着拖拽（拖拽在纯文本输入框围成的布局里很难握准），
+                  // 两个按钮点一下就行，还能撤销。
+                  _MediaChipButton(
+                    icon: Icons.arrow_upward_rounded,
+                    tooltip: '往前挪一个',
+                    onTap: onMoveUp,
+                  ),
+                  const SizedBox(width: 6),
+                  _MediaChipButton(
+                    icon: Icons.arrow_downward_rounded,
+                    tooltip: '往后挪一个',
+                    onTap: onMoveDown,
+                  ),
+                  const SizedBox(width: 6),
+                  _MediaDeleteButton(
+                    onTap: () =>
+                        _confirmDeleteMedia(onDelete, external: external),
+                  ),
+                ],
               ),
             ),
         ],
@@ -934,14 +1028,25 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
 
   /// 删除前确认一次：正文里的媒体是**用户看得见的内容**，
   /// 误点一下就没了（虽然有撤销，但没人知道能撤销）。
-  Future<void> _confirmDeleteMedia(VoidCallback onDelete) async {
+  ///
+  /// [external] 为真时说的是**另一件事**：这条引用指向的是用户自己的文件，
+  /// 软件从来没复制过它，所以删掉这一行**不会**动磁盘上那个文件。
+  /// 照抄"磁盘上的文件也一起删掉"会让用户以为原件被毁了 —— 不敢删，
+  /// 或者删完去回收站找半天。
+  Future<void> _confirmDeleteMedia(
+    VoidCallback onDelete, {
+    bool external = false,
+  }) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删掉这个文件？'),
-        content: const Text(
-          '正文里的这一行会去掉，磁盘上的文件也一起删掉。'
-          '删了就找不回来，需要的话得重新插入。',
+        title: Text(external ? '从笔记里去掉这个引用？' : '删掉这个文件？'),
+        content: Text(
+          external
+              ? '正文里的这一行会去掉，你原来的那个文件不会被删除，还在它原来的位置。'
+                    '想再放回来，重新插入一次就行。'
+              : '正文里的这一行会去掉，磁盘上的文件也一起删掉。'
+                    '删了就找不回来，需要的话得重新插入。',
         ),
         actions: <Widget>[
           TextButton(
@@ -951,9 +1056,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(
-              foregroundColor: context.colors.destructive,
+              foregroundColor: external
+                  ? context.colors.tint
+                  : context.colors.destructive,
             ),
-            child: const Text('删掉'),
+            child: Text(external ? '去掉引用' : '删掉'),
           ),
         ],
       ),
@@ -976,10 +1083,93 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     _redoStack.clear();
     _body.text = joinBodySegments(ensureTextSegment(next));
     _rebuildSegments();
-    _deleteMediaFile(seg, next);
+    // **外部引用只去掉这一行，绝不碰磁盘**：那是用户自己的文件，
+    // 软件从头到尾没复制过它，也就没有资格删它。
+    if (!ExternalMedia.isExternal(seg.path)) {
+      _deleteMediaFile(seg, next);
+    }
     _syncCoverAfterDelete(seg);
     _scheduleSave();
     if (mounted) setState(() {});
+  }
+
+  /// 这一段媒体在正文里是**第几行**（0 起）。
+  ///
+  /// 分段之间是用换行符连起来的，所以行数直接累加各段占的行数 ——
+  /// `TextSegment` 里可能有多行，图片段永远只占一行。
+  /// 用它把"段索引"换算成"行号"，上下移动才能以行为单位。
+  int _lineIndexOfSegment(int segmentIndex) {
+    var line = 0;
+    for (var i = 0; i < segmentIndex && i < _segments.length; i++) {
+      line += lineCountOf(_segments[i]);
+    }
+    return line;
+  }
+
+  /// 把这一段媒体**按行**上下挪一格。
+  ///
+  /// 以前是"和上一张图互换"，中间那几行字原地不动 —— 视觉上像是
+  /// 两张图隔着文字对调，用户说的"中间有几行字的话移动应该看到一行行字
+  /// 被挪走"指的正是这里：移动的单位应该是**行**，不是"图片序号"。
+  ///
+  /// 现在直接交换正文里的相邻两行：
+  ///   - 上一行是文字 → 那一行文字挪到图片下面，图片上移一行
+  ///   - 上一行是另一张图 → 两张图对调（和以前一样）
+  ///   - 上一行是空行 → 空行挪下去，图片上移一行（Markdown 的段间空行
+  ///     本来就是一"行"，跟着走才对得上视觉）
+  ///
+  /// 之所以从 `_body.text` 拆行来换、而不是在段列表里换：文字段内部
+  /// 可能有多行，只在段级交换会让"跨一行"这件事无处安放。换行以后再
+  /// `_rebuildSegments()`，分段顺序自然跟着变。
+  ///
+  /// [delta] 为 -1 往上、+1 往下。
+  /// 把这一段媒体**按行**上下挪一格。
+  ///
+  /// 以前是"和上一张图互换"，中间那几行字原地不动 —— 视觉上像是
+  /// 两张图隔着文字对调。用户要的是**以行为单位**：中间有几行字，
+  /// 就得看着那几行字一行行被挪到另一边去。
+  ///
+  /// 空行不算一步。正文里块与块之间几乎都有空行，如果把空行也算一次，
+  /// 用户按下按钮会看到"什么都没动"（图和它上面的空行互换，画面一模一样），
+  /// 得连点好几次才有反应。所以找的是**上一个/下一个非空行**，
+  /// 然后只把这两行互换 —— 夹在中间的空行留在原地继续当分隔。
+  ///
+  /// 为什么从 `_body.text` 拆行来换、而不是在段列表里换：文字段内部
+  /// 可能有多行，段级交换表达不了"跨一行"。换完再 `_rebuildSegments()`，
+  /// 分段顺序自然跟着变。
+  ///
+  /// [delta] 为 -1 往上、+1 往下。
+  void _moveSegment(ImageSegment seg, int delta) {
+    final from = _segments.indexWhere((s) => identical(s, seg));
+    if (from < 0) return;
+
+    final lines = linesOf(_body.text);
+    final at = _lineIndexOfSegment(from);
+    final to = _stepLine(lines, at, delta);
+    // 已经在最上面 / 最下面：按钮本来该是灰的，这里再兜一层
+    if (at < 0 || at >= lines.length || to < 0) return;
+
+    final moving = lines[at];
+    lines[at] = lines[to];
+    lines[to] = moving;
+    _undoStack.add(TextEditingValue(text: _body.text));
+    _redoStack.clear();
+    _body.text = joinLines(lines);
+    _rebuildSegments();
+    _scheduleSave();
+    if (mounted) setState(() {});
+  }
+
+  /// 从 [at] 往 [delta] 方向找**下一个非空行**的行号；找不到返回 -1。
+  ///
+  /// 抽出来是为了让"按钮亮不亮"和"按下之后真的动"用同一套判据 ——
+  /// 两处各写一遍的话，总会出现"按钮是亮的但点下去没反应"。
+  int _stepLine(List<String> lines, int at, int delta) {
+    if (at < 0 || at >= lines.length) return -1;
+    for (var i = at + delta; i >= 0 && i < lines.length; i += delta) {
+      if (lines[i].trim().isNotEmpty) return i;
+    }
+    return -1;
   }
 
   /// 删掉的正好是头图时，头图要跟着换（或干脆没有），
@@ -1058,16 +1248,38 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   // 拖拽只有桌面端有（desktop_drop 在手机上不产生事件），
   // 所以不额外做平台判断 —— 没有事件就没有入口，也不需要提示。
 
+  // 拖拽只有桌面端能直接给路径（`desktop_drop`）；手机上 Android 的
+  // 拖放手势只派发给原生 View，Flutter 侧收不到，所以外面再套一层
+  // `NativeDrop` —— 原生把 `content://` 的内容拷进缓存目录，给的也是
+  // 普通路径，后面完全走同一段 [_onDropFiles]/[_importAndInsert]。
+
   /// 包一层拖放区。**整页都是落点**：用户不会瞄准某一个输入框去拖。
-  Widget _wrapDrop(Widget child, AppColors c) => DropTarget(
-    onDragEntered: (_) {
+  Widget _wrapDrop(Widget child, AppColors c) => NativeDrop.host(
+    onDragStarted: () {
       if (mounted) setState(() => _dragging = true);
     },
-    onDragExited: (_) {
+    onDragEnded: () {
       if (mounted) setState(() => _dragging = false);
     },
-    onDragDone: _onDropFiles,
-    child: Stack(children: [child, if (_dragging) _dropOverlay(c)]),
+    onDrop: (payload) async {
+      if (mounted) setState(() => _dragging = false);
+      if (payload.paths.isEmpty && payload.rejected.isNotEmpty) {
+        // 原生侧一个都没读出来 —— 把原因说出来，否则只有一个文件名。
+        _toast('拖入的文件没读出来：${payload.summary}');
+        return;
+      }
+      _acceptDroppedPaths(payload.paths);
+    },
+    child: DropTarget(
+      onDragEntered: (_) {
+        if (mounted) setState(() => _dragging = true);
+      },
+      onDragExited: (_) {
+        if (mounted) setState(() => _dragging = false);
+      },
+      onDragDone: _onDropFiles,
+      child: Stack(children: [child, if (_dragging) _dropOverlay(c)]),
+    ),
   );
 
   /// 悬停蒙层。**不能吃事件**（IgnorePointer），
@@ -1109,12 +1321,23 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   );
 
   Future<void> _onDropFiles(DropDoneDetails details) async {
+    _acceptDroppedPaths(details.files.map((f) => f.path).toList(growable: false));
+  }
+
+  /// 拖入的路径统一从这里进 —— 桌面端来自 `desktop_drop`，手机来自
+  /// `NativeDrop`（原生把内容拷进缓存后给的也是普通路径）。
+  Future<void> _acceptDroppedPaths(List<String> paths) async {
     if (mounted) setState(() => _dragging = false);
 
+    // Android 上 desktop_drop 也会触发，给的是 `content://` URI，
+    // dart:io 打不开。手机这条路已经由 NativeDrop 拷成真实文件再报上来，
+    // 这里直接跳过，别让两条路互相踩。
+    final usable = paths
+        .where((path) => !path.startsWith('content://'))
+        .toList(growable: false);
+
     // 认不认这个文件由 MediaImporter 判断（纯函数、单独测过）
-    final split = MediaImporter.splitMediaPaths(
-      details.files.map((f) => f.path),
-    );
+    final split = MediaImporter.splitMediaPaths(usable);
     final accepted = split.media;
     final skipped = split.others
         .map((path) => p.basename(path))
@@ -1144,7 +1367,6 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       _toast('导入失败：${r.failed.first}');
     }
   }
-
   void _withBody(void Function() action) {
     final before = _body.value;
     final target = _activeBody;
@@ -1637,7 +1859,15 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       }
     }
     if (lineIndex < 0) return;
+    await _revealLine(lineIndex);
+  }
 
+  /// 滚到正文第 [lineIndex] 行，并把光标放进那一行（如果它是文字段）。
+  ///
+  /// 抽出来是因为有两条路要用同一个坐标：点目录跳标题、以及从阅读页
+  /// 点「编辑」时**接着刚才读到的地方往下改**。
+  Future<void> _revealLine(int lineIndex) async {
+    if (lineIndex < 0) return;
     // 这一行属于哪个分段：文字段按行数累加，图片段占一行
     var cursor = 0;
     var segIndex = -1;
@@ -1791,6 +2021,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       physics: const BouncingScrollPhysics(),
       children: [
+        // ── 头图：和阅读页一样看得见 ──
+        //
+        // 以前编辑时头图整块消失，改比例/取景要退出去看效果，再进来改，
+        // 来回好几趟。现在编辑态直接把它摆在标题上面（点击还是进那个
+        // 编辑面板，和阅读页一致）。
+        _editableCover(c),
         TextField(
           controller: _title,
           style: AppText.title2.copyWith(color: c.label, height: 1.35),
@@ -1816,16 +2052,78 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         const SizedBox(height: 12),
         // 正文：文字段各是一个输入框，图片段渲染成真正的图 ——
         // 这样编辑时就能看到图片，而不是一串 ![](path)
-        for (var i = 0; i < _segments.length; i++)
-          KeyedSubtree(
-            // key 给目录跳转用：靠它 ensureVisible 到那一段
-            key: i < _segKeys.length ? _segKeys[i] : null,
-            child: _segmentView(c, i),
-          ),
+        //
+        // 这一段包在带 key 的 Column 里：测试要按"正文里的媒体"数数，
+        // 而顶部头图里也有一个 LocalImage（头图又是正文第一张图派生的），
+        // 不划出边界就会数错。
+        Column(
+          key: const ValueKey<String>('editor-body'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < _segments.length; i++)
+              KeyedSubtree(
+                // key 给目录跳转用：靠它 ensureVisible 到那一段
+                key: i < _segKeys.length ? _segKeys[i] : null,
+                child: _segmentView(c, i),
+              ),
+          ],
+        ),
         // ── 尾参数：文章末尾，右对齐一行 `——2026年9月14日18:43` ──
         if (context.watch<AppState>().tailFieldsEnabled)
           TailFieldsLine(noteId: widget.noteId),
       ],
+    );
+  }
+
+  /// 编辑态的头图。
+  ///
+  /// 用的是和阅读页同一个 [CoverFrame]，所以编辑时看到的就是阅读时的样子。
+  /// 点一下进头图编辑面板（和阅读页的入口一致），保存后重新读一遍这篇笔记，
+  /// 头图立刻跟着变 —— 不用退出编辑器再看。
+  Widget _editableCover(AppColors c) {
+    final note = _appState.repo.getNote(widget.noteId);
+    final cover = note?.coverImage;
+    if (note == null || cover == null || cover.isEmpty || cover == kCoverNone) {
+      return const SizedBox.shrink();
+    }
+    final root = _appState.db.imageRoot.path;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () async {
+          final full = _appState.repo.getNote(widget.noteId);
+          if (full == null || !mounted) return;
+          final changed = await showCoverPicker(context, full);
+          if (!mounted) return;
+          if (changed) setState(() {});
+        },
+        // **编辑态的头图不能占满一屏。**
+        //
+        // 阅读页头图是通栏的（16:10 的图在 1400 宽的窗口上就有 850 高），
+        // 放在阅读页没问题 —— 那是内容的一部分。但编辑器里它只是"参考"，
+        // 占满一屏会把标题和正文全推到下面，每次进编辑器都要先滚一屏。
+        // 限高 200，宽度按比例自己缩，居中。
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 200),
+            child: CoverFrame(
+              key: const ValueKey<String>('editor-cover'),
+              path: ExternalMedia.resolve(root, cover),
+              ratio: note.coverRatio,
+              zoom: note.coverZoom,
+              focusX: note.coverFocusX,
+              focusY: note.coverFocusY,
+              borderRadius: BorderRadius.circular(AppMetrics.radiusLg),
+              fallbackColor: c.fill,
+              // 编辑器里不给 Hero：这里没有共享元素的配对方，
+              // 而 Hero 飞行需要两端都有 tag，否则只会在跳转时闪一下。
+              decodeScale: note.coverZoom.clamp(1.0, 2.0),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1836,10 +2134,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       return _imageBlock(c, seg, imageIndexOf(_segments, i));
     }
 
-    return TextField(
+    final style = AppText.reading.copyWith(color: c.label);
+    final field = TextField(
       controller: _segControllers[i],
       focusNode: _segFocus[i],
-      style: AppText.reading.copyWith(color: c.label),
+      style: style,
       maxLines: null,
       keyboardType: TextInputType.multiline,
       inputFormatters: [_segControllers[i].inputFormatter],
@@ -1866,6 +2165,19 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         ),
       ),
     );
+
+    // 首行缩进**不在这里加内边距**。
+    //
+    // 内边距是整段的：加上去之后段落里软换行出来的第二行、第三行也会
+    // 一起右移，看起来就是"整段缩进"，而用户要的是 Word 里那种
+    // 「只有第一行缩进两格，后面的行顶格」。`TextField` 没有
+    // text-indent（Flutter 至今没这个 API），也不能像阅读页那样塞
+    // `WidgetSpan` —— 开头插占位符会让 `value.text` 和 TextPainter 的
+    // 纯文本索引错开一个字符，光标和选区全歪。
+    //
+    // 所以编辑器里用最朴素的办法：段落第一行前面放两个全角空格
+    // （见 `_toggleIndent` 与 `MarkdownEditing.continueLine`）。
+    return field;
   }
 
   /// 一段图片：直接画成真图，而不是让用户盯着一串路径。
@@ -1874,7 +2186,19 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   /// 视频画成一张可点开的卡片 —— 塞进 Image.file 只会得到一个加载失败。
   Widget _imageBlock(AppColors c, ImageSegment seg, int index) {
     final root = context.read<AppState>().db.imageRoot.path;
-    final abs = p.join(root, seg.path);
+    // 开了「只引用原文件」之后，正文里存的是用户本机的绝对路径，
+    // 拼上图片根目录只会得到一串不存在的东西。
+    final external = ExternalMedia.isExternal(seg.path);
+    final abs = ExternalMedia.resolve(root, seg.path);
+
+    // 以**行**为单位判断能不能挪，且只认"非空行"这一步 ——
+    // 和 `_moveSegment` 里的 `_stepLine` 用同一套判据，否则会出现
+    // "按钮亮着但点下去没反应"（上面只剩空行的情况）。
+    final segIndex = _segments.indexWhere((s) => identical(s, seg));
+    final at = _lineIndexOfSegment(segIndex);
+    final bodyLines = linesOf(_body.text);
+    final canUp = _stepLine(bodyLines, at, -1) >= 0;
+    final canDown = _stepLine(bodyLines, at, 1) >= 0;
 
     // 图片和视频都要能删：以前正文里的媒体**没有任何删除入口**，
     // 插错了只能去源码里找那一行删掉。统一套一层"悬停出删除键"。
@@ -1882,24 +2206,142 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       c,
       key: 'media-${seg.path}',
       onDelete: () => _deleteSegment(seg),
+      external: external,
+      onMoveUp: canUp ? () => _moveSegment(seg, -1) : null,
+      onMoveDown: canDown ? () => _moveSegment(seg, 1) : null,
       child: MediaImporter.isVideoPath(seg.path)
-          ?
-            // **key 不能省**：编辑器的分段列表会因为"头参数开关""自动保存状态"
-            // 之类的原因整体重建，没有 key 的话 Flutter 按位置配对，位置一挪
-            // 视频卡片就被销毁重建 —— 播放器跟着重建，视频回到 00:00 暂停，
-            // 用户看到的就是"点播放没反应"。有 key 才能保住同一个播放器。
-            MediaCard(
-              key: ValueKey<String>('media-${seg.path}'),
-              path: abs,
-              relPath: seg.path,
-              index: index,
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // **key 不能省**：编辑器的分段列表会因为"头参数开关""自动保存状态"
+                // 之类的原因整体重建，没有 key 的话 Flutter 按位置配对，位置一挪
+                // 视频卡片就被销毁重建 —— 播放器跟着重建，视频回到 00:00 暂停，
+                // 用户看到的就是"点播放没反应"。有 key 才能保住同一个播放器。
+                MediaCard(
+                  key: ValueKey<String>('media-${seg.path}'),
+                  path: abs,
+                  relPath: seg.path,
+                  index: index,
+                  external: external,
+                ),
+                // 视频同样能写图注：它和图片共用同一行 `![说明](路径)` 语法
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: _captionRow(c, seg),
+                ),
+              ],
             )
-          : _imageOnly(c, abs, seg, index),
+          : _imageOnly(c, abs, seg, index, external: external),
     );
   }
 
+  /// 图注那一行：有文字就显示，没文字就显示"写一句说明"的虚线占位。
+  ///
+  /// 点一下就地改（弹出一个小输入框）—— 图注是 B 站专栏那种"图下面一行
+  /// 灰字"，它必须**跟着这张图走**，所以存在同一行的 alt 里，而不是另起一段。
+  Widget _captionRow(AppColors c, ImageSegment seg) {
+    final caption = seg.caption;
+    // 视频和图片是两种东西，"加一句图片说明"放在视频下面就是错的。
+    final video = MediaImporter.isVideoPath(seg.path);
+    return Pressable(
+      onTap: () => _editCaption(seg),
+      scale: 0.995,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              video ? Icons.movie_outlined : Icons.notes_rounded,
+              size: 12,
+              color: c.quaternaryLabel,
+            ),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(
+                caption.isEmpty ? (video ? '加一句视频说明' : '加一句说明') : caption,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: AppText.caption1.copyWith(
+                  color: caption.isEmpty ? c.quaternaryLabel : c.tertiaryLabel,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 改图注：改的就是那一行 `![说明](路径)` 的说明部分。
+  Future<void> _editCaption(ImageSegment seg) async {
+    final video = MediaImporter.isVideoPath(seg.path);
+    final controller = TextEditingController(text: seg.caption);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(video ? '视频说明' : '图片说明'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 200,
+          maxLines: 3,
+          minLines: 1,
+          decoration: InputDecoration(
+            hintText: video
+                ? '这段视频是什么？写在这里的会跟着视频一起移动'
+                : '这张图是什么？写在这里的会跟着图片一起移动',
+            counterText: '',
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || result == null) return;
+    _setCaption(seg, result);
+  }
+
+  /// 把图注写回正文：找到这条媒体所在的那一行，整行换掉。
+  void _setCaption(ImageSegment seg, String caption) {
+    final from = _segments.indexWhere((s) => identical(s, seg));
+    if (from < 0) return;
+    final at = _lineIndexOfSegment(from);
+    final lines = linesOf(_body.text);
+    if (at < 0 || at >= lines.length) return;
+    final next = imageLineOf(seg.path, caption);
+    if (lines[at].trim() == next.trim()) return;
+    _undoStack.add(TextEditingValue(text: _body.text));
+    _redoStack.clear();
+    lines[at] = next;
+    _body.text = joinLines(lines);
+    _rebuildSegments();
+    _scheduleSave();
+    setState(() {});
+  }
+
   /// 图片那一路的渲染（视频走 [MediaCard]）。
-  Widget _imageOnly(AppColors c, String abs, ImageSegment seg, int index) {
+  ///
+  /// [external] 为真时底部那行小字说明"这是你本机上的文件"，并在末尾挂一个
+  /// 小图标 —— 用户在正文里得能一眼分清"这张图是软件替我存着的"还是
+  /// "这张图只是指向我自己电脑上的文件"。
+  Widget _imageOnly(
+    AppColors c,
+    String abs,
+    ImageSegment seg,
+    int index, {
+    bool external = false,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Column(
@@ -1915,20 +2357,29 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                 alignment: Alignment.center,
                 color: c.fill,
                 child: Text(
-                  '图片找不到：${seg.path}',
+                  external
+                      ? '原文件找不到了：${seg.path}'
+                      : '图片找不到：${seg.path}',
                   style: AppText.caption1.copyWith(color: c.tertiaryLabel),
                 ),
               ),
             ),
           ),
           const SizedBox(height: 5),
+          _captionRow(c, seg),
           Row(
             children: [
-              Icon(Icons.image_rounded, size: 12, color: c.quaternaryLabel),
+              Icon(
+                external ? Icons.link_rounded : Icons.image_rounded,
+                size: 12,
+                color: c.quaternaryLabel,
+              ),
               const SizedBox(width: 5),
               Expanded(
                 child: Text(
-                  '第 $index 张 · ${seg.path}',
+                  external
+                      ? '外部文件 · ${seg.path}'
+                      : '第 $index 张 · ${seg.path}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppText.caption2.copyWith(color: c.quaternaryLabel),
@@ -1942,6 +2393,34 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   }
 
   // ── 底部工具栏 ──────────────────────────────────────────────────────────
+  /// 工具栏的一行：横向可滚，**鼠标也能按住拖**。
+  ///
+  /// Flutter 默认的 `ScrollBehavior` 在桌面端不把鼠标算进 `dragDevices`，
+  /// 于是桌面用户只能滚轮、不能像手机上那样"抓住工具栏左右推"。
+  /// 按钮一多必然超宽，这里显式放开鼠标与触控板。
+  Widget _toolRow(AppColors c, List<Widget> children) {
+    return SizedBox(
+      height: 46,
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(
+          dragDevices: const <PointerDeviceKind>{
+            PointerDeviceKind.touch,
+            PointerDeviceKind.mouse,
+            PointerDeviceKind.trackpad,
+            PointerDeviceKind.stylus,
+            PointerDeviceKind.invertedStylus,
+            PointerDeviceKind.unknown,
+          },
+        ),
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          children: children,
+        ),
+      ),
+    );
+  }
+
   Widget _toolbar(AppColors c, int chars, int words) {
     final canUndo = _undoStack.isNotEmpty;
     final canRedo = _redoStack.isNotEmpty;
@@ -1956,130 +2435,131 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              height: 46,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                children: [
-                  _ToolButton(
-                    icon: Icons.undo_rounded,
-                    tooltip: '撤销',
-                    enabled: canUndo,
-                    onTap: _undo,
-                  ),
-                  _ToolButton(
-                    icon: Icons.redo_rounded,
-                    tooltip: '重做',
-                    enabled: canRedo,
-                    onTap: _redo,
-                  ),
-                  _Sep(c),
-                  _ToolButton(
-                    key: _headingButtonKey,
-                    icon: Icons.title_rounded,
-                    tooltip: _headingLevel == 0 ? '设为标题' : '标题 H$_headingLevel',
-                    active: _headingLevel > 0,
-                    badge: _headingLevel == 0 ? null : 'H$_headingLevel',
-                    onTap: _chooseHeading,
-                  ),
-                  _ToolButton(
-                    icon: Icons.format_bold_rounded,
-                    tooltip: '加粗',
-                    active: _activeBody.typingMarkActive('**'),
-                    onTap: () =>
-                        _withBody(() => _activeBody.toggleInline('**')),
-                  ),
-                  _ToolButton(
-                    icon: Icons.format_italic_rounded,
-                    tooltip: '斜体',
-                    active: _activeBody.typingMarkActive('*'),
-                    onTap: () => _withBody(() => _activeBody.toggleInline('*')),
-                  ),
-                  _ToolButton(
-                    icon: Icons.format_strikethrough_rounded,
-                    tooltip: '删除线',
-                    active: _activeBody.typingMarkActive('~~'),
-                    onTap: () =>
-                        _withBody(() => _activeBody.toggleInline('~~')),
-                  ),
-                  _ToolButton(
-                    icon: Icons.code_rounded,
-                    tooltip: '行内代码',
-                    active: _activeBody.typingMarkActive('`'),
-                    onTap: () => _withBody(() => _activeBody.toggleInline('`')),
-                  ),
-                  _Sep(c),
-                  _ToolButton(
-                    icon: Icons.format_quote_rounded,
-                    tooltip: '引用',
-                    onTap: () => _withBody(
-                      () => MarkdownEditing.toggleLinePrefix(_activeBody, '> '),
-                    ),
-                  ),
-                  _ToolButton(
-                    icon: Icons.format_list_bulleted_rounded,
-                    tooltip: '无序列表',
-                    onTap: () => _withBody(
-                      () => MarkdownEditing.toggleLinePrefix(_activeBody, '- '),
-                    ),
-                  ),
-                  _ToolButton(
-                    icon: Icons.format_list_numbered_rounded,
-                    tooltip: '有序列表',
-                    onTap: () => _withBody(
-                      () =>
-                          MarkdownEditing.toggleLinePrefix(_activeBody, '1. '),
-                    ),
-                  ),
-                  _ToolButton(
-                    icon: Icons.check_box_outlined,
-                    tooltip: '待办',
-                    onTap: () => _withBody(
-                      () => MarkdownEditing.toggleLinePrefix(
-                        _activeBody,
-                        '- [ ] ',
-                      ),
-                    ),
-                  ),
-                  _Sep(c),
-                  _ToolButton(
-                    key: _linkButtonKey,
-                    icon: Icons.link_rounded,
-                    tooltip: '插入链接',
-                    onTap: _insertLinkFlow,
-                  ),
-                  _ToolButton(
-                    // 代码块是这里唯一"插入一对围栏"的按钮：
-                    // 和行内代码共用 code 图标会让人分不清，
-                    // 所以用 data_object（看起来像一段独立文本块）。
-                    icon: Icons.data_object_rounded,
-                    tooltip: '代码块',
-                    onTap: () =>
-                        _withBody(() => _insertCodeBlock(_activeBody)),
-                  ),
-                  _ToolButton(
-                    icon: Icons.horizontal_rule_rounded,
-                    tooltip: '分割线',
-                    onTap: () => _withBody(
-                      () => MarkdownEditing.insertBlock(_activeBody, '---'),
-                    ),
-                  ),
-                  _Sep(c),
-                  // 插入本地媒体：图片 / gif / 视频
-                  _ToolButton(
-                    icon: Icons.add_photo_alternate_outlined,
-                    tooltip: '插入图片或动图',
-                    onTap: () => _insertMedia(MediaKind.image),
-                  ),
-                  _ToolButton(
-                    icon: Icons.videocam_outlined,
-                    tooltip: '插入视频',
-                    onTap: () => _insertMedia(MediaKind.video),
-                  ),
-                ],
+            // 两行：上一行是"文字长什么样"，下一行是"插入什么"。
+            // 一行放十几个按钮在窄窗口里必然显示不全，而且横滑也难找。
+            _toolRow(c, [
+              _ToolButton(
+                icon: Icons.undo_rounded,
+                tooltip: '撤销',
+                enabled: canUndo,
+                onTap: _undo,
               ),
-            ),
+              _ToolButton(
+                icon: Icons.redo_rounded,
+                tooltip: '重做',
+                enabled: canRedo,
+                onTap: _redo,
+              ),
+              _Sep(c),
+              _ToolButton(
+                key: _headingButtonKey,
+                icon: Icons.title_rounded,
+                tooltip: _headingLevel == 0 ? '设为标题' : '标题 H$_headingLevel',
+                active: _headingLevel > 0,
+                badge: _headingLevel == 0 ? null : 'H$_headingLevel',
+                onTap: _chooseHeading,
+              ),
+              _ToolButton(
+                icon: Icons.format_bold_rounded,
+                tooltip: '加粗',
+                active: _activeBody.typingMarkActive('**'),
+                onTap: () => _withBody(() => _activeBody.toggleInline('**')),
+              ),
+              _ToolButton(
+                icon: Icons.format_italic_rounded,
+                tooltip: '斜体',
+                active: _activeBody.typingMarkActive('*'),
+                onTap: () => _withBody(() => _activeBody.toggleInline('*')),
+              ),
+              _ToolButton(
+                icon: Icons.format_strikethrough_rounded,
+                tooltip: '删除线',
+                active: _activeBody.typingMarkActive('~~'),
+                onTap: () => _withBody(() => _activeBody.toggleInline('~~')),
+              ),
+              _ToolButton(
+                icon: Icons.code_rounded,
+                tooltip: '行内代码',
+                active: _activeBody.typingMarkActive('`'),
+                onTap: () => _withBody(() => _activeBody.toggleInline('`')),
+              ),
+              _Sep(c),
+              _ToolButton(
+                key: _indentButtonKey,
+                icon: _activeBody.hasIndentAtCursor
+                    ? Icons.format_indent_increase_rounded
+                    : Icons.format_indent_decrease_rounded,
+                tooltip: '首行缩进两字',
+                active: _activeBody.hasIndentAtCursor,
+                onTap: () => _withBody(
+                  () => MarkdownEditing.toggleIndentFirstLine(_activeBody),
+                ),
+              ),
+            ]),
+            Container(height: 0.5, color: c.separator),
+            _toolRow(c, [
+              _ToolButton(
+                icon: Icons.format_quote_rounded,
+                tooltip: '引用',
+                onTap: () => _withBody(
+                  () => MarkdownEditing.toggleLinePrefix(_activeBody, '> '),
+                ),
+              ),
+              _ToolButton(
+                icon: Icons.format_list_bulleted_rounded,
+                tooltip: '无序列表',
+                onTap: () => _withBody(
+                  () => MarkdownEditing.toggleLinePrefix(_activeBody, '- '),
+                ),
+              ),
+              _ToolButton(
+                icon: Icons.format_list_numbered_rounded,
+                tooltip: '有序列表',
+                onTap: () => _withBody(
+                  () => MarkdownEditing.toggleLinePrefix(_activeBody, '1. '),
+                ),
+              ),
+              _ToolButton(
+                icon: Icons.check_box_outlined,
+                tooltip: '待办',
+                onTap: () => _withBody(
+                  () => MarkdownEditing.toggleLinePrefix(_activeBody, '- [ ] '),
+                ),
+              ),
+              _Sep(c),
+              _ToolButton(
+                key: _linkButtonKey,
+                icon: Icons.link_rounded,
+                tooltip: '插入链接',
+                onTap: _insertLinkFlow,
+              ),
+              _ToolButton(
+                // 代码块是这里唯一"插入一对围栏"的按钮：
+                // 和行内代码共用 code 图标会让人分不清，
+                // 所以用 data_object（看起来像一段独立文本块）。
+                icon: Icons.data_object_rounded,
+                tooltip: '代码块',
+                onTap: () => _withBody(() => _insertCodeBlock(_activeBody)),
+              ),
+              _ToolButton(
+                icon: Icons.horizontal_rule_rounded,
+                tooltip: '分割线',
+                onTap: () =>
+                    _withBody(() => MarkdownEditing.insertBlock(_activeBody, '---')),
+              ),
+              _Sep(c),
+              // 插入本地媒体：图片 / gif / 视频
+              _ToolButton(
+                icon: Icons.add_photo_alternate_outlined,
+                tooltip: '插入图片或动图',
+                onTap: () => _insertMedia(MediaKind.image),
+              ),
+              _ToolButton(
+                icon: Icons.videocam_outlined,
+                tooltip: '插入视频',
+                onTap: () => _insertMedia(MediaKind.video),
+              ),
+            ]),
             Container(height: 0.5, color: c.separator),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),

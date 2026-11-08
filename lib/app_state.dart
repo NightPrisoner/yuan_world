@@ -36,6 +36,18 @@ class AppState extends ChangeNotifier {
   /// 备份/恢复。数据层的纯 Dart 服务，UI 只是它的一个入口。
   late final BackupService backup = BackupService(db);
 
+  /// 插入图片/视频时**只引用原文件**，不复制进 `data/images/`。
+  ///
+  /// 默认关 —— 默认行为必须是"拷进来"，否则用户挪一下素材目录，
+  /// 笔记里的图就全断了，而他根本不知道自己开过什么。
+  /// 关着的时候走原来的复制逻辑，一个字都没变。
+  bool get linkMediaInPlace => repo.getSetting('media.linkInPlace') == '1';
+
+  void setLinkMediaInPlace(bool v) {
+    repo.setSetting('media.linkInPlace', v ? '1' : '0');
+    notifyListeners();
+  }
+
   /// 每天自动快照（默认开）。关掉的话就只能靠手动备份了。
   bool get backupAutoSnapshot => repo.getSetting('backup.auto') != '0';
 

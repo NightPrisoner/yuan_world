@@ -142,7 +142,7 @@ void main() {
     expect(find.text('创建出来的'), findsOneWidget);
   });
 
-  testWidgets('左滑删除会先弹确认框', (tester) async {
+  testWidgets('点右边的删除按钮会先弹确认框', (tester) async {
     final id = state.repo.createCollection('要删的')!;
     state.repo.insertNote(
       title: '里面的',
@@ -153,7 +153,9 @@ void main() {
     await state.refresh();
     await pumpPage(tester);
 
-    await tester.drag(find.text('要删的'), const Offset(-500, 0));
+    // 以前是左滑删除，滑到一半还会缩回去，手机上不好发现。
+    // 改成行尾一个明摆着的删除按钮。
+    await tester.tap(find.byTooltip('删除文件夹'));
     await tester.pumpAndSettle();
 
     expect(find.text('删除「要删的」？'), findsOneWidget);
