@@ -48,8 +48,8 @@ Flutter · Windows + Android
 
 | 平台 | 包 | 说明 |
 |---|---|---|
-| Windows x64 | [`yuan_world-1.0.1-windows-x64-20261107.zip`](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-windows-x64-20261107.zip) | 解压即用，双击 `元世界.exe`，不用安装 |
-| Android arm64 | [`yuan_world-1.0.1-android-arm64-20261107.zip`](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.1/yuan_world-1.0.1-android-arm64-20261107.zip) | Android 7+，arm64 设备 |
+| Windows x64 | [`yuan_world-1.0.2-windows-x64-20261109.zip`](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.2/yuan_world-1.0.2-windows-x64-20261109.zip) | 解压即用，双击 `元世界.exe`，不用安装 |
+| Android arm64 | [`yuan_world-1.0.2-android-arm64-20261109.zip`](https://github.com/NightPrisoner/yuan_world/releases/download/v1.0.2/yuan_world-1.0.2-android-arm64-20261109.zip) | Android 7+，arm64 设备 |
 
 [历史版本](https://github.com/NightPrisoner/yuan_world/releases) · [完整更新记录](CHANGELOG.md)
 
